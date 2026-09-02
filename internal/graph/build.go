@@ -27,6 +27,25 @@ type Graph struct {
 	In    map[string][]string
 }
 
+// cloneNode returns a value copy of n with its BackendConfig/Vars maps deep-copied. n.Nodes for a group instantiation come from a group definition that resolveContext.parseGroupDir may hand back to more than one `use` site (see loadGroupDef); without this, every instance of the same group would share the exact same underlying BackendConfig/Vars map objects, since a plain struct copy only copies the map header, not its contents.
+func cloneNode(n blueprint.Node) blueprint.Node {
+	if n.BackendConfig != nil {
+		clone := make(map[string]string, len(n.BackendConfig))
+		for k, v := range n.BackendConfig {
+			clone[k] = v
+		}
+		n.BackendConfig = clone
+	}
+	if n.Vars != nil {
+		clone := make(map[string]any, len(n.Vars))
+		for k, v := range n.Vars {
+			clone[k] = v
+		}
+		n.Vars = clone
+	}
+	return n
+}
+
 // Build resolves a blueprint into a Graph, recursively expanding any group instantiations (`use` blocks). baseDir is the directory the blueprint file lives in and must be absolute: it becomes the root every relative node/group source resolves against, directly or (for a node inside a group) transitively. Build fails fast if a node's source directory cannot be inspected (e.g. it doesn't exist); that is a structural problem, not something validate can usefully report alongside others.
 func Build(bp *blueprint.Blueprint, baseDir string) (*Graph, error) {
 	g, _, err := build(bp, baseDir, "", &resolveContext{})
@@ -59,11 +78,11 @@ func build(bp *blueprint.Blueprint, baseDir, namespace string, rc *resolveContex
 				)
 			}
 		}
-		schema, err := module.Inspect(dir)
+		schema, err := rc.inspect(dir)
 		if err != nil {
 			return nil, nil, fmt.Errorf("node %q: %w", n.Name, err)
 		}
-		qn := n
+		qn := cloneNode(n)
 		qn.Name = qualify(n.Name)
 		g.Nodes[qn.Name] = &Node{Node: qn, Schema: schema, Dir: dir}
 	}
@@ -111,7 +130,7 @@ func resolveUse(u blueprint.Use, referencingDir, instancePrefix string, rc *reso
 	}
 	defer pop()
 
-	def, err := loadGroupDef(groupDir, u.GroupName)
+	def, err := loadGroupDef(rc, groupDir, u.GroupName)
 	if err != nil {
 		return useInfo{}, nil, err
 	}

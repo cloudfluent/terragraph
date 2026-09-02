@@ -48,7 +48,7 @@ func NewRootCmd(version string) *cobra.Command {
 			return nil
 		},
 	}
-	root.PersistentFlags().StringVar(&blueprintPath, "blueprint", "blueprint.hcl", "path to the blueprint file")
+	root.PersistentFlags().StringVar(&blueprintPath, "blueprint", "blueprint.hcl", "path to the blueprint file, or a directory whose .hcl files are merged into one blueprint")
 	root.PersistentFlags().BoolVar(&useTofu, "tofu", false, "use the tofu binary instead of terraform")
 	root.PersistentFlags().StringVar(&logLevel, "log-level", "warn", "log verbosity for internal diagnostics on stderr: debug, info, warn, or error")
 
@@ -279,11 +279,11 @@ func newVendorCmd(blueprintPath *string, loggerOf func() *slog.Logger) *cobra.Co
 			logger := loggerOf()
 
 			// Parsed directly, not via engine.Load: building the full graph would fail for any not-yet-vendored remote node, but vendoring has to work *before* the graph is buildable.
-			bp, err := blueprint.ParseFile(*blueprintPath)
+			bp, dir, err := blueprint.LoadPath(*blueprintPath)
 			if err != nil {
 				return err
 			}
-			baseDir, err := filepath.Abs(filepath.Dir(*blueprintPath))
+			baseDir, err := filepath.Abs(dir)
 			if err != nil {
 				return fmt.Errorf("resolving blueprint directory: %w", err)
 			}

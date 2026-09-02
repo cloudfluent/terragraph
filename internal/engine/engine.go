@@ -31,15 +31,15 @@ func (e *Engine) logger() *slog.Logger {
 	return slog.New(slog.DiscardHandler)
 }
 
-// Load parses the blueprint at blueprintPath and builds its graph. Node sources are resolved relative to the blueprint file's directory.
+// Load parses the blueprint at blueprintPath and builds its graph. blueprintPath may name a single file or a directory (every .hcl file directly inside it is merged, see blueprint.LoadPath); node sources are resolved relative to the resulting base directory.
 func Load(blueprintPath string, binary exec.Binary, stdout, stderr io.Writer) (*Engine, error) {
-	bp, err := blueprint.ParseFile(blueprintPath)
+	bp, dir, err := blueprint.LoadPath(blueprintPath)
 	if err != nil {
 		return nil, err
 	}
 
 	// Absolute, so paths derived from it (DataDir in particular) are unambiguous no matter what working directory a terraform/tofu subprocess runs with. A relative TF_DATA_DIR would otherwise be resolved relative to the subprocess's own cwd (the node's source dir), not this process's, producing a nested, wrong path.
-	baseDir, err := filepath.Abs(filepath.Dir(blueprintPath))
+	baseDir, err := filepath.Abs(dir)
 	if err != nil {
 		return nil, fmt.Errorf("resolving blueprint directory: %w", err)
 	}

@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -17,6 +19,52 @@ func runCmd(t *testing.T, args ...string) (stdout, stderr string, err error) {
 	root.SetArgs(append([]string{"--blueprint", "../../examples/group/blueprint.hcl"}, args...))
 	err = root.Execute()
 	return outBuf.String(), errBuf.String(), err
+}
+
+// writeFixtureFile writes contents to path, creating any parent directories needed.
+func writeFixtureFile(t *testing.T, path, contents string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir for %s: %v", path, err)
+	}
+	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		t.Fatalf("writing %s: %v", path, err)
+	}
+}
+
+// TestGraph_BlueprintFlagAcceptsDirectory proves --blueprint may name a directory: every .hcl file directly inside it (nodes.hcl, edges.hcl below) is merged into one blueprint, the same way a group source directory already merges its own .hcl files.
+func TestGraph_BlueprintFlagAcceptsDirectory(t *testing.T) {
+	dir := t.TempDir()
+	writeFixtureFile(t, filepath.Join(dir, "nodes.hcl"), `
+node "a" { source = "./stacks/a" }
+node "b" { source = "./stacks/b" }
+`)
+	writeFixtureFile(t, filepath.Join(dir, "edges.hcl"), `
+edge {
+  from = node.a.output.x
+  to   = node.b.input.x
+}
+`)
+	writeFixtureFile(t, filepath.Join(dir, "stacks/a/outputs.tf"), `
+output "x" { value = "hi" }
+`)
+	writeFixtureFile(t, filepath.Join(dir, "stacks/b/variables.tf"), `
+variable "x" { type = string }
+`)
+
+	root := NewRootCmd("test")
+	var outBuf, errBuf bytes.Buffer
+	root.SetOut(&outBuf)
+	root.SetErr(&errBuf)
+	root.SetArgs([]string{"--blueprint", dir, "graph"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("graph: %v (stderr: %s)", err, errBuf.String())
+	}
+
+	want := "level 1: a\nlevel 2: b\n"
+	if outBuf.String() != want {
+		t.Fatalf("stdout = %q, want %q", outBuf.String(), want)
+	}
 }
 
 func TestGraph_DefaultText_MatchesExampleOutput(t *testing.T) {
