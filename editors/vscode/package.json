@@ -45,7 +45,8 @@
     "lint:fix": "npm run lint -- --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "vscode:prepublish": "npm run check && npm run lint && npm run format:check && npm run compile",
+    "bundle": "esbuild ./src/extension.ts --bundle --outfile=out/extension.js --platform=node --format=cjs --external:vscode",
+    "vscode:prepublish": "npm run check && npm run lint && npm run format:check && npm run bundle",
     "package": "vsce package"
   },
   "devDependencies": {
@@ -53,6 +54,7 @@
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.85.0",
     "@vscode/vsce": "^3.7.1",
+    "esbuild": "^0.27.0",
     "eslint": "^9.0.0",
     "eslint-config-prettier": "^10.0.0",
     "prettier": "^3.0.0",

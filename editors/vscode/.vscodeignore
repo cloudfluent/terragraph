@@ -1,6 +1,7 @@
 .github/
 .vscode/
 src/
+node_modules/
 eslint.config.mjs
 .prettierignore
 tsconfig.json
