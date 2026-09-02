@@ -1,6 +1,5 @@
 # yaml-language-server: $schema=https://goreleaser.com/static/schema.json
-# Release pipeline for tagged pushes (see .github/workflows/release.yml). Validate locally with
-# `goreleaser check`, or build without publishing via `goreleaser release --snapshot --clean`.
+# Builds and attaches binaries to the release release-please already created for the tag (see .github/workflows/release-please.yml; .github/workflows/release.yml runs this same pipeline for a manually-pushed tag too). Validate locally with `goreleaser check`, or build without publishing via `goreleaser release --snapshot --clean`.
 version: 2
 
 project_name: terragraph
@@ -35,15 +34,13 @@ archives:
       {{- if eq .Arch "amd64" }}x86_64
       {{- else }}{{ .Arch }}{{ end }}
 
+# release-please owns the changelog (release-please-config.json's changelog-sections) and writes it as the release body before this pipeline ever runs; generating one here too would just be discarded (see release.mode below) or, worse, fail the whole release over an unrelated changelog error.
 changelog:
-  sort: asc
-  filters:
-    exclude:
-      - "^docs:"
-      - "^test:"
-      - "^chore:"
+  disable: true
 
 release:
+  # keep-existing is already GoReleaser's default: an existing release's body (release-please's changelog, in the normal flow) is left untouched, only missing artifacts get uploaded. Spelled out here so the intent doesn't depend on knowing that default.
+  mode: keep-existing
   github:
     owner: cloudfluent
     name: terragraph
