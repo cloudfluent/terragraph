@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.3](https://github.com/cloudfluent/terragraph/compare/v0.1.2...v0.1.3) (2026-09-02)
+
+
+### Features
+
+* add per-node runtime, env, and tfvars location ([203d35e](https://github.com/cloudfluent/terragraph/commit/203d35e8b031742fa08e1addbc0756011c933953))
+* let --blueprint merge a directory of .hcl files ([#6](https://github.com/cloudfluent/terragraph/issues/6)) ([8bfc9e5](https://github.com/cloudfluent/terragraph/commit/8bfc9e5aff01f7ee88fcb0721c8a74ab88c51faf))
+* **vscode:** add Blueprint language intelligence ([#8](https://github.com/cloudfluent/terragraph/issues/8)) ([eeaaac1](https://github.com/cloudfluent/terragraph/commit/eeaaac1bebffd4108ec445578effa24154bdba0f))
+
+
+### Documentation
+
+* add release version badge to README ([c938c23](https://github.com/cloudfluent/terragraph/commit/c938c23539214810496a49134d92e03b66b6946f))
+
 ## [0.1.2](https://github.com/cloudfluent/terragraph/compare/v0.1.1...v0.1.2) (2026-09-02)
 
 
