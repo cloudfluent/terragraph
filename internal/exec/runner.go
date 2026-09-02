@@ -4,11 +4,13 @@ package exec
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	osexec "os/exec"
 	"sort"
+	"strings"
 )
 
 // Binary selects which CLI terragraph shells out to.
@@ -18,6 +20,9 @@ const (
 	Terraform Binary = "terraform"
 	OpenTofu  Binary = "tofu"
 )
+
+// ErrUnsafeCachePlan reports that CLI argument injection could make the validation plan differ from apply.
+var ErrUnsafeCachePlan = errors.New("TF_CLI_ARGS overrides make cache validation unsafe")
 
 // Runner executes one binary against one node's working directory.
 type Runner struct {
@@ -62,6 +67,27 @@ func (r *Runner) run(args ...string) error {
 	return cmd.Run()
 }
 
+func hasNonEmptyEnvPrefix(env []string, prefix string) bool {
+	if env == nil {
+		env = os.Environ()
+	}
+	prefix = normalizeEnvKey(prefix)
+	values := make(map[string]string)
+	for _, entry := range env {
+		name, value, ok := strings.Cut(entry, "=")
+		name = normalizeEnvKey(name)
+		if ok && strings.HasPrefix(name, prefix) {
+			values[name] = value
+		}
+	}
+	for _, value := range values {
+		if value != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // Init runs `terraform init`. backendConfig entries are passed as -backend-config=key=value flags (Terraform's partial backend configuration mechanism), which lets the same module be reused by multiple nodes with distinct backend settings (e.g. state file path) without generating or editing any .tf file. A nil/empty map passes no such flags, leaving the module's own backend configuration as-is.
 func (r *Runner) Init(backendConfig map[string]string) error {
 	args := []string{"init", "-input=false"}
@@ -80,6 +106,23 @@ func (r *Runner) Init(backendConfig map[string]string) error {
 func (r *Runner) Plan(extraArgs ...string) error {
 	args := append([]string{"plan", "-input=false"}, extraArgs...)
 	return r.run(args...)
+}
+
+// PlanChanges runs a refresh-enabled plan and distinguishes Terraform's detailed exit codes: zero means no changes, two means changes are present, and every other failure remains an error.
+func (r *Runner) PlanChanges(extraArgs ...string) (bool, error) {
+	if hasNonEmptyEnvPrefix(r.env(), "TF_CLI_ARGS") {
+		return false, ErrUnsafeCachePlan
+	}
+	args := append([]string{"plan", "-input=false", "-refresh=true", "-detailed-exitcode"}, extraArgs...)
+	err := r.run(args...)
+	if err == nil {
+		return false, nil
+	}
+	var exitErr *osexec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 2 {
+		return true, nil
+	}
+	return false, err
 }
 
 func (r *Runner) Apply(autoApprove bool, extraArgs ...string) error {
