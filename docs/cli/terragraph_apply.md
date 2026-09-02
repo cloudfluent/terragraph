@@ -10,7 +10,6 @@ terragraph apply [flags]
 
 ```
       --auto-approve      skip interactive approval
-      --force             bypass the incremental-apply cache and always re-run apply
   -h, --help              help for apply
       --node string       restrict to a single node
       --parallelism int   max nodes to run concurrently within one execution level (default 1)

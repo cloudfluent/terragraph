@@ -22,7 +22,7 @@ tfvars {
 }
 ```
 
-- **`workdir`** (default): `<blueprint dir>/.terragraph/vars/<node>.tfvars.json`, next to the node's other engine-managed state (`tfdata/`, `plans/`, `cache.json`). Never touches a module's own directory, so nothing needs adding to any module's `.gitignore`, and two nodes sharing a `source` never collide on a filename. This is the right choice for a vendored module (not yours to add a `.gitignore` entry to) or one reused across many near-identical instances.
+- **`workdir`** (default): `<blueprint dir>/.terragraph/vars/<node>.tfvars.json`, next to the node's other engine-managed state (`tfdata/`, `plans/`). Never touches a module's own directory, so nothing needs adding to any module's `.gitignore`, and two nodes sharing a `source` never collide on a filename. This is the right choice for a vendored module (not yours to add a `.gitignore` entry to) or one reused across many near-identical instances.
 - **`module`**: `<node source>/.terragraph.<node>.tfvars.json`, alongside the module's own `.tf` files, for a resolved input value visible next to its source while debugging. Add the pattern below to each module's `.gitignore`:
 
   ```
@@ -35,20 +35,26 @@ tfvars {
 
 Nodes are grouped into levels: every node in level *i* only depends on nodes in levels `< i`, so nodes within one level have no edge between them and are safe to run concurrently. `terragraph graph` prints these levels directly. Execution defaults to sequential (`--parallelism 1`); pass `--parallelism N` to `plan`/`apply`/`destroy` to run up to `N` nodes within a level concurrently. Output from concurrent nodes is buffered and flushed as one `=== node <name> ===` block per node so it never interleaves; with the default `--parallelism 1` it streams live as before.
 
-## Incremental apply
+## Deciding whether a node needs applying
 
-`terragraph apply` uses a content-addressed cache, stored at `<blueprint dir>/.terragraph/cache.json`, to identify a node whose source files, resolved input values, resolved runtime (see [blueprint.md](blueprint.md#choosing-a-runtime-per-node-runtime)), and resolved `env` (see [blueprint.md](blueprint.md#extra-environment-variables-per-node-env)) match its last successful apply.
+Terraform decides, every run. `terragraph apply` plans each node with `-refresh=true -detailed-exitcode`; a plan reporting no changes skips the apply, and nothing local is consulted first.
 
-A local cache hit is only a prefilter. Terraform decides: terragraph runs a refresh-enabled plan with `-detailed-exitcode`, so remote drift and dependencies read from non-`.tf` files are still detected. If that plan reports no changes, the apply is skipped. If it reports changes, **that same plan is what gets applied** — it is written with `-out` and handed to `apply` — so the node refreshes once rather than twice, and the plan that authorized the change is provably the change that gets made. An argument injected into apply alone (`TF_CLI_ARGS_apply`) can no longer make apply do something the plan never described: Terraform ignores scope arguments when applying a saved plan and rejects `-var` outright. `-refresh=true` is always passed explicitly, and a command-line flag beats the same flag arriving through `TF_CLI_ARGS_plan`, so an ambient `-refresh=false` cannot turn the check into a stale-state one.
+If the plan reports changes, **that same plan is what gets applied** — it is written with `-out` and handed to `apply` — so the node refreshes once rather than twice, and the change that gets made is provably the change that was planned. An argument injected into apply alone (`TF_CLI_ARGS_apply`) can no longer make apply do something the plan never described: Terraform ignores scope arguments when applying a saved plan and rejects `-var` outright. `-refresh=true` is always passed explicitly, and a command-line flag beats the same flag arriving through `TF_CLI_ARGS_plan`, so an ambient `-refresh=false` cannot turn the check into a stale-state one.
 
-The plan file lives at `<blueprint dir>/.terragraph/plans/<node>.tfplan` and is removed when the run ends. Like the tfvars file, it contains resolved input values in cleartext, so the same "keep `.terragraph/` out of version control" rule applies.
+The plan file lives at `<blueprint dir>/.terragraph/plans/<node>.tfplan` and is removed when the run ends. Like the tfvars file, it holds resolved input values in cleartext, so the same "keep `.terragraph/` out of version control" rule applies.
 
-Two cases fall back to planning and applying separately:
+Two cases fall back to planning and applying as separate invocations:
 
 - **`--auto-approve` was not passed.** Terraform never asks for confirmation when applying a saved plan, so terragraph only takes that path when it has already been told approval is not required.
 - **The node uses the `remote` or `cloud` backend.** These run the plan on HCP rather than locally and cannot produce a local plan file. Every state-storage backend — `s3`, `gcs`, `azurerm`, `http`, `local`, ... — keeps state remote but runs operations locally, and is unaffected.
 
-Pass `--force` to bypass the cache and always re-run apply. `terragraph destroy` drops the cache entries for whatever it actually tore down, so a later `apply` never mistakes now-gone infrastructure for "unchanged."
+### There is no local cache
+
+Earlier versions kept a content-addressed cache at `<blueprint dir>/.terragraph/cache.json`, hashing each node's source files, resolved inputs, runtime and `env` to decide whether it could skip apply. Hashing local files is a proxy for a remote fact, and the gap between the two produced a series of bugs: a backend or inherited `env` change that the key never modelled, remote drift that no local hash could see, and files consumed through `file()`/`templatefile()` that never invalidated anything.
+
+Once every cache *hit* had to be confirmed by a refreshed plan anyway, the only thing the cache still did was send every *miss* straight to apply without one — so a genuinely unchanged node was re-applied on any fresh checkout, any CI runner without a warm `.terragraph/`, and every run after a `destroy`. Removing it puts every node behind the plan, which is both correct and skips more.
+
+`--force` existed to bypass that cache. It is accepted and ignored, and will be removed in a later release. `terragraph destroy` no longer has to invalidate anything either.
 
 ## Known limitation
 

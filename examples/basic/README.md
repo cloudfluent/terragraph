@@ -1,6 +1,6 @@
 # basic
 
-One node (`vpc`) feeding two independent downstream nodes (`eks`, `eks2`), proving both the wiring and parallel level execution plus the incremental-apply cache. Cloud-credential-free (`random`/`local` providers only).
+One node (`vpc`) feeding two independent downstream nodes (`eks`, `eks2`), proving the wiring, parallel level execution, and that an unchanged node is skipped. Cloud-credential-free (`random`/`local` providers only).
 
 ```
 cd examples/basic

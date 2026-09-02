@@ -17,8 +17,6 @@ type Options struct {
 	AutoApprove bool
 	// Parallelism caps how many nodes within one execution level run concurrently. <=1 means sequential (the default), matching v1 behavior and avoiding surprising provider API rate-limit issues.
 	Parallelism int
-	// Force bypasses the incremental-apply cache, always re-running init+apply even if nothing changed since the last apply.
-	Force bool
 }
 
 func (o Options) parallelism() int {

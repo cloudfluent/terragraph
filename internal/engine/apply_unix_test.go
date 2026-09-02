@@ -19,9 +19,6 @@ func writeFakeTerraform(t *testing.T, dir string) string {
 	script := `#!/bin/sh
 case "$1" in
   init)
-    if [ -n "${TG_INIT_LOCK_CONTENT:-}" ]; then
-      printf '%s\n' "$TG_INIT_LOCK_CONTENT" > .terraform.lock.hcl
-    fi
     if [ -n "${TG_BACKEND_TYPE:-}" ]; then
       mkdir -p "$TF_DATA_DIR"
       printf '{"version":3,"backend":{"type":"%s"}}' "$TG_BACKEND_TYPE" > "$TF_DATA_DIR/terraform.tfstate"
@@ -111,7 +108,7 @@ func loadCacheTestEngine(t *testing.T) (*Engine, string, string) {
 	return e, moduleDir, commandLog
 }
 
-func TestApply_CacheHitRunsPlanAndReconcilesDrift(t *testing.T) {
+func TestApply_PlanDecidesWhetherToApply(t *testing.T) {
 	e, moduleDir, commandLog := loadCacheTestEngine(t)
 
 	if err := e.Apply(Options{AutoApprove: true}); err != nil {
@@ -134,7 +131,7 @@ func TestApply_CacheHitRunsPlanAndReconcilesDrift(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading command log: %v", err)
 	}
-	if got, want := strings.Count(string(data), "plan\n"), 2; got != want {
+	if got, want := strings.Count(string(data), "plan\n"), 3; got != want {
 		t.Fatalf("plan count = %d, want %d; log:\n%s", got, want, data)
 	}
 	if got, want := strings.Count(string(data), "apply\n"), 2; got != want {
@@ -142,7 +139,7 @@ func TestApply_CacheHitRunsPlanAndReconcilesDrift(t *testing.T) {
 	}
 }
 
-func TestApply_CacheHitPlanDetectsNonTerraformDependencyChange(t *testing.T) {
+func TestApply_PlanDetectsNonTerraformDependencyChange(t *testing.T) {
 	e, moduleDir, _ := loadCacheTestEngine(t)
 
 	if err := e.Apply(Options{AutoApprove: true}); err != nil {
@@ -164,7 +161,7 @@ func TestApply_CacheHitPlanDetectsNonTerraformDependencyChange(t *testing.T) {
 	}
 }
 
-func TestApply_CacheHitPlanErrorFailsWithoutApplying(t *testing.T) {
+func TestApply_PlanErrorFailsWithoutApplying(t *testing.T) {
 	e, _, commandLog := loadCacheTestEngine(t)
 
 	if err := e.Apply(Options{AutoApprove: true}); err != nil {
@@ -174,38 +171,12 @@ func TestApply_CacheHitPlanErrorFailsWithoutApplying(t *testing.T) {
 		t.Fatalf("creating plan error marker: %v", err)
 	}
 	if err := e.Apply(Options{AutoApprove: true}); err == nil {
-		t.Fatal("expected cached-hit plan error to fail apply")
+		t.Fatal("expected a plan error to fail the node instead of applying it")
 	}
 
 	data, err := os.ReadFile(commandLog)
 	if err != nil {
 		t.Fatalf("reading command log: %v", err)
-	}
-	if got, want := strings.Count(string(data), "apply\n"), 1; got != want {
-		t.Fatalf("apply count = %d, want %d; log:\n%s", got, want, data)
-	}
-}
-
-func TestApply_CacheHitRecordsSourceChangesMadeByInit(t *testing.T) {
-	e, _, commandLog := loadCacheTestEngine(t)
-
-	if err := e.Apply(Options{AutoApprove: true}); err != nil {
-		t.Fatalf("first Apply: %v", err)
-	}
-	t.Setenv("TG_INIT_LOCK_CONTENT", "provider lock update")
-	if err := e.Apply(Options{AutoApprove: true}); err != nil {
-		t.Fatalf("cache-hit Apply that updates lock file: %v", err)
-	}
-	if err := e.Apply(Options{AutoApprove: true}); err != nil {
-		t.Fatalf("Apply after stable lock file: %v", err)
-	}
-
-	data, err := os.ReadFile(commandLog)
-	if err != nil {
-		t.Fatalf("reading command log: %v", err)
-	}
-	if got, want := strings.Count(string(data), "plan\n"), 2; got != want {
-		t.Fatalf("plan count = %d, want %d; log:\n%s", got, want, data)
 	}
 	if got, want := strings.Count(string(data), "apply\n"), 1; got != want {
 		t.Fatalf("apply count = %d, want %d; log:\n%s", got, want, data)
@@ -265,7 +236,7 @@ func TestApply_SavedPlanIgnoresAmbientApplyArguments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading command log: %v", err)
 	}
-	if got, want := strings.Count(string(logData), "apply-saved\n"), 1; got != want {
+	if got, want := strings.Count(string(logData), "apply-saved\n"), 2; got != want {
 		t.Fatalf("saved-plan apply count = %d, want %d; log:\n%s", got, want, logData)
 	}
 }
@@ -289,10 +260,10 @@ func TestApply_DriftedNodeAppliesTheVerificationPlan(t *testing.T) {
 		t.Fatalf("reading command log: %v", err)
 	}
 	log := string(data)
-	if got, want := strings.Count(log, "plan-saved\n"), 1; got != want {
+	if got, want := strings.Count(log, "plan-saved\n"), 2; got != want {
 		t.Fatalf("saved plan count = %d, want %d; log:\n%s", got, want, log)
 	}
-	if got, want := strings.Count(log, "apply-saved\n"), 1; got != want {
+	if got, want := strings.Count(log, "apply-saved\n"), 2; got != want {
 		t.Fatalf("saved-plan apply count = %d, want %d; log:\n%s", got, want, log)
 	}
 }
@@ -355,6 +326,10 @@ func TestApply_WithoutAutoApproveDoesNotSaveAPlan(t *testing.T) {
 	}
 	if err := os.Remove(filepath.Join(moduleDir, "managed.out")); err != nil {
 		t.Fatalf("removing managed output: %v", err)
+	}
+	// Only the run below is under test; the bootstrap above legitimately saved a plan.
+	if err := os.Truncate(commandLog, 0); err != nil {
+		t.Fatalf("truncating command log: %v", err)
 	}
 	if err := e.Apply(Options{}); err != nil {
 		t.Fatalf("Apply without auto-approve: %v", err)
