@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.1.1](https://github.com/cloudfluent/terragraph/compare/v0.1.0...v0.1.1) (2026-09-02)
+
+
+### Bug Fixes
+
+* ad-hoc sign darwin binaries so Apple Silicon doesn't SIGKILL them ([4ce06b7](https://github.com/cloudfluent/terragraph/commit/4ce06b7dc65b73060a376ea702402989c7aa289b))
+* allow manually re-triggering release-please ([47055f8](https://github.com/cloudfluent/terragraph/commit/47055f8c199cfa5571aaff2907c8e9bf34c33604))
+* stop skipping the GitHub release in release-please-config.json ([14b663d](https://github.com/cloudfluent/terragraph/commit/14b663d2bb64a3e89ac257ed6474b259597a2a04))
+* use a fine-grained PAT for release-please's own API calls ([911b675](https://github.com/cloudfluent/terragraph/commit/911b675bc37e55f91e3f7ccf8c68b26650a4f819))
+
+
+### Documentation
+
+* document brew install in README ([137082c](https://github.com/cloudfluent/terragraph/commit/137082c0d9bcbc7e592ea000adcffe15dcd780b2))
+
 ## 0.1.0 (2026-09-02)
 
 
