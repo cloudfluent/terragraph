@@ -73,6 +73,8 @@ func IsRemote(src string) bool {
 }
 
 // Edge connects two nodes. If both endpoints reference specific ports (From.IsPort() && To.IsPort()), this is an explicit data edge: the engine passes From's output value into To's input variable at runtime. If neither endpoint references a port (bare node references), this is an implicit edge: it only constrains execution order between the two nodes and carries no value. Mixing (one endpoint a port, the other bare) is rejected at parse time.
+//
+// One Edge is not necessarily one `edge` block: a block wiring several outputs of one node into several inputs of another can spell that as nested `input` blocks, which parseEdgeInputs expands into one Edge each before any of this package's callers see them. There is deliberately no field here recording that, so no consumer of a Blueprint can behave differently depending on how a pair of ports was written.
 type Edge struct {
 	From PortRef
 	To   PortRef

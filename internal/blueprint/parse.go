@@ -63,6 +63,13 @@ var edgeSchema = &hcl.BodySchema{
 		{Name: "from", Required: true},
 		{Name: "to", Required: true},
 	},
+	Blocks: []hcl.BlockHeaderSchema{
+		{Type: "input", LabelNames: []string{"name"}},
+	},
+}
+
+var edgeInputSchema = &hcl.BodySchema{
+	Attributes: []hcl.AttributeSchema{{Name: "from", Required: true}},
 }
 
 var groupBodySchema = &hcl.BodySchema{
@@ -194,11 +201,11 @@ func parseOneFile(path string, bp *Blueprint, seenNodes, seenGroups, seenUses, s
 			seenNodes[node.Name] = true
 			bp.Nodes = append(bp.Nodes, node)
 		case "edge":
-			edge, err := parseEdgeBlock(block)
+			edges, err := parseEdgeBlock(block)
 			if err != nil {
 				return err
 			}
-			bp.Edges = append(bp.Edges, edge)
+			bp.Edges = append(bp.Edges, edges...)
 		case "group":
 			group, err := parseGroupBlock(block)
 			if err != nil {
@@ -577,24 +584,29 @@ func parseStringMapAttr(attr *hcl.Attribute, attrName string) (map[string]string
 	return result, nil
 }
 
-func parseEdgeBlock(block *hcl.Block) (Edge, error) {
+// parseEdgeBlock parses one `edge { }` block into the edges it declares: exactly one, unless the block carries nested `input` blocks (see parseEdgeInputs), in which case it declares one data edge per nested block. That expansion happens here, at parse time, so nothing downstream ever sees the shorthand: by the time an edge reaches graph.Build it is an ordinary pair of PortRefs, and every later rule (one data edge per input, group export rewriting, cycle detection, the incremental-apply cache) applies to the expanded edges without knowing how they were spelled.
+func parseEdgeBlock(block *hcl.Block) ([]Edge, error) {
 	content, diags := block.Body.Content(edgeSchema)
 	if diags.HasErrors() {
-		return Edge{}, fmt.Errorf("%s: %s", block.DefRange, diags.Error())
+		return nil, fmt.Errorf("%s: %s", block.DefRange, diags.Error())
 	}
 
 	from, err := parseNodeOrPortRef(content.Attributes["from"])
 	if err != nil {
-		return Edge{}, err
+		return nil, err
 	}
 	to, err := parseNodeOrPortRef(content.Attributes["to"])
 	if err != nil {
-		return Edge{}, err
+		return nil, err
+	}
+
+	if inputs := content.Blocks.OfType("input"); len(inputs) > 0 {
+		return parseEdgeInputs(block, inputs, from, to)
 	}
 
 	// Either both endpoints name a specific port (explicit data edge) or neither does (implicit, ordering-only edge). Mixing the two would be ambiguous: a value with nowhere declared to land, or an input with no declared source.
 	if from.IsPort() != to.IsPort() {
-		return Edge{}, fmt.Errorf(
+		return nil, fmt.Errorf(
 			"%s: \"from\" and \"to\" must both reference specific ports (node.<name>.output.<attr> / node.<name>.input.<attr>) for a data edge, or both reference bare nodes (node.<name>) for an ordering-only edge; got %s -> %s",
 			block.DefRange, from, to,
 		)
@@ -602,14 +614,75 @@ func parseEdgeBlock(block *hcl.Block) (Edge, error) {
 
 	if from.IsPort() {
 		if from.Kind != PortOutput {
-			return Edge{}, fmt.Errorf("%s: \"from\" must reference an output port (node.<name>.output.<attr>), got %s", content.Attributes["from"].Range, from)
+			return nil, fmt.Errorf("%s: \"from\" must reference an output port (node.<name>.output.<attr>), got %s", content.Attributes["from"].Range, from)
 		}
 		if to.Kind != PortInput {
-			return Edge{}, fmt.Errorf("%s: \"to\" must reference an input port (node.<name>.input.<attr>), got %s", content.Attributes["to"].Range, to)
+			return nil, fmt.Errorf("%s: \"to\" must reference an input port (node.<name>.input.<attr>), got %s", content.Attributes["to"].Range, to)
 		}
 	}
 
-	return Edge{From: from, To: to}, nil
+	return []Edge{{From: from, To: to}}, nil
+}
+
+// parseEdgeInputs expands an edge's nested `input "<var>" { from = output.<attr> }` blocks into one data edge each, between the same pair of endpoints the enclosing edge names. The shape deliberately mirrors a group's export input: a block label naming the destination input, and one attribute saying where the value comes from. Its purpose is only to stop a pair of modules that already expose many flat variables from needing one near-identical `edge` block per variable; nothing about the resulting graph differs from having written them out.
+//
+// Both endpoints must be bare references, since each nested block supplies the port names itself: an edge that already names a specific port on either side has exactly one value to carry, and there would be nothing for a second input block to mean.
+func parseEdgeInputs(block *hcl.Block, inputs hcl.Blocks, from, to PortRef) ([]Edge, error) {
+	if from.IsPort() || to.IsPort() {
+		return nil, fmt.Errorf(
+			"%s: an edge with nested \"input\" blocks must reference bare nodes on both sides (node.<name> / use.<name>); each block's label and \"from\" name the ports, got %s -> %s",
+			block.DefRange, from, to,
+		)
+	}
+
+	edges := make([]Edge, 0, len(inputs))
+	seen := map[string]bool{}
+	for _, b := range inputs {
+		name := b.Labels[0]
+		if seen[name] {
+			return nil, fmt.Errorf("%s: duplicate input %q on this edge", b.DefRange, name)
+		}
+		seen[name] = true
+
+		ic, diags := b.Body.Content(edgeInputSchema)
+		if diags.HasErrors() {
+			return nil, fmt.Errorf("%s: %s", b.DefRange, diags.Error())
+		}
+		output, err := parseRelativeOutputRef(ic.Attributes["from"])
+		if err != nil {
+			return nil, err
+		}
+
+		edges = append(edges, Edge{
+			From: PortRef{Entity: from.Entity, Node: from.Node, Kind: PortOutput, Name: output},
+			To:   PortRef{Entity: to.Entity, Node: to.Node, Kind: PortInput, Name: name},
+		})
+	}
+	return edges, nil
+}
+
+// parseRelativeOutputRef reads the `from = output.<attr>` attribute of an edge's nested input block and returns just the attribute name. The reference is relative on purpose: the enclosing edge already names exactly one source, so repeating it on every nested block would add a second place for it to disagree with itself. An absolute reference is rejected rather than accepted-if-it-matches, so there is only ever one spelling to read.
+func parseRelativeOutputRef(attr *hcl.Attribute) (string, error) {
+	traversal, diags := hcl.AbsTraversalForExpr(attr.Expr)
+	if diags.HasErrors() {
+		return "", fmt.Errorf("%s: must be a reference of the form output.<attr>, not an expression", attr.Range)
+	}
+
+	root, ok := traversal[0].(hcl.TraverseRoot)
+	if !ok {
+		return "", fmt.Errorf("%s: must be a reference of the form output.<attr>", attr.Range)
+	}
+	if root.Name == "node" || root.Name == "use" {
+		return "", fmt.Errorf("%s: must be a relative reference of the form output.<attr>; the source node is the edge's own \"from\", not repeated here", attr.Range)
+	}
+	if root.Name != string(PortOutput) {
+		return "", fmt.Errorf("%s: must be a reference of the form output.<attr>, got %q", attr.Range, root.Name)
+	}
+	if len(traversal) != 2 {
+		return "", fmt.Errorf("%s: expected output.<attr>, got %d path segments", attr.Range, len(traversal))
+	}
+
+	return traverseAttrName(traversal[1], attr.Range)
 }
 
 // parseNodeOrPortRef extracts either a bare reference (node.<name> or use.<name>, used for an ordering-only edge) or a specific port reference (node.<name>.<output|input>.<attr> or use.<name>.<output|input>.<attr>) from an attribute's expression. The expression is never evaluated as a value: it is read purely as a traversal, mirroring how Terraform itself resolves resource references like aws_instance.foo.id. A group instance (use.<name>) resolves to exactly the same PortRef shape as a node (see EntityKind) because from every caller's perspective a group instance is indistinguishable from a node once its Export is validated.
@@ -738,11 +811,11 @@ func parseGroupBlock(block *hcl.Block) (Group, error) {
 			seenNodes[n.Name] = true
 			g.Nodes = append(g.Nodes, n)
 		case "edge":
-			e, err := parseEdgeBlock(b)
+			edges, err := parseEdgeBlock(b)
 			if err != nil {
 				return Group{}, err
 			}
-			g.Edges = append(g.Edges, e)
+			g.Edges = append(g.Edges, edges...)
 		case "use":
 			u, err := parseUseBlock(b)
 			if err != nil {

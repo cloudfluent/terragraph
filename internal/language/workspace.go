@@ -96,7 +96,14 @@ func (w *Workspace) Complete(_ context.Context, path string, offset int) []Compl
 	if strings.HasPrefix(fragment, "node") || strings.HasPrefix(fragment, "use") {
 		return traversalCompletions(model, fragment, directionAt(text, offset), start, offset)
 	}
-	return contextCompletions(blockAt(text, offset), fragment, start, offset)
+	blocks := blockPathAt(text, offset)
+	if labelStart, ok := edgeInputLabelAt(text, offset, blocks); ok {
+		return edgeInputLabelCompletions(model, text, labelStart, offset)
+	}
+	if isEdgeInput(blocks) && directionAt(text, offset) == "from" {
+		return relativeOutputCompletions(model, text, fragment, start, offset)
+	}
+	return contextCompletions(blocks, fragment, start, offset)
 }
 
 type workspaceModel struct {
@@ -213,11 +220,17 @@ func inspectGroupPorts(base, source, groupName string) ports {
 				if export.Type != "export" {
 					continue
 				}
-				if attr := export.Body.Attributes["input"]; attr != nil {
-					p.inputs = append(p.inputs, objectKeys(attr.Expr)...)
-				}
-				if attr := export.Body.Attributes["output"]; attr != nil {
-					p.outputs = append(p.outputs, objectKeys(attr.Expr)...)
+				// A group's exposed ports are the labels of the export block's own input/output blocks, the same shape blueprint.parseExportBlock reads.
+				for _, port := range export.Body.Blocks {
+					if len(port.Labels) != 1 {
+						continue
+					}
+					switch port.Type {
+					case "input":
+						p.inputs = append(p.inputs, port.Labels[0])
+					case "output":
+						p.outputs = append(p.outputs, port.Labels[0])
+					}
 				}
 			}
 		}
@@ -240,21 +253,6 @@ func literalAttribute(block *hclsyntax.Block, name string) string {
 }
 
 var ctyString = cty.String
-
-func objectKeys(expr hcl.Expression) []string {
-	obj, ok := expr.(*hclsyntax.ObjectConsExpr)
-	if !ok {
-		return nil
-	}
-	keys := make([]string, 0, len(obj.Items))
-	for _, item := range obj.Items {
-		value, diags := item.KeyExpr.Value(nil)
-		if !diags.HasErrors() && value.Type() == ctyString {
-			keys = append(keys, value.AsString())
-		}
-	}
-	return keys
-}
 
 func traversalCompletions(m workspaceModel, fragment, direction string, start, end int) []Completion {
 	parts := strings.Split(fragment, ".")
@@ -334,6 +332,10 @@ var completionSchemas = map[string][]attributeSpec{
 	"edge": {
 		{name: "from", insert: "from = node.", detail: "required output reference", documentation: "Source node output, or a bare node for an ordering-only edge."},
 		{name: "to", insert: "to = node.", detail: "required input reference", documentation: "Target node input, or a bare node for an ordering-only edge."},
+		{name: "input", insert: "input \"name\" {\n  from = output.\n}", detail: "Edge block", documentation: "Wires one more output of this edge's from node into an input of its to node. Only on an edge whose from and to are bare references."},
+	},
+	"edge.input": {
+		{name: "from", insert: "from = output.", detail: "required output reference", documentation: "Which output of the edge's own from node feeds this input. Relative: the source node is not repeated here."},
 	},
 	"runtime": {
 		{name: "binary", insert: "binary = \"\"", detail: "required string", documentation: "Terraform or OpenTofu binary path, or a command resolved from PATH."},
@@ -355,8 +357,9 @@ var completionSchemas = map[string][]attributeSpec{
 	},
 }
 
-func contextCompletions(block, prefix string, start, end int) []Completion {
-	fields := completionSchemas[block]
+// contextCompletions suggests what may be written inside the block containing the cursor. path is that block's chain of enclosing Blueprint blocks (see blockPathAt), matched against completionSchemas by longest suffix, so a nested block picks its own schema ("edge.input") while one that only ever means one thing keeps a single entry wherever it appears ("node", inside a group or not).
+func contextCompletions(path []string, prefix string, start, end int) []Completion {
+	fields := schemaForPath(path)
 	return stringCompletions(specNames(fields), prefix, func(name string) Completion {
 		for _, field := range fields {
 			if field.name == name {
@@ -365,6 +368,18 @@ func contextCompletions(block, prefix string, start, end int) []Completion {
 		}
 		return Completion{}
 	})
+}
+
+func schemaForPath(path []string) []attributeSpec {
+	if len(path) == 0 {
+		return completionSchemas[""]
+	}
+	for i := range path {
+		if fields, ok := completionSchemas[strings.Join(path[i:], ".")]; ok {
+			return fields
+		}
+	}
+	return nil
 }
 
 func specNames(fields []attributeSpec) []string {
@@ -488,33 +503,160 @@ func nodeAt(text []byte, offset int) string {
 	return matches[len(matches)-1][1]
 }
 
-var blockHeader = regexp.MustCompile(`(?s)(node|edge|runtime|group|use|vendor|tfvars)\s*(?:"[^\"]*")?\s*$`)
+var blockHeader = regexp.MustCompile(`(?s)(node|edge|runtime|group|use|vendor|tfvars|export|input|output)\s*(?:"[^\"]*")?\s*$`)
 
-// blockAt returns the nearest containing Blueprint block. Object braces are
-// tracked too so a closing brace for vars or env cannot end the outer block.
-func blockAt(text []byte, offset int) string {
-	stack := []string{}
+// openBlock is one Blueprint block still open at some offset: its keyword (empty
+// for a brace that opens an object rather than a block, e.g. vars or env) and the
+// byte offset of its opening brace.
+type openBlock struct {
+	name string
+	at   int
+}
+
+// openBlocksAt returns the chain of braces open at offset, outermost first.
+// Object braces are tracked too, with an empty name, so a closing brace for vars
+// or env cannot end the outer block.
+func openBlocksAt(text []byte, offset int) []openBlock {
+	stack := []openBlock{}
 	for i := 0; i < offset; i++ {
 		switch text[i] {
 		case '{':
-			match := blockHeader.FindSubmatch(text[:i])
-			if len(match) == 2 {
-				stack = append(stack, string(match[1]))
-			} else {
-				stack = append(stack, "")
+			name := ""
+			if match := blockHeader.FindSubmatch(text[:i]); len(match) == 2 {
+				name = string(match[1])
 			}
+			stack = append(stack, openBlock{name: name, at: i})
 		case '}':
 			if len(stack) > 0 {
 				stack = stack[:len(stack)-1]
 			}
 		}
 	}
-	for i := len(stack) - 1; i >= 0; i-- {
-		if stack[i] != "" {
-			return stack[i]
+	return stack
+}
+
+// blockPathAt returns the Blueprint blocks containing offset, outermost first
+// (e.g. ["edge", "input"]), skipping object braces. Empty at the top level.
+func blockPathAt(text []byte, offset int) []string {
+	path := []string{}
+	for _, b := range openBlocksAt(text, offset) {
+		if b.name != "" {
+			path = append(path, b.name)
 		}
 	}
-	return ""
+	return path
+}
+
+func isEdgeInput(path []string) bool {
+	return len(path) >= 2 && path[len(path)-1] == "input" && path[len(path)-2] == "edge"
+}
+
+// enclosingEdge returns the text of the innermost `edge` block containing
+// offset, from its opening brace to its matching close, or to the end of the
+// document: a file being typed into is routinely still unbalanced.
+func enclosingEdge(text []byte, offset int) ([]byte, bool) {
+	open := -1
+	for _, b := range openBlocksAt(text, offset) {
+		if b.name == "edge" {
+			open = b.at
+		}
+	}
+	if open < 0 {
+		return nil, false
+	}
+	depth := 0
+	for i := open; i < len(text); i++ {
+		switch text[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return text[open : i+1], true
+			}
+		}
+	}
+	return text[open:], true
+}
+
+var edgeEndpoint = regexp.MustCompile(`(?m)^\s*(from|to)\s*=\s*(node|use)\.([[:alnum:]_-]+)\s*$`)
+
+// edgeEndpointPorts returns the ports of the node or group instance the edge
+// containing offset names on the given side, provided that side is a bare
+// reference: only such an edge can carry nested input blocks, and the whole
+// block is searched (not just the text before the cursor) so the input blocks
+// may be written above from and to.
+func edgeEndpointPorts(m workspaceModel, text []byte, offset int, side string) (ports, bool) {
+	block, ok := enclosingEdge(text, offset)
+	if !ok {
+		return ports{}, false
+	}
+	for _, match := range edgeEndpoint.FindAllSubmatch(block, -1) {
+		if string(match[1]) != side {
+			continue
+		}
+		return lookupEntity(m, string(match[2]), string(match[3]))
+	}
+	return ports{}, false
+}
+
+func lookupEntity(m workspaceModel, keyword, name string) (ports, bool) {
+	if keyword == "use" {
+		p, ok := m.uses[name]
+		return p, ok
+	}
+	p, ok := m.nodes[name]
+	return p, ok
+}
+
+var edgeInputLabel = regexp.MustCompile(`(?s)input\s+"([^"\n]*)$`)
+
+// edgeInputLabelAt reports whether offset sits inside the label of an edge's
+// nested input block (`input "vp|`), returning where that label starts. The
+// label names an input of the edge's to node, so it completes like a port.
+func edgeInputLabelAt(text []byte, offset int, path []string) (int, bool) {
+	if len(path) == 0 || path[len(path)-1] != "edge" {
+		return 0, false
+	}
+	match := edgeInputLabel.FindSubmatchIndex(text[:offset])
+	if match == nil {
+		return 0, false
+	}
+	return match[2], true
+}
+
+func edgeInputLabelCompletions(m workspaceModel, text []byte, start, end int) []Completion {
+	target, ok := edgeEndpointPorts(m, text, start, "to")
+	if !ok {
+		return nil
+	}
+	prefix := string(text[start:end])
+	return stringCompletions(target.inputs, prefix, func(name string) Completion {
+		return portCompletion(name, name, target.inputsMeta[name], false, start, end)
+	})
+}
+
+// relativeOutputCompletions completes the `from = output.<attr>` reference of an
+// edge's nested input block against the outputs of the node the enclosing edge's
+// own from names. The reference carries no node name of its own, so unlike
+// traversalCompletions there is nothing in the fragment to resolve it with.
+func relativeOutputCompletions(m workspaceModel, text []byte, fragment string, start, end int) []Completion {
+	source, ok := edgeEndpointPorts(m, text, start, "from")
+	if !ok {
+		return nil
+	}
+	parts := strings.Split(fragment, ".")
+	if len(parts) == 1 {
+		return stringCompletions([]string{"output"}, parts[0], func(kind string) Completion {
+			return Completion{Label: kind, Insert: kind + ".", Detail: "port kind", Start: start, End: end}
+		})
+	}
+	if len(parts) != 2 || parts[0] != "output" {
+		return nil
+	}
+	return stringCompletions(source.outputs, parts[1], func(name string) Completion {
+		return portCompletion(name, "output."+name, source.outputsMeta[name], true, start, end)
+	})
 }
 
 // Definition resolves the node or runtime segment under offset. It searches
@@ -596,7 +738,102 @@ func (w *Workspace) Diagnose(_ context.Context, path string) []Diagnostic {
 		}
 		diagnostics = append(diagnostics, Diagnostic{Start: start, End: end, Message: "Unknown input " + string(text[start:end]) + availableHint(ports.inputs)})
 	}
+	return append(diagnostics, edgeInputDiagnostics(model, path, text)...)
+}
+
+// edgeInputDiagnostics checks an edge's nested input blocks, which the reference
+// regexes above cannot see: neither the block label nor its relative
+// `from = output.<attr>` names the node it belongs to, so both are only
+// meaningful against the endpoints of the enclosing edge. Only top-level edges
+// are checked, since an edge inside a group definition references that group's
+// own internal nodes, which the workspace model does not track.
+func edgeInputDiagnostics(m workspaceModel, path string, text []byte) []Diagnostic {
+	file, _ := hclsyntax.ParseConfig(text, path, hcl.InitialPos)
+	body, ok := file.Body.(*hclsyntax.Body)
+	if !ok {
+		return nil
+	}
+
+	diagnostics := []Diagnostic{}
+	for _, block := range body.Blocks {
+		if block.Type != "edge" {
+			continue
+		}
+		source, hasSource := blockEndpointPorts(m, block, "from")
+		target, hasTarget := blockEndpointPorts(m, block, "to")
+
+		for _, input := range block.Body.Blocks {
+			if input.Type != "input" || len(input.Labels) != 1 || len(input.LabelRanges) != 1 {
+				continue
+			}
+			if hasTarget && !containsString(target.inputs, input.Labels[0]) {
+				start, end := unquotedRange(text, input.LabelRanges[0])
+				diagnostics = append(diagnostics, Diagnostic{Start: start, End: end, Message: "Unknown input " + input.Labels[0] + availableHint(target.inputs)})
+			}
+
+			attr := input.Body.Attributes["from"]
+			if attr == nil || !hasSource {
+				continue
+			}
+			name, ok := relativeOutputName(attr.Expr)
+			if !ok {
+				continue // Not a relative output reference at all; the parser reports that with its own message.
+			}
+			if !containsString(source.outputs, name) {
+				rng := attr.Expr.Range()
+				diagnostics = append(diagnostics, Diagnostic{Start: rng.Start.Byte, End: rng.End.Byte, Message: "Unknown output " + name + availableHint(source.outputs)})
+			}
+		}
+	}
 	return diagnostics
+}
+
+// blockEndpointPorts resolves one edge endpoint attribute to the ports of the
+// node or group instance it names, provided it is a bare reference (the only
+// form an edge with nested input blocks may use).
+func blockEndpointPorts(m workspaceModel, block *hclsyntax.Block, side string) (ports, bool) {
+	attr := block.Body.Attributes[side]
+	if attr == nil {
+		return ports{}, false
+	}
+	traversal, diags := hcl.AbsTraversalForExpr(attr.Expr)
+	if diags.HasErrors() || len(traversal) != 2 {
+		return ports{}, false
+	}
+	root, rootOK := traversal[0].(hcl.TraverseRoot)
+	step, stepOK := traversal[1].(hcl.TraverseAttr)
+	if !rootOK || !stepOK || (root.Name != "node" && root.Name != "use") {
+		return ports{}, false
+	}
+	return lookupEntity(m, root.Name, step.Name)
+}
+
+// relativeOutputName reads an `output.<attr>` reference, the only form an edge's
+// nested input block accepts (see blueprint.parseRelativeOutputRef).
+func relativeOutputName(expr hcl.Expression) (string, bool) {
+	traversal, diags := hcl.AbsTraversalForExpr(expr)
+	if diags.HasErrors() || len(traversal) != 2 {
+		return "", false
+	}
+	root, rootOK := traversal[0].(hcl.TraverseRoot)
+	step, stepOK := traversal[1].(hcl.TraverseAttr)
+	if !rootOK || !stepOK || root.Name != "output" {
+		return "", false
+	}
+	return step.Name, true
+}
+
+// unquotedRange narrows a block label's range to the label itself, whether or
+// not the parser included the surrounding quotes.
+func unquotedRange(text []byte, rng hcl.Range) (int, int) {
+	start, end := rng.Start.Byte, rng.End.Byte
+	if start < len(text) && text[start] == '"' {
+		start++
+	}
+	if end > start && end <= len(text) && text[end-1] == '"' {
+		end--
+	}
+	return start, end
 }
 
 var nodeReference = regexp.MustCompile(`\bnode\.([[:alnum:]_-]+)(?:\.(input|output)(?:\.([[:alnum:]_-]+))?)?`)

@@ -63,8 +63,8 @@ func TestWorkspaceCompleteGroupExports(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "groups", "network", "group.hcl"), `group "network" {
   export {
-    input = { cidr = node.vpc.input.cidr }
-    output = { vpc_id = node.vpc.output.vpc_id }
+    input "cidr" { to = node.vpc.input.cidr }
+    output "vpc_id" { from = node.vpc.output.vpc_id }
   }
 }`)
 	path := filepath.Join(dir, "blueprint.hcl")
@@ -178,6 +178,77 @@ edge {
 			if strings.Contains(diagnostic.Message, want) {
 				found = true
 				break
+			}
+		}
+		if !found {
+			t.Fatalf("diagnostic %q missing from %#v", want, got)
+		}
+	}
+}
+
+// An edge's nested input blocks name ports without repeating the node they belong to, so every suggestion here has to come from the enclosing edge's own endpoints.
+func TestWorkspaceCompletesEdgeInputBlockAgainstEdgeEndpoints(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "stacks", "vpc", "main.tf"), `output "vpc_id" { value = "x" }
+output "subnet_ids" { value = [] }`)
+	writeFile(t, filepath.Join(dir, "stacks", "eks", "main.tf"), `variable "vpc_id" { type = string }
+variable "subnet_ids" { type = list(string) }`)
+	path := filepath.Join(dir, "blueprint.hcl")
+	const endpoints = `node "vpc" { source = "./stacks/vpc" }
+node "eks" { source = "./stacks/eks" }
+edge {
+  from = node.vpc
+  to   = node.eks
+`
+
+	for _, tc := range []struct{ name, text, want, detail string }{
+		{"block label", endpoints + "  input \"__CURSOR__\"\n}", "subnet_ids", "list(string) (required)"},
+		{"block attribute", endpoints + "  input \"vpc_id\" {\n    __CURSOR__\n  }\n}", "from", "required output reference"},
+		{"relative output", endpoints + "  input \"vpc_id\" {\n    from = output.__CURSOR__\n  }\n}", "subnet_ids", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clean, offset := cursor(tc.text, "__CURSOR__")
+			ws := NewWorkspace(dir)
+			ws.SetDocument(path, []byte(clean))
+			items := ws.Complete(context.Background(), path, offset)
+			if !contains(items, tc.want) {
+				t.Fatalf("completion %q missing from %#v", tc.want, items)
+			}
+			if got := detailOf(items, tc.want); got != tc.detail {
+				t.Fatalf("completion %q detail = %q, want %q", tc.want, got, tc.detail)
+			}
+		})
+	}
+}
+
+func TestWorkspaceDiagnosesEdgeInputBlockPorts(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "stacks", "vpc", "main.tf"), `output "vpc_id" { value = "x" }`)
+	writeFile(t, filepath.Join(dir, "stacks", "eks", "main.tf"), `variable "vpc_id" { type = string }`)
+	path := filepath.Join(dir, "blueprint.hcl")
+	text := `node "vpc" { source = "./stacks/vpc" }
+node "eks" { source = "./stacks/eks" }
+edge {
+  from = node.vpc
+  to   = node.eks
+
+  input "vpc_id"  { from = output.vpc_id }
+  input "missing" { from = output.absent }
+}`
+	ws := NewWorkspace(dir)
+	ws.SetDocument(path, []byte(text))
+	got := ws.Diagnose(context.Background(), path)
+	if len(got) != 2 {
+		t.Fatalf("expected exactly the two bad ports to be reported, got %#v", got)
+	}
+	for _, want := range []string{"Unknown input missing", "Unknown output absent"} {
+		found := false
+		for _, diagnostic := range got {
+			if strings.Contains(diagnostic.Message, want) {
+				found = true
+				if string(text[diagnostic.Start:diagnostic.End]) == "" {
+					t.Fatalf("diagnostic %q has an empty range", want)
+				}
 			}
 		}
 		if !found {
