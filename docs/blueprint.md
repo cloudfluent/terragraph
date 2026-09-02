@@ -1,6 +1,6 @@
 # Blueprint
 
-A blueprint (`blueprint.hcl` by default) is a flat list of `node` and `edge` facts, not nested configuration:
+A blueprint (`blueprint.hcl` by default) is a flat list of `node` and `edge` facts, not nested configuration. `--blueprint` can also point at a directory instead of a single file: every `.hcl` file directly inside it (not recursively) is merged into one blueprint, exactly the way a [group](groups.md)'s source directory already merges its own `.hcl` files. This is useful for splitting a large blueprint across several files (e.g. `nodes.hcl`, `edges.hcl`) without any of them needing a specific name.
 
 ```hcl
 node "vpc" {
