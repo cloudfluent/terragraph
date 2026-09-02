@@ -65,6 +65,8 @@ type Node struct {
 	Runtime string
 	// Env is optional and sets extra environment variables the node's terraform/tofu subprocess runs with (e.g. AWS_PROFILE, AWS_REGION for a per-account/per-region provider configuration), keyed by variable name. Unlike Runtime (a single, replace-on-override choice), Env cascades by merging: a node's own Env entries win key-by-key over whatever an enclosing Use.Env contributed, rather than discarding the rest of it. See graph.Node.Env for the fully merged result an enclosing chain of Use.Env overrides plus this node's own Env produces.
 	Env map[string]string
+	// Approve declares how much of this node's plan may be applied without being asked about, or "" if unset. Set it on the specific node where a destructive plan is routine (a module whose resources are recreated by design), rather than reaching for the CLI flag, which grants the same thing to every node in the graph at once. Like Runtime, an unset value may still inherit from an enclosing Use.Approve or the blueprint's own default; see graph.Node.Approve.
+	Approve Approve
 }
 
 // IsRemote reports whether a Node's Source should be vendored rather than resolved as a local path relative to the blueprint. Mirrors Terraform's own module.source rule: anything not starting with "./" or "../" is remote.
@@ -94,6 +96,8 @@ type Use struct {
 	Runtime string
 	// Env, if set, contributes extra environment variables to every node this instantiation expands to (e.g. which AWS account/region/role the whole group deploys into), merged under whatever ambient Env an enclosing Use.Env already contributed and merged under, key-by-key, by each internal node's own Env in turn. Like Runtime, a group definition has no equivalent of its own: which account a reusable group deploys into is a fact about where it's instantiated.
 	Env map[string]string
+	// Approve, if set, becomes the approve level for every node this instantiation expands to, unless that node sets its own. Like Runtime, only the instantiation site can set this and a group definition has no equivalent: how much of a reusable group may be changed unattended is a fact about where it is deployed, not about the group.
+	Approve Approve
 }
 
 // ExportInput is one input port a group exposes to the outside. To may list more than one internal target: a single exposed value sometimes needs to fan out to several internal nodes that each independently need it, and, unlike execution ordering (which is inferable from the internal graph's shape), there is no way to infer that fan-out from structure alone, so the group author must declare it explicitly.

@@ -6,6 +6,7 @@ import (
 	"io"
 	"sync"
 
+	"github.com/cloudfluent/terragraph/internal/blueprint"
 	"github.com/cloudfluent/terragraph/internal/graph"
 )
 
@@ -13,8 +14,10 @@ import (
 type Options struct {
 	// Node restricts the operation to a single node. Empty means the whole graph, in topological (or, for Destroy, reverse topological) order.
 	Node string
-	// AutoApprove is forwarded to `terraform apply`/`destroy` as -auto-approve.
+	// AutoApprove skips the interactive approval Apply would otherwise ask for, and is forwarded to `terraform destroy` as -auto-approve. It governs only whether a human is asked; what a node is permitted to do unattended is Approve's job, and the two are checked independently.
 	AutoApprove bool
+	// Approve is the run-wide default approve level (see blueprint.Approve) for nodes that declare none of their own. Empty means blueprint.ApproveSafe.
+	Approve blueprint.Approve
 	// Parallelism caps how many nodes within one execution level run concurrently. <=1 means sequential (the default), matching v1 behavior and avoiding surprising provider API rate-limit issues.
 	Parallelism int
 }

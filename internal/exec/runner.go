@@ -112,6 +112,60 @@ func (r *Runner) ApplyPlan(planPath string) error {
 	return r.run("apply", "-input=false", planPath)
 }
 
+// ResourceChange is one resource's entry in a saved plan: what Terraform intends to do to it, and to which address.
+type ResourceChange struct {
+	Address string
+	// Actions is Terraform's own vocabulary, verbatim: ["create"], ["update"], ["delete"], ["no-op"], ["read"], or a replacement spelled as ["delete","create"] / ["create","delete"] depending on whether the module asked for create_before_destroy.
+	Actions []string
+}
+
+// IsReplace reports whether this change destroys and recreates the resource rather than doing one or the other.
+func (c ResourceChange) IsReplace() bool {
+	var creates, deletes bool
+	for _, a := range c.Actions {
+		switch a {
+		case "create":
+			creates = true
+		case "delete":
+			deletes = true
+		}
+	}
+	return creates && deletes
+}
+
+// PlanChanges reads back what a saved plan intends to do, via `show -json`. It touches only the local plan file — no state is refreshed and no provider is called — so this is cheap enough to run before every apply.
+//
+// Only the enhanced backends cannot support this, and they cannot produce a plan file to read in the first place (see SupportsSavedPlan), so a caller holding a plan file can always inspect it.
+func (r *Runner) PlanChangeSet(planPath string) ([]ResourceChange, error) {
+	var stdout bytes.Buffer
+	cmd := osexec.Command(string(r.Binary), "show", "-json", planPath)
+	cmd.Dir = r.Dir
+	cmd.Env = r.env()
+	cmd.Stdout = &stdout
+	cmd.Stderr = r.Stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("running %s show -json in %s: %w", r.Binary, r.Dir, err)
+	}
+
+	var doc struct {
+		ResourceChanges []struct {
+			Address string `json:"address"`
+			Change  struct {
+				Actions []string `json:"actions"`
+			} `json:"change"`
+		} `json:"resource_changes"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &doc); err != nil {
+		return nil, fmt.Errorf("parsing %s show -json in %s: %w", r.Binary, r.Dir, err)
+	}
+
+	changes := make([]ResourceChange, 0, len(doc.ResourceChanges))
+	for _, rc := range doc.ResourceChanges {
+		changes = append(changes, ResourceChange{Address: rc.Address, Actions: rc.Change.Actions})
+	}
+	return changes, nil
+}
+
 // BackendType reports the backend a previous Init configured for this node, read from the metadata Terraform writes into its own data directory. An empty string means no backend was recorded, which is the ordinary case for a module that declares no backend block at all (the implicit local backend).
 //
 // This exists only to tell the two enhanced backends apart from every other one: `remote` and `cloud` run the plan on HCP rather than locally, and cannot write a local plan file for ApplyPlan to consume. Every state-storage backend (s3, gcs, azurerm, http, ...) keeps state remote but runs operations here, so it is indistinguishable from local for this purpose. A read failure is reported as "unknown", not as an error: the caller's fallback is the two-invocation path that worked before saved plans existed, so guessing wrong costs a round trip, never correctness.

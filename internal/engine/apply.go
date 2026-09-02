@@ -67,6 +67,19 @@ func (e *Engine) Apply(opts Options) error {
 		}
 
 		if savedPlan != "" {
+			// What the plan actually does, read back from the file before any of it happens. Local only: no state is refreshed and no provider is called.
+			changeSet, err := r.PlanChangeSet(savedPlan)
+			if err != nil {
+				return nil, fmt.Errorf("reading plan: %w", err)
+			}
+			_, _ = fmt.Fprintf(out, "node %s: %s\n", name, summarizeChanges(changeSet))
+
+			// Levels run in order, so refusing here means nothing downstream runs either: the cascade is cut at the node that caused it rather than audited after the fact.
+			level := e.approveFor(name, opts.Approve)
+			if blocked := notPermitted(changeSet, level); len(blocked) > 0 {
+				return nil, gateError(name, level, blocked)
+			}
+
 			// The plan Terraform just printed is the plan about to be applied, so this asks about something the user has actually seen — which is the whole reason approval belongs here rather than inside a second `apply` that would plan again from scratch.
 			if !opts.AutoApprove {
 				approved, err := e.approve(name, out)
@@ -81,7 +94,10 @@ func (e *Engine) Apply(opts Options) error {
 				return nil, fmt.Errorf("apply: %w", err)
 			}
 		} else {
-			// No saved plan to approve, so Terraform's own prompt is the approval and it needs somewhere to read the answer from. Left nil when auto-approving, so a non-interactive run can never block on a question.
+			// No plan file, so there is nothing to inspect and the gate cannot run here. Saying so beats letting an enhanced-backend node look like it was checked.
+			e.logger().Warn("approve level not enforced: this backend cannot produce a local plan to inspect", "node", name, "backend", r.BackendType())
+
+			// Terraform's own prompt is the approval, and it needs somewhere to read the answer from. Left nil when auto-approving, so a non-interactive run can never block on a question.
 			if !opts.AutoApprove {
 				if e.Stdin == nil {
 					return nil, noApprovalError(name)

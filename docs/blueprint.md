@@ -100,6 +100,19 @@ A node that names no `runtime` falls back, in order: the blueprint's own `defaul
 
 `version` is never checked against the binary's actual reported version; nothing runs `terraform version` to confirm it, and it has no effect on execution. It is there to record what a node is expected to run against, next to the `binary` that actually selects it. (It once fed the incremental-apply cache key. That cache is gone: whether a node needs applying is now decided by asking Terraform for a refreshed plan, every run — see [execution-model.md](execution-model.md#deciding-whether-a-node-needs-applying).)
 
+### How much a node may change without being asked (`approve`)
+
+```hcl
+node "db" {
+  source  = "./stacks/db"
+  approve = "all"
+}
+```
+
+`approve` declares how much of this node's plan may be applied unattended: `none`, `safe` (create/update, the default), or `all` (adds replace and delete). Set it on the specific node whose plan is destructive by design, rather than reaching for `--approve=all`, which grants the same thing to every node in the graph at once and tends to end up pasted into CI.
+
+Like `runtime`, it replaces rather than merges, and a `use` block can set it for every node an instance expands to. Full resolution order and what happens when a plan exceeds its level are in [execution-model.md](execution-model.md#what-a-node-may-do-approve).
+
 A `use` block can also set `runtime`, which becomes the default for every node the group instance expands to (unless one of those nodes names its own): see [groups.md](groups.md#choosing-a-runtime-for-an-instance). A group's own definition has no equivalent: which toolchain deploys a reusable group is a fact about where it's instantiated, not about the group itself.
 
 ## Extra environment variables per node (`env`)

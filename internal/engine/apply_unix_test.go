@@ -74,6 +74,11 @@ case "$1" in
     esac
     exit 0
     ;;
+  show)
+    # show -json <plan file>: report what that plan does. TG_PLAN_ACTIONS names the actions, so a test can plan a destroy or a replace without a real provider.
+    printf '{"resource_changes":[{"address":"fake.managed","change":{"actions":[%s]}}]}' "${TG_PLAN_ACTIONS:-\"create\"}"
+    exit 0
+    ;;
   output)
     printf '{"managed":{"value":"ok"}}'
     exit 0

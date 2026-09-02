@@ -45,7 +45,69 @@ The plan file lives at `<blueprint dir>/.terragraph/plans/<node>.tfplan` and is 
 
 A node on the `remote` or `cloud` backend falls back to planning and applying as two separate invocations: these run the plan on HCP rather than locally and cannot produce a local plan file. Every state-storage backend — `s3`, `gcs`, `azurerm`, `http`, `local`, ... — keeps state remote but runs operations locally, and is unaffected.
 
+## What a node may do: `approve`
+
+Walking the graph and committing changes are two different things. terragraph automates the first — it runs nodes in dependency order and feeds each one's real outputs into the next. The second is a decision, and in a graph it is one nobody can make up front: a downstream node's plan cannot exist until its upstream has actually been applied (see the known limitation below). So it is delegated in advance, per node, in terms of what the plan turns out to contain.
+
+That matters here more than it does for a single `terraform apply`, because a change propagates: node A's output changes, node B's input changes with it, and node B may replace its resources. Nobody saw B's plan before the run started, and nobody could have.
+
+Each node resolves to one of three levels, defined by which of Terraform's planned actions they permit:
+
+| level | permits | |
+| --- | --- | --- |
+| `none` | — | planned, never applied |
+| `safe` | `create`, `update` | **default** |
+| `all` | `create`, `update`, `replace`, `delete` | |
+
+`replace` is gated as tightly as `delete`, because destroy-and-recreate is what an upstream change most often causes downstream and is just as irreversible.
+
+`safe` is a workable default rather than an obstacle. A first-ever bootstrap is all creates; ordinary steady-state work is updates; and **reconciling drift is a create too** — a resource that has vanished remotely is dropped from state by the refresh, so the plan rebuilds it rather than deleting anything. Only a genuinely destructive plan stops.
+
+Say it on the node where a destructive plan is by design:
+
+```hcl
+node "db" {
+  source  = "./stacks/db"
+  approve = "all"   # recreation is normal here
+}
+```
+
+...or for one run:
+
+```
+terragraph apply                    # approve = safe
+terragraph apply --approve=all      # this run, on the operator's judgement
+```
+
+Resolution follows the same layering as [`runtime`](blueprint.md#choosing-a-runtime-per-node-runtime) and [`env`](blueprint.md#extra-environment-variables-per-node-env):
+
+```
+node's own approve  >  enclosing use block  >  --approve  >  safe
+```
+
+...including the rule that a CLI flag only ever fills a gap nothing else spoke to. `--approve=all` does not override a node that declared `approve = "safe"`; a node that declared `approve = "all"` is not reined in by `--approve=none`. The blueprint is where a standing decision lives, and it goes through review.
+
+When a node's plan exceeds its level, the run stops **before that node is applied**. Levels execute in order, so nothing downstream runs either — the cascade is cut at its source rather than audited afterwards:
+
+```
+node vpc: 3 to add, 1 to change, 0 to destroy
+node eks: 0 to add, 2 to change, 0 to destroy
+node api: 0 to add, 1 to change, 2 to destroy
+error: node "api" plans 2 change(s) its approve level (safe) does not permit:
+  aws_instance.web[0]   delete
+  aws_db_instance.main  replace
+
+Stopped before applying, so no later level ran.
+If this is intended, declare approve = "all" on that node, or re-run with --approve=all.
+```
+
+This is checked whether or not anyone is watching. An interactive `yes` answers "apply this plan", not "override the standing policy"; overriding it is `--approve=all`, which is a visible, deliberate act.
+
+The check reads the saved plan file, so it cannot run on the `remote`/`cloud` backends, which have none. Those nodes log a warning saying the level was not enforced rather than quietly appearing to have passed.
+
 ## Approval
+
+`approve` decides what *may* happen unattended. This decides *whether someone is asked*; the two are independent.
 
 Without `--auto-approve`, terragraph asks before applying each node that has changes:
 

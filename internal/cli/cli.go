@@ -235,6 +235,7 @@ func newApplyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fu
 	var autoApprove bool
 	var parallelism int
 	var force bool
+	var approve string
 	cmd := &cobra.Command{
 		Use:   "apply",
 		Short: "Run terraform/tofu apply across the graph in dependency order, wiring outputs to inputs",
@@ -246,11 +247,16 @@ func newApplyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fu
 			if err := checkValidate(cmd, e); err != nil {
 				return err
 			}
-			return e.Apply(engine.Options{Node: node, AutoApprove: autoApprove, Parallelism: parallelism})
+			level, err := blueprint.ParseApprove(approve)
+			if err != nil {
+				return err
+			}
+			return e.Apply(engine.Options{Node: node, AutoApprove: autoApprove, Approve: level, Parallelism: parallelism})
 		},
 	}
 	cmd.Flags().StringVar(&node, "node", "", "restrict to a single node")
-	cmd.Flags().BoolVar(&autoApprove, "auto-approve", false, "skip interactive approval")
+	cmd.Flags().BoolVar(&autoApprove, "auto-approve", false, "skip the interactive approval prompt")
+	cmd.Flags().StringVar(&approve, "approve", string(blueprint.ApproveSafe), "what a node may do without saying so per run: none, safe (create/update), or all (adds replace/delete); a node's own approve wins over this")
 	cmd.Flags().IntVar(&parallelism, "parallelism", 1, "max nodes to run concurrently within one execution level")
 	// Accepted and ignored for one release so existing scripts keep running. There is no longer a local cache to bypass: apply asks Terraform whether each node needs applying, every run.
 	cmd.Flags().BoolVar(&force, "force", false, "no longer has any effect")

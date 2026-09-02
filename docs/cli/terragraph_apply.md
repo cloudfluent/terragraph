@@ -9,7 +9,8 @@ terragraph apply [flags]
 ### Options
 
 ```
-      --auto-approve      skip interactive approval
+      --approve string    what a node may do without saying so per run: none, safe (create/update), or all (adds replace/delete); a node's own approve wins over this (default "safe")
+      --auto-approve      skip the interactive approval prompt
   -h, --help              help for apply
       --node string       restrict to a single node
       --parallelism int   max nodes to run concurrently within one execution level (default 1)
