@@ -129,6 +129,10 @@ edge {
 	if count != 2 {
 		t.Fatalf("expected the exposed input to fan out into 2 edges, got %d", count)
 	}
+
+	if problems := Validate(g); len(problems) != 0 {
+		t.Fatalf("fan-out to distinct leaf inputs is not a collision, got problems: %v", problems)
+	}
 }
 
 func TestBuild_ImplicitEdgeToGroupExpandsToRoots(t *testing.T) {
@@ -277,5 +281,125 @@ use "outer" {
 
 	if _, ok := g.Nodes["top.inner.leaf"]; !ok {
 		t.Fatalf("expected nested group's leaf node to be namespaced as top.inner.leaf, got nodes: %v", nodeNames(g))
+	}
+}
+
+func TestBuild_TwoOuterEdgesToSameExportInputIsError(t *testing.T) {
+	root := t.TempDir()
+
+	writeFixtureFile(t, filepath.Join(root, "modules/vpc/outputs.tf"), `
+output "vid" { value = "vpc-123" }
+`)
+	writeFixtureFile(t, filepath.Join(root, "modules/other/outputs.tf"), `
+output "id" { value = "other-1" }
+`)
+	writeFixtureFile(t, filepath.Join(root, "modules/a/variables.tf"), `
+variable "x" { type = string }
+`)
+	writeFixtureFile(t, filepath.Join(root, "groups/g/group.hcl"), `
+group "g" {
+  node "a" { source = "../../modules/a" }
+  export {
+    input "x" { to = node.a.input.x }
+  }
+}
+`)
+	writeFixtureFile(t, filepath.Join(root, "blueprint.hcl"), `
+node "vpc"   { source = "./modules/vpc" }
+node "other" { source = "./modules/other" }
+use "g" {
+  as     = "inst"
+  source = "./groups/g"
+}
+edge {
+  from = node.vpc.output.vid
+  to   = use.inst.input.x
+}
+edge {
+  from = node.other.output.id
+  to   = use.inst.input.x
+}
+`)
+
+	bp, err := blueprint.ParseFile(filepath.Join(root, "blueprint.hcl"))
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	g, err := Build(bp, root)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	problems := Validate(g)
+	if len(problems) != 1 {
+		t.Fatalf("expected 1 problem after expansion, got %d: %v", len(problems), problems)
+	}
+	if !problems[0].IsError() {
+		t.Fatalf("expected an Error, got %v", problems[0])
+	}
+	want := "node.inst.a.input.x: set by more than one data edge; remove extras"
+	if problems[0].Message != want {
+		t.Fatalf("message = %q, want %q", problems[0].Message, want)
+	}
+}
+
+func TestBuild_OuterAndInternalEdgeConvergeOnSameInputIsError(t *testing.T) {
+	root := t.TempDir()
+
+	writeFixtureFile(t, filepath.Join(root, "modules/vpc/outputs.tf"), `
+output "vid" { value = "vpc-123" }
+`)
+	writeFixtureFile(t, filepath.Join(root, "modules/a/variables.tf"), `
+variable "x" { type = string }
+`)
+	writeFixtureFile(t, filepath.Join(root, "modules/b/outputs.tf"), `
+output "id" { value = "b-1" }
+`)
+	writeFixtureFile(t, filepath.Join(root, "groups/g/group.hcl"), `
+group "g" {
+  node "a" { source = "../../modules/a" }
+  node "b" { source = "../../modules/b" }
+
+  edge {
+    from = node.b.output.id
+    to   = node.a.input.x
+  }
+
+  export {
+    input "x" { to = node.a.input.x }
+  }
+}
+`)
+	writeFixtureFile(t, filepath.Join(root, "blueprint.hcl"), `
+node "vpc" { source = "./modules/vpc" }
+use "g" {
+  as     = "inst"
+  source = "./groups/g"
+}
+edge {
+  from = node.vpc.output.vid
+  to   = use.inst.input.x
+}
+`)
+
+	bp, err := blueprint.ParseFile(filepath.Join(root, "blueprint.hcl"))
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	g, err := Build(bp, root)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	problems := Validate(g)
+	if len(problems) != 1 {
+		t.Fatalf("expected 1 problem after expansion, got %d: %v", len(problems), problems)
+	}
+	if !problems[0].IsError() {
+		t.Fatalf("expected an Error, got %v", problems[0])
+	}
+	want := "node.inst.a.input.x: set by more than one data edge; remove extras"
+	if problems[0].Message != want {
+		t.Fatalf("message = %q, want %q", problems[0].Message, want)
 	}
 }

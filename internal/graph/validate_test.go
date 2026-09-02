@@ -153,6 +153,76 @@ func TestValidate_VarsAndEdgeOnSameInputIsError(t *testing.T) {
 	}
 }
 
+func TestValidate_TwoDataEdgesOnSameInputIsError(t *testing.T) {
+	g := newGraph([]string{"vpc", "other", "eks"}, []blueprint.Edge{
+		dataEdge("vpc", "vpc_id", "eks", "vpc_id"),
+		dataEdge("other", "id", "eks", "vpc_id"),
+	})
+	g.Nodes["vpc"].Schema.Outputs["vpc_id"] = true
+	g.Nodes["other"].Schema.Outputs["id"] = true
+	g.Nodes["eks"].Schema.Variables["vpc_id"] = module.Variable{Name: "vpc_id"}
+
+	problems := Validate(g)
+	if len(problems) != 1 {
+		t.Fatalf("expected 1 problem, got %d: %v", len(problems), problems)
+	}
+	if !problems[0].IsError() {
+		t.Fatalf("expected an Error, got %v", problems[0])
+	}
+	want := "node.eks.input.vpc_id: set by more than one data edge; remove extras"
+	if problems[0].Message != want {
+		t.Fatalf("message = %q, want %q", problems[0].Message, want)
+	}
+}
+
+func TestValidate_DuplicateDataEdgeIsError(t *testing.T) {
+	g := newGraph([]string{"a", "b"}, []blueprint.Edge{
+		dataEdge("a", "id", "b", "x"),
+		dataEdge("a", "id", "b", "x"),
+	})
+	g.Nodes["a"].Schema.Outputs["id"] = true
+	g.Nodes["b"].Schema.Variables["x"] = module.Variable{Name: "x"}
+
+	problems := Validate(g)
+	if len(problems) != 1 {
+		t.Fatalf("expected 1 problem, got %d: %v", len(problems), problems)
+	}
+	if !problems[0].IsError() {
+		t.Fatalf("expected an Error, got %v", problems[0])
+	}
+	want := "node.b.input.x: set by more than one data edge; remove extras"
+	if problems[0].Message != want {
+		t.Fatalf("message = %q, want %q", problems[0].Message, want)
+	}
+}
+
+func TestValidate_ThreeDataEdgesOnSameInputReportsOnce(t *testing.T) {
+	g := newGraph([]string{"a", "b", "c", "d"}, []blueprint.Edge{
+		dataEdge("a", "id", "d", "x"),
+		dataEdge("b", "id", "d", "x"),
+		dataEdge("c", "id", "d", "x"),
+	})
+	g.Nodes["a"].Schema.Outputs["id"] = true
+	g.Nodes["b"].Schema.Outputs["id"] = true
+	g.Nodes["c"].Schema.Outputs["id"] = true
+	g.Nodes["d"].Schema.Variables["x"] = module.Variable{Name: "x"}
+
+	problems := Validate(g)
+	if len(problems) != 1 {
+		t.Fatalf("expected 1 problem, got %d: %v", len(problems), problems)
+	}
+}
+
+func TestValidate_TwoImplicitEdgesAreNotACollision(t *testing.T) {
+	g := newGraph([]string{"a", "b"}, []blueprint.Edge{
+		orderEdge("a", "b"),
+		orderEdge("a", "b"),
+	})
+	if problems := Validate(g); len(problems) != 0 {
+		t.Fatalf("expected no problems for duplicate ordering-only edges, got %v", problems)
+	}
+}
+
 func TestValidate_OptionalVariableNoWarning(t *testing.T) {
 	g := newGraph([]string{"a"}, nil)
 	g.Nodes["a"].Schema.Variables["region"] = module.Variable{Name: "region", Required: false}

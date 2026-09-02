@@ -23,11 +23,12 @@ type Problem struct {
 // IsError reports whether this problem should block graph/plan/apply, as opposed to a Warning, which is only surfaced.
 func (p Problem) IsError() bool { return p.Severity == SeverityError }
 
-// Validate checks a built Graph for issues that Build itself does not catch: edges referencing ports that don't actually exist on the target module (Error), a node's own vars targeting a variable the module doesn't declare or one a data edge already targets (Error), cycles in the dependency graph (Error), and required variables that neither an edge nor vars ever supplies a value for (Warning: a module may legitimately get such a value from its own terraform.tfvars or the environment, outside the blueprint entirely).
+// Validate checks a built Graph for issues that Build itself does not catch: edges referencing ports that don't actually exist on the target module (Error), two data edges targeting the same input, whether their from sides differ or match (Error; checked here rather than at parse so group expansion can rewrite a use export onto leaf ports first), a node's own vars targeting a variable the module doesn't declare or one a data edge already targets (Error), cycles in the dependency graph (Error), and required variables that neither an edge nor vars ever supplies a value for (Warning: a module may legitimately get such a value from its own terraform.tfvars or the environment, outside the blueprint entirely).
 func Validate(g *Graph) []Problem {
 	var problems []Problem
 
 	wired := make(map[string]bool)
+	reportedMulti := make(map[string]bool)
 	for _, e := range g.Edges {
 		if !e.IsDataEdge() {
 			continue
@@ -46,7 +47,18 @@ func Validate(g *Graph) []Problem {
 				Message:  fmt.Sprintf("%s: node %q has no input variable named %q", e.To, e.To.Node, e.To.Name),
 			})
 		}
-		wired[e.To.Node+"."+e.To.Name] = true
+		key := e.To.Node + "." + e.To.Name
+		if wired[key] {
+			if !reportedMulti[key] {
+				problems = append(problems, Problem{
+					Severity: SeverityError,
+					Message:  fmt.Sprintf("node.%s.input.%s: set by more than one data edge; remove extras", e.To.Node, e.To.Name),
+				})
+				reportedMulti[key] = true
+			}
+			continue
+		}
+		wired[key] = true
 	}
 
 	names := make([]string, 0, len(g.Nodes))
