@@ -1,0 +1,7 @@
+.github/
+.vscode/
+src/
+eslint.config.mjs
+.prettierignore
+tsconfig.json
+*.vsix

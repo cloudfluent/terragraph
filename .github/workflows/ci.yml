@@ -21,7 +21,14 @@ jobs:
           go-version: "1.27.1"
           cache: true
 
-      # Runs the exact same fmt-check + lint + docs-check + build + test steps a contributor runs locally via `make check`: one place defines what "passing" means, so CI never drifts from the local dev loop.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: editors/vscode/package-lock.json
+
+      # Runs the exact same Go and VS Code extension checks a contributor runs
+      # locally via `make check`, so CI never drifts from the local dev loop.
       - run: make check
 
   cross-platform:

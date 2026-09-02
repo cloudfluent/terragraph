@@ -32,3 +32,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+
+  vscode:
+    needs: goreleaser
+    uses: ./.github/workflows/publish-vscode.yml
+    with:
+      tag_name: ${{ github.ref_name }}
+    secrets: inherit

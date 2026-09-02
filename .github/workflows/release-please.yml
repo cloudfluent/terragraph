@@ -50,3 +50,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+
+  publish-vscode:
+    needs: [release-please, publish]
+    if: needs.release-please.outputs.release_created == 'true'
+    uses: ./.github/workflows/publish-vscode.yml
+    with:
+      tag_name: ${{ needs.release-please.outputs.tag_name }}
+    secrets: inherit
