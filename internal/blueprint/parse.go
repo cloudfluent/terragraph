@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclparse"
@@ -77,87 +79,143 @@ var exportOutputSchema = &hcl.BodySchema{
 
 // ParseFile reads and parses a blueprint HCL file at path into a Blueprint. It does not touch any Terraform module, it only extracts graph topology.
 func ParseFile(path string) (*Blueprint, error) {
+	bp := &Blueprint{}
+	seenNodes := map[string]bool{}
+	seenGroups := map[string]bool{}
+	seenUses := map[string]bool{}
+
+	if err := parseOneFile(path, bp, seenNodes, seenGroups, seenUses); err != nil {
+		return nil, err
+	}
+	if err := validateEdges(bp, seenNodes, seenUses); err != nil {
+		return nil, err
+	}
+	return bp, nil
+}
+
+// ParseDir reads and parses every .hcl file directly inside dir (not recursively) and merges them into a single Blueprint, the same way loadGroupDef already treats a group source directory: node/group/use names and the vendor block must be unique across the whole directory, not just within one file, and an edge in one file may reference a node or use instance declared in another. Files are visited in the order os.ReadDir returns them (lexical by name), so a duplicate-name error always names the second file, deterministically.
+func ParseDir(dir string) (*Blueprint, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("reading blueprint directory: %w", err)
+	}
+
+	bp := &Blueprint{}
+	seenNodes := map[string]bool{}
+	seenGroups := map[string]bool{}
+	seenUses := map[string]bool{}
+
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".hcl") {
+			continue
+		}
+		if err := parseOneFile(filepath.Join(dir, e.Name()), bp, seenNodes, seenGroups, seenUses); err != nil {
+			return nil, err
+		}
+	}
+
+	if err := validateEdges(bp, seenNodes, seenUses); err != nil {
+		return nil, err
+	}
+	return bp, nil
+}
+
+// LoadPath resolves path to a Blueprint and the base directory its node/group sources resolve against. If path names a directory, every .hcl file directly inside it is parsed and merged (see ParseDir) and baseDir is path itself. If path names a file, only that file is parsed (see ParseFile) and baseDir is its parent directory.
+func LoadPath(path string) (*Blueprint, string, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, "", fmt.Errorf("resolving blueprint path: %w", err)
+	}
+	if info.IsDir() {
+		bp, err := ParseDir(path)
+		return bp, path, err
+	}
+	bp, err := ParseFile(path)
+	return bp, filepath.Dir(path), err
+}
+
+// parseOneFile parses one HCL file and merges its node/edge/group/use/vendor blocks into bp, checking name and vendor-block uniqueness against the caller-supplied seen-sets (shared across every file being merged into the same bp). Edge endpoint validation deliberately does not happen here: it happens once, in validateEdges, after every file that will ever contribute to bp has been merged, so an edge in one file may reference a node or use instance declared in another.
+func parseOneFile(path string, bp *Blueprint, seenNodes, seenGroups, seenUses map[string]bool) error {
 	src, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("reading blueprint file: %w", err)
+		return fmt.Errorf("reading blueprint file: %w", err)
 	}
 
 	parser := hclparse.NewParser()
 	file, diags := parser.ParseHCL(src, path)
 	if diags.HasErrors() {
-		return nil, fmt.Errorf("parsing blueprint file: %s", diags.Error())
+		return fmt.Errorf("parsing blueprint file: %s", diags.Error())
 	}
 
 	content, diags := file.Body.Content(topSchema)
 	if diags.HasErrors() {
-		return nil, fmt.Errorf("reading blueprint file: %s", diags.Error())
+		return fmt.Errorf("reading blueprint file: %s", diags.Error())
 	}
-
-	bp := &Blueprint{}
-	seenNodes := map[string]bool{}
-	seenUses := map[string]bool{}
-	seenGroups := map[string]bool{}
 
 	for _, block := range content.Blocks {
 		switch block.Type {
 		case "node":
 			node, err := parseNodeBlock(block)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			if seenNodes[node.Name] {
-				return nil, fmt.Errorf("%s: duplicate node %q", block.DefRange, node.Name)
+				return fmt.Errorf("%s: duplicate node %q", block.DefRange, node.Name)
 			}
 			seenNodes[node.Name] = true
 			bp.Nodes = append(bp.Nodes, node)
 		case "edge":
 			edge, err := parseEdgeBlock(block)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			bp.Edges = append(bp.Edges, edge)
 		case "group":
 			group, err := parseGroupBlock(block)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			if seenGroups[group.Name] {
-				return nil, fmt.Errorf("%s: duplicate group %q", block.DefRange, group.Name)
+				return fmt.Errorf("%s: duplicate group %q", block.DefRange, group.Name)
 			}
 			seenGroups[group.Name] = true
 			bp.Groups = append(bp.Groups, group)
 		case "use":
 			use, err := parseUseBlock(block)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			if seenUses[use.As] {
-				return nil, fmt.Errorf("%s: duplicate use instance name %q", block.DefRange, use.As)
+				return fmt.Errorf("%s: duplicate use instance name %q", block.DefRange, use.As)
 			}
 			seenUses[use.As] = true
 			bp.Uses = append(bp.Uses, use)
 		case "vendor":
 			if bp.Vendor != nil {
-				return nil, fmt.Errorf("%s: duplicate vendor block", block.DefRange)
+				return fmt.Errorf("%s: duplicate vendor block", block.DefRange)
 			}
 			vc, err := parseVendorBlock(block)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			bp.Vendor = vc
 		}
 	}
 
+	return nil
+}
+
+// validateEdges checks every edge's endpoints against the full set of nodes/use instances merged into bp so far. Run once, after all contributing files have been merged, so cross-file references resolve correctly.
+func validateEdges(bp *Blueprint, seenNodes, seenUses map[string]bool) error {
 	for _, edge := range bp.Edges {
 		if err := validateEndpointKnown(edge.From, seenNodes, seenUses); err != nil {
-			return nil, err
+			return err
 		}
 		if err := validateEndpointKnown(edge.To, seenNodes, seenUses); err != nil {
-			return nil, err
+			return err
 		}
 	}
-
-	return bp, nil
+	return nil
 }
 
 // validateEndpointKnown checks that a PortRef's referenced entity was actually declared in the same scope: a node reference against declared nodes, a use reference against declared use instances.
