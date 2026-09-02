@@ -30,6 +30,8 @@ A PR needs: the PR-title check, all CI checks (`fmt, lint, docs, build, test` pl
 
 You never pick a version number. [release-please](https://github.com/googleapis/release-please) watches `main`, and every `feat`/`fix`/breaking-change PR title merged there updates a standing "chore: release vX.Y.Z" pull request with the next [SemVer](https://semver.org) bump and changelog entry. A maintainer merges that PR when it's time to cut a release; that merge tags the release, and GoReleaser builds and attaches the Linux/macOS/Windows binaries automatically (`.github/workflows/release-please.yml`, `.goreleaser.yaml`). Nothing else to do on your end.
 
+The same tag also publishes the VS Code extension's six platform packages to the Marketplace (`.github/workflows/publish-vscode.yml`). The Marketplace is unreliable enough that this sometimes gets partway through; when it does, run that workflow manually from the Actions tab with the same tag. It skips whatever is already published and only retries what's missing, so a re-run is always safe. The VSIX files are attached to the GitHub Release either way.
+
 ## Code of Conduct
 
 This project follows the [Code of Conduct](CODE_OF_CONDUCT.md).
