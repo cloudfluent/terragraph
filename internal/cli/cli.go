@@ -82,6 +82,7 @@ func loadEngine(cmd *cobra.Command, blueprintPath *string, binaryOf func() exec.
 	if err != nil {
 		return nil, err
 	}
+	e.Stdin = cmd.InOrStdin()
 	e.Logger = loggerOf()
 	e.Logger.Debug("blueprint loaded", "path", *blueprintPath, "nodes", len(e.Graph.Nodes))
 	return e, nil

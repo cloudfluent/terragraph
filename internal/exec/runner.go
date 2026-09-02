@@ -28,7 +28,9 @@ type Runner struct {
 	// DataDir, if set, becomes TF_DATA_DIR: it isolates where Terraform keeps .terraform/ (downloaded providers and, critically, its cached backend configuration) away from Dir. Without this, two nodes that reuse the same module Source but configure different backend_config would collide: Terraform stores which backend it was last configured with inside .terraform/, keyed by working directory, so the second node's init would fail with "Backend configuration changed" even though -backend-config correctly gave it its own state. DataDir sidesteps that by giving every node its own .terraform/ regardless of whether Dir is shared.
 	DataDir string
 	// Env, if set, adds extra environment variables (e.g. AWS_PROFILE for a per-node provider configuration; see blueprint.Node.Env) on top of the process's own environment. A key here overrides any same-named variable already inherited, the same "last one wins" rule DataDir already relies on for TF_DATA_DIR.
-	Env    map[string]string
+	Env map[string]string
+	// Stdin, if set, is handed to the subprocess. Nil leaves it at os/exec's default, the null device, which is what every non-interactive command wants: a terraform/tofu invocation that decides to ask a question there reads EOF and fails rather than hanging forever waiting on a terminal nobody is watching. Set it only where an answer is genuinely being offered (see engine.Apply's enhanced-backend approval path).
+	Stdin  io.Reader
 	Stdout io.Writer
 	Stderr io.Writer
 }
@@ -59,6 +61,7 @@ func (r *Runner) run(args ...string) error {
 	cmd := osexec.Command(string(r.Binary), args...)
 	cmd.Dir = r.Dir
 	cmd.Env = r.env()
+	cmd.Stdin = r.Stdin
 	cmd.Stdout = r.Stdout
 	cmd.Stderr = r.Stderr
 	return cmd.Run()

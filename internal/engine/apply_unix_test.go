@@ -87,7 +87,7 @@ exit 1
 	return path
 }
 
-func loadCacheTestEngine(t *testing.T) (*Engine, string, string) {
+func loadApplyTestEngine(t *testing.T) (*Engine, string, string) {
 	t.Helper()
 	baseDir := t.TempDir()
 	moduleDir := filepath.Join(baseDir, "module")
@@ -109,7 +109,7 @@ func loadCacheTestEngine(t *testing.T) (*Engine, string, string) {
 }
 
 func TestApply_PlanDecidesWhetherToApply(t *testing.T) {
-	e, moduleDir, commandLog := loadCacheTestEngine(t)
+	e, moduleDir, commandLog := loadApplyTestEngine(t)
 
 	if err := e.Apply(Options{AutoApprove: true}); err != nil {
 		t.Fatalf("first Apply: %v", err)
@@ -140,7 +140,7 @@ func TestApply_PlanDecidesWhetherToApply(t *testing.T) {
 }
 
 func TestApply_PlanDetectsNonTerraformDependencyChange(t *testing.T) {
-	e, moduleDir, _ := loadCacheTestEngine(t)
+	e, moduleDir, _ := loadApplyTestEngine(t)
 
 	if err := e.Apply(Options{AutoApprove: true}); err != nil {
 		t.Fatalf("first Apply: %v", err)
@@ -162,7 +162,7 @@ func TestApply_PlanDetectsNonTerraformDependencyChange(t *testing.T) {
 }
 
 func TestApply_PlanErrorFailsWithoutApplying(t *testing.T) {
-	e, _, commandLog := loadCacheTestEngine(t)
+	e, _, commandLog := loadApplyTestEngine(t)
 
 	if err := e.Apply(Options{AutoApprove: true}); err != nil {
 		t.Fatalf("first Apply: %v", err)
@@ -185,7 +185,7 @@ func TestApply_PlanErrorFailsWithoutApplying(t *testing.T) {
 
 // The verification plan passes -refresh=true on the command line, which beats an ambient TF_CLI_ARGS_plan=-refresh=false. This is what lets the cache-validation guard be deleted rather than narrowed: drift is still found even when the environment asks for a stale-state plan.
 func TestApply_VerificationPlanRefreshesDespiteAmbientOverride(t *testing.T) {
-	e, moduleDir, commandLog := loadCacheTestEngine(t)
+	e, moduleDir, commandLog := loadApplyTestEngine(t)
 
 	if err := e.Apply(Options{AutoApprove: true}); err != nil {
 		t.Fatalf("first Apply: %v", err)
@@ -212,7 +212,7 @@ func TestApply_VerificationPlanRefreshesDespiteAmbientOverride(t *testing.T) {
 
 // A saved plan carries what it was planned with, so an argument injected into apply alone can no longer make apply do something the plan never described. Previously this case bypassed the cache entirely and let TF_CLI_ARGS_apply win.
 func TestApply_SavedPlanIgnoresAmbientApplyArguments(t *testing.T) {
-	e, moduleDir, commandLog := loadCacheTestEngine(t)
+	e, moduleDir, commandLog := loadApplyTestEngine(t)
 
 	if err := e.Apply(Options{AutoApprove: true}); err != nil {
 		t.Fatalf("first Apply: %v", err)
@@ -243,7 +243,7 @@ func TestApply_SavedPlanIgnoresAmbientApplyArguments(t *testing.T) {
 
 // A node with changes refreshes once, not twice: the plan that found the changes is the plan that gets applied.
 func TestApply_DriftedNodeAppliesTheVerificationPlan(t *testing.T) {
-	e, moduleDir, commandLog := loadCacheTestEngine(t)
+	e, moduleDir, commandLog := loadApplyTestEngine(t)
 
 	if err := e.Apply(Options{AutoApprove: true}); err != nil {
 		t.Fatalf("first Apply: %v", err)
@@ -270,7 +270,7 @@ func TestApply_DriftedNodeAppliesTheVerificationPlan(t *testing.T) {
 
 // The plan file holds resolved input values in cleartext, so it must not survive the run that produced it.
 func TestApply_SavedPlanIsRemovedAfterTheRun(t *testing.T) {
-	e, moduleDir, _ := loadCacheTestEngine(t)
+	e, moduleDir, _ := loadApplyTestEngine(t)
 
 	if err := e.Apply(Options{AutoApprove: true}); err != nil {
 		t.Fatalf("first Apply: %v", err)
@@ -289,7 +289,7 @@ func TestApply_SavedPlanIsRemovedAfterTheRun(t *testing.T) {
 
 // An enhanced backend cannot write a local plan file, so those nodes keep the two-invocation path instead of failing.
 func TestApply_EnhancedBackendSkipsTheSavedPlan(t *testing.T) {
-	e, moduleDir, commandLog := loadCacheTestEngine(t)
+	e, moduleDir, commandLog := loadApplyTestEngine(t)
 	t.Setenv("TG_BACKEND_TYPE", "remote")
 
 	if err := e.Apply(Options{AutoApprove: true}); err != nil {
@@ -317,9 +317,9 @@ func TestApply_EnhancedBackendSkipsTheSavedPlan(t *testing.T) {
 	}
 }
 
-// Without -auto-approve there is nothing standing in for approval once a saved plan is applied (terraform never prompts for one), so that path is deliberately left alone until #29 gives approval somewhere to come from.
-func TestApply_WithoutAutoApproveDoesNotSaveAPlan(t *testing.T) {
-	e, moduleDir, commandLog := loadCacheTestEngine(t)
+// Without --auto-approve terragraph asks about the plan it just showed, then applies exactly that plan.
+func TestApply_WithoutAutoApprovePromptsAndApplies(t *testing.T) {
+	e, moduleDir, commandLog := loadApplyTestEngine(t)
 
 	if err := e.Apply(Options{AutoApprove: true}); err != nil {
 		t.Fatalf("first Apply: %v", err)
@@ -327,19 +327,113 @@ func TestApply_WithoutAutoApproveDoesNotSaveAPlan(t *testing.T) {
 	if err := os.Remove(filepath.Join(moduleDir, "managed.out")); err != nil {
 		t.Fatalf("removing managed output: %v", err)
 	}
-	// Only the run below is under test; the bootstrap above legitimately saved a plan.
 	if err := os.Truncate(commandLog, 0); err != nil {
 		t.Fatalf("truncating command log: %v", err)
 	}
+
+	out := &bytes.Buffer{}
+	e.Stdout = out
+	e.Stdin = strings.NewReader("yes\n")
 	if err := e.Apply(Options{}); err != nil {
-		t.Fatalf("Apply without auto-approve: %v", err)
+		t.Fatalf("approved Apply: %v", err)
 	}
 
+	if !strings.Contains(out.String(), "Apply these changes to node cached?") {
+		t.Fatalf("expected an approval prompt, got:\n%s", out.String())
+	}
+	if _, err := os.Stat(filepath.Join(moduleDir, "managed.out")); err != nil {
+		t.Fatalf("expected the approved change to be applied: %v", err)
+	}
 	data, err := os.ReadFile(commandLog)
 	if err != nil {
 		t.Fatalf("reading command log: %v", err)
 	}
-	if got := strings.Count(string(data), "plan-saved\n"); got != 0 {
-		t.Fatalf("saved plan count = %d, want 0; log:\n%s", got, data)
+	if got, want := strings.Count(string(data), "apply-saved\n"), 1; got != want {
+		t.Fatalf("saved-plan apply count = %d, want %d; log:\n%s", got, want, data)
+	}
+}
+
+// Declining stops the whole run, not just this node: everything downstream consumes its outputs.
+func TestApply_WithoutAutoApproveDeclineStopsTheRun(t *testing.T) {
+	e, moduleDir, commandLog := loadApplyTestEngine(t)
+
+	if err := e.Apply(Options{AutoApprove: true}); err != nil {
+		t.Fatalf("first Apply: %v", err)
+	}
+	if err := os.Remove(filepath.Join(moduleDir, "managed.out")); err != nil {
+		t.Fatalf("removing managed output: %v", err)
+	}
+	if err := os.Truncate(commandLog, 0); err != nil {
+		t.Fatalf("truncating command log: %v", err)
+	}
+
+	e.Stdout = &bytes.Buffer{}
+	e.Stdin = strings.NewReader("n\n")
+	err := e.Apply(Options{})
+	if err == nil {
+		t.Fatal("expected a declined approval to fail the run")
+	}
+	if !strings.Contains(err.Error(), "not approved") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(moduleDir, "managed.out")); !os.IsNotExist(statErr) {
+		t.Fatalf("expected nothing to be applied, stat error = %v", statErr)
+	}
+	data, readErr := os.ReadFile(commandLog)
+	if readErr != nil {
+		t.Fatalf("reading command log: %v", readErr)
+	}
+	if got := strings.Count(string(data), "apply\n"); got != 0 {
+		t.Fatalf("apply count = %d, want 0; log:\n%s", got, data)
+	}
+}
+
+// A converged graph never asks, so the no-flag run stays usable as a "is everything still applied?" check with no terminal attached.
+func TestApply_UnchangedNodeNeverAsksForApproval(t *testing.T) {
+	e, _, _ := loadApplyTestEngine(t)
+
+	if err := e.Apply(Options{AutoApprove: true}); err != nil {
+		t.Fatalf("first Apply: %v", err)
+	}
+	e.Stdin = nil
+	if err := e.Apply(Options{}); err != nil {
+		t.Fatalf("unchanged Apply without auto-approve: %v", err)
+	}
+}
+
+// A node that does have changes, with nothing to read an answer from, fails and says what to pass instead of hanging or applying unasked.
+func TestApply_WithoutAutoApproveAndNoInputFails(t *testing.T) {
+	e, moduleDir, _ := loadApplyTestEngine(t)
+
+	if err := e.Apply(Options{AutoApprove: true}); err != nil {
+		t.Fatalf("first Apply: %v", err)
+	}
+	if err := os.Remove(filepath.Join(moduleDir, "managed.out")); err != nil {
+		t.Fatalf("removing managed output: %v", err)
+	}
+	e.Stdin = nil
+
+	err := e.Apply(Options{})
+	if err == nil {
+		t.Fatal("expected Apply to fail when it cannot ask for approval")
+	}
+	if !strings.Contains(err.Error(), "--auto-approve") {
+		t.Fatalf("expected the error to name --auto-approve, got: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(moduleDir, "managed.out")); !os.IsNotExist(statErr) {
+		t.Fatalf("expected nothing to be applied, stat error = %v", statErr)
+	}
+}
+
+// Concurrent nodes buffer their output, so there is nowhere to put a prompt.
+func TestApply_ParallelismRequiresAutoApprove(t *testing.T) {
+	e, _, _ := loadApplyTestEngine(t)
+
+	err := e.Apply(Options{Parallelism: 2})
+	if err == nil {
+		t.Fatal("expected --parallelism without --auto-approve to be refused")
+	}
+	if !strings.Contains(err.Error(), "--auto-approve") {
+		t.Fatalf("expected the error to name --auto-approve, got: %v", err)
 	}
 }

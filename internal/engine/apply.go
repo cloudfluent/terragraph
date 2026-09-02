@@ -15,7 +15,12 @@ import (
 //
 // When the plan does report changes, that plan is what gets applied (see Runner.PlanChanges/ApplyPlan), so a node refreshes once and the change made is the change that was planned.
 func (e *Engine) Apply(opts Options) error {
-	e.logger().Info("apply starting", "node", opts.Node, "parallelism", opts.parallelism())
+	e.logger().Info("apply starting", "node", opts.Node, "parallelism", opts.parallelism(), "autoApprove", opts.AutoApprove)
+
+	// Concurrent nodes have their output buffered and flushed a node at a time (see runLevels), so a prompt written mid-level would be invisible until long after the answer was needed. Rather than deadlock on that, say so.
+	if !opts.AutoApprove && opts.parallelism() > 1 {
+		return fmt.Errorf("--parallelism %d needs --auto-approve: output from concurrent nodes is buffered, so there is nowhere to ask for approval", opts.parallelism())
+	}
 
 	return e.runLevels(opts, false, func(name string, applied map[string]map[string]any, out io.Writer) (map[string]any, error) {
 		vars, err := e.resolveInputs(name, applied)
@@ -34,9 +39,9 @@ func (e *Engine) Apply(opts Options) error {
 			return nil, fmt.Errorf("init: %w", err)
 		}
 
-		// The plan is only worth saving if it can be handed to apply, which needs both that terragraph is the one deciding to apply it (Terraform never prompts for a saved plan, and its own prompt is currently the only approval an interactive run gets) and a backend that can write one locally: an enhanced backend runs the plan on HCP and cannot.
+		// An enhanced backend runs the plan on HCP and cannot write a local plan file, so those nodes plan and apply separately, as every node used to.
 		savedPlan := ""
-		if opts.AutoApprove && r.SupportsSavedPlan() {
+		if r.SupportsSavedPlan() {
 			savedPlan = e.planPath(name)
 			if err := os.MkdirAll(filepath.Dir(savedPlan), 0o755); err != nil {
 				return nil, fmt.Errorf("creating plan directory: %w", err)
@@ -62,11 +67,30 @@ func (e *Engine) Apply(opts Options) error {
 		}
 
 		if savedPlan != "" {
+			// The plan Terraform just printed is the plan about to be applied, so this asks about something the user has actually seen — which is the whole reason approval belongs here rather than inside a second `apply` that would plan again from scratch.
+			if !opts.AutoApprove {
+				approved, err := e.approve(name, out)
+				if err != nil {
+					return nil, err
+				}
+				if !approved {
+					return nil, fmt.Errorf("apply cancelled: node %s was not approved", name)
+				}
+			}
 			if err := r.ApplyPlan(savedPlan); err != nil {
 				return nil, fmt.Errorf("apply: %w", err)
 			}
-		} else if err := r.Apply(opts.AutoApprove, varFileArgs...); err != nil {
-			return nil, fmt.Errorf("apply: %w", err)
+		} else {
+			// No saved plan to approve, so Terraform's own prompt is the approval and it needs somewhere to read the answer from. Left nil when auto-approving, so a non-interactive run can never block on a question.
+			if !opts.AutoApprove {
+				if e.Stdin == nil {
+					return nil, noApprovalError(name)
+				}
+				r.Stdin = e.Stdin
+			}
+			if err := r.Apply(opts.AutoApprove, varFileArgs...); err != nil {
+				return nil, fmt.Errorf("apply: %w", err)
+			}
 		}
 
 		outputs, err := r.Outputs()

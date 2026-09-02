@@ -43,10 +43,22 @@ If the plan reports changes, **that same plan is what gets applied** — it is w
 
 The plan file lives at `<blueprint dir>/.terragraph/plans/<node>.tfplan` and is removed when the run ends. Like the tfvars file, it holds resolved input values in cleartext, so the same "keep `.terragraph/` out of version control" rule applies.
 
-Two cases fall back to planning and applying as separate invocations:
+A node on the `remote` or `cloud` backend falls back to planning and applying as two separate invocations: these run the plan on HCP rather than locally and cannot produce a local plan file. Every state-storage backend — `s3`, `gcs`, `azurerm`, `http`, `local`, ... — keeps state remote but runs operations locally, and is unaffected.
 
-- **`--auto-approve` was not passed.** Terraform never asks for confirmation when applying a saved plan, so terragraph only takes that path when it has already been told approval is not required.
-- **The node uses the `remote` or `cloud` backend.** These run the plan on HCP rather than locally and cannot produce a local plan file. Every state-storage backend — `s3`, `gcs`, `azurerm`, `http`, `local`, ... — keeps state remote but runs operations locally, and is unaffected.
+## Approval
+
+Without `--auto-approve`, terragraph asks before applying each node that has changes:
+
+```
+Apply these changes to node eks? [y/N]:
+```
+
+It asks about the plan you were just shown, and applies exactly that plan — a downstream node's plan cannot be produced ahead of time (see the known limitation below), so approval necessarily happens node by node, as the run reaches each one.
+
+- Only `y` or `yes` approves. Declining stops the run: every later level consumes this node's outputs, so continuing past it would be applying against values that were never produced.
+- A node with **no** changes is never asked about, so `terragraph apply` with no flags remains a usable "is everything still applied?" check with no terminal attached.
+- Input may be piped (`echo yes | terragraph apply`). If a node needs approving and there is nothing to read — a CI runner, `</dev/null` — the run stops and says to pass `--auto-approve`, rather than reporting a refusal nobody made.
+- `--parallelism N` (N > 1) requires `--auto-approve`: output from concurrent nodes is buffered and flushed a node at a time, so there is nowhere to put a prompt.
 
 ### There is no local cache
 

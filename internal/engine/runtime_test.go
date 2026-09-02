@@ -172,4 +172,3 @@ group "g" {
 		t.Fatalf("expected inst.vpc to inherit the use block's env, got %+v", env)
 	}
 }
-

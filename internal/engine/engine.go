@@ -2,6 +2,8 @@
 package engine
 
 import (
+	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -23,8 +25,44 @@ type Engine struct {
 	Graph     *graph.Graph
 	Stdout    io.Writer
 	Stderr    io.Writer
-	// Logger receives internal-machinery diagnostics (node dispatch, cache hits, load steps); it never carries a command's actual result, which always goes through Stdout/Stderr directly. Nil is valid and discards everything, so callers that don't care about logging (including every existing test that builds an Engine by hand) need no changes.
+	// Stdin is where an interactive approval is read from. Nil means no answer can be obtained, which is not an error in itself: a run where nothing has changed never asks. Apply only fails on a missing Stdin at the moment a node actually needs approving.
+	Stdin io.Reader
+	// Logger receives internal-machinery diagnostics (node dispatch, plan verdicts, load steps); it never carries a command's actual result, which always goes through Stdout/Stderr directly. Nil is valid and discards everything, so callers that don't care about logging (including every existing test that builds an Engine by hand) need no changes.
 	Logger *slog.Logger
+
+	stdin *bufio.Reader
+}
+
+// approvals is the single reader every prompt shares. A fresh bufio.Reader per question would buffer past the newline it needed and swallow the next question's answer.
+func (e *Engine) approvals() *bufio.Reader {
+	if e.stdin == nil {
+		e.stdin = bufio.NewReader(e.Stdin)
+	}
+	return e.stdin
+}
+
+// errNoApproval reports that a node needs approving and there is no answer to be had — stdin was never wired up, or it is closed or empty (a CI runner with no terminal, `</dev/null`). Distinct from a declined approval, which is a decision someone actually made.
+var errNoApproval = errors.New("no approval could be read")
+
+func noApprovalError(name string) error {
+	return fmt.Errorf("node %s has changes but %w; pass --auto-approve to apply without asking", name, errNoApproval)
+}
+
+// approve asks whether name's planned changes should be applied, having just streamed that node's plan to out. Only "y" or "yes" approves.
+//
+// An immediate EOF is not a "no": there is a difference between someone declining and nobody being there, and silently treating an unattended run as a decline would report a refusal nobody made. Input that ends without a trailing newline still counts, so `echo yes | terragraph apply` works — which is why this reads for content rather than testing whether stdin is a terminal.
+func (e *Engine) approve(name string, out io.Writer) (bool, error) {
+	if e.Stdin == nil {
+		return false, noApprovalError(name)
+	}
+	_, _ = fmt.Fprintf(out, "\nApply these changes to node %s? [y/N]: ", name)
+	line, err := e.approvals().ReadString('\n')
+	answer := strings.ToLower(strings.TrimSpace(line))
+	if answer == "" && err != nil {
+		_, _ = fmt.Fprintln(out)
+		return false, noApprovalError(name)
+	}
+	return answer == "y" || answer == "yes", nil
 }
 
 func (e *Engine) logger() *slog.Logger {
