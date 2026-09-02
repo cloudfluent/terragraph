@@ -1,4 +1,4 @@
-// Package cache implements content-addressed incremental apply: a node is skipped if neither its own source files nor its resolved input values have changed since the last successful apply, a Merkle-DAG-style build cache, in the spirit of Bazel/Nix, rather than heuristic staleness tracking.
+// Package cache implements the local content-addressed prefilter for incremental apply. A matching source, input, and execution identity makes a node eligible for a refreshed plan before terragraph decides whether it can safely skip apply.
 package cache
 
 import (
