@@ -11,6 +11,13 @@ on:
       VSCE_PAT:
         description: Visual Studio Marketplace publishing token.
         required: true
+  # Lets a maintainer re-run publishing for a tag whose release already exists, without cutting another one: the Marketplace goes down often enough that a release can end up with only some of its six platform packages published. Everything below is idempotent, so a re-run finishes whatever the first attempt left behind.
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: Release tag to publish, including the v prefix (e.g. v0.1.5).
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -118,16 +125,47 @@ jobs:
           path: dist/vsix
           merge-multiple: true
 
+      # Every package is attempted, and a package the Marketplace already has is treated as done, so one target failing never strands the rest and a re-run of this workflow only publishes what is actually missing. A 5xx from the Marketplace is retried with a growing delay: it is routinely unavailable for a minute or two at a time, which is not a reason to leave a release half-published.
       - name: Publish platform-specific packages to Marketplace
         working-directory: editors/vscode
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
         run: |
-          for vsix in $(find ../../dist/vsix -name '*.vsix' -print | sort); do
-            npx --no-install vsce publish --packagePath "$vsix"
-          done
+          publish() {
+            local vsix="$1" name attempt output delay
+            name=$(basename "$vsix")
+            for attempt in 1 2 3 4 5; do
+              if output=$(npx --no-install vsce publish --packagePath "$vsix" 2>&1); then
+                printf '%s\n' "$output"
+                return 0
+              fi
+              printf '%s\n' "$output"
+              if grep -qiE 'already exists' <<<"$output"; then
+                echo "::notice::$name is already published at this version; nothing to do."
+                return 0
+              fi
+              if ! grep -qiE 'Service Unavailable|HTTP Error 5[0-9][0-9]|Internal Server Error|Bad Gateway|ETIMEDOUT|ECONNRESET|EAI_AGAIN|socket hang up' <<<"$output"; then
+                return 1
+              fi
+              delay=$((attempt * 30))
+              echo "::warning::Marketplace was unavailable while publishing $name (attempt $attempt of 5); retrying in ${delay}s."
+              sleep "$delay"
+            done
+            return 1
+          }
 
+          failed=()
+          for vsix in $(find ../../dist/vsix -name '*.vsix' -print | sort); do
+            publish "$vsix" || failed+=("$(basename "$vsix")")
+          done
+          if [ ${#failed[@]} -gt 0 ]; then
+            echo "::error::Could not publish: ${failed[*]}. Re-run this workflow for the same tag once the Marketplace is back; packages already published are skipped."
+            exit 1
+          fi
+
+      # Runs even when publishing failed: the release assets are the fallback way to install the extension, so they are exactly what a Marketplace outage should not take with it.
       - name: Attach VSIX packages to GitHub Release
+        if: ${{ !cancelled() }}
         env:
           GH_TOKEN: ${{ github.token }}
           TAG_NAME: ${{ inputs.tag_name }}
