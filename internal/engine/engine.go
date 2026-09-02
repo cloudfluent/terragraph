@@ -15,6 +15,7 @@ import (
 	"github.com/cloudfluent/terragraph/internal/blueprint"
 	"github.com/cloudfluent/terragraph/internal/exec"
 	"github.com/cloudfluent/terragraph/internal/graph"
+	"github.com/cloudfluent/terragraph/internal/runlock"
 )
 
 // Engine holds a loaded blueprint's graph and the I/O streams terraform/tofu subprocess output is forwarded to.
@@ -70,6 +71,18 @@ func (e *Engine) logger() *slog.Logger {
 		return e.Logger
 	}
 	return slog.New(slog.DiscardHandler)
+}
+
+// lockRun serializes this process against any other terragraph plan/apply/destroy/vendor
+// targeting the same blueprint. In-process --parallelism is unaffected: it shares this
+// one lock. See internal/runlock.
+func (e *Engine) lockRun() (*runlock.Lock, error) {
+	e.logger().Debug("acquiring blueprint lock", "dir", e.BaseDir)
+	lock, err := runlock.Acquire(e.BaseDir, e.Stderr)
+	if err != nil {
+		return nil, fmt.Errorf("locking blueprint: %w", err)
+	}
+	return lock, nil
 }
 
 // Load parses the blueprint at blueprintPath and builds its graph. blueprintPath may name a single file or a directory (every .hcl file directly inside it is merged, see blueprint.LoadPath); node sources are resolved relative to the resulting base directory.

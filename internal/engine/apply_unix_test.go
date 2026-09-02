@@ -4,10 +4,13 @@ package engine
 
 import (
 	"bytes"
+	"io"
 	"os"
+	osexec "os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cloudfluent/terragraph/internal/exec"
 )
@@ -433,6 +436,185 @@ func TestApply_WithoutAutoApproveAndNoInputFails(t *testing.T) {
 	if _, statErr := os.Stat(filepath.Join(moduleDir, "managed.out")); !os.IsNotExist(statErr) {
 		t.Fatalf("expected nothing to be applied, stat error = %v", statErr)
 	}
+}
+
+const (
+	applyChildEnv     = "TG_APPLY_CHILD"
+	applyChildNodeEnv = "TG_APPLY_CHILD_NODE"
+	applyBlueprintEnv = "TG_APPLY_BLUEPRINT"
+	applyBinaryEnv    = "TG_APPLY_BINARY"
+)
+
+// Two CLI-equivalent processes applying different nodes of the same blueprint must
+// not overlap their terraform runs: they share .terragraph/ and, when source is
+// reused, the module's .terraform.lock.hcl. flock is per-process, so this has to
+// be two real processes, not two goroutines.
+func TestApply_ConcurrentProcessesSerialize(t *testing.T) {
+	if os.Getenv(applyChildEnv) == "1" {
+		runApplyChild(t)
+		return
+	}
+
+	baseDir := t.TempDir()
+	moduleDir := filepath.Join(baseDir, "module")
+	writeModule(t, moduleDir)
+	blueprintPath := writeBlueprint(t, baseDir, `
+node "a" {
+  source = "./module"
+  backend_config = { path = "state-a.tfstate" }
+}
+node "b" {
+  source = "./module"
+  backend_config = { path = "state-b.tfstate" }
+}
+`)
+	busy := filepath.Join(baseDir, "busy")
+	overlap := filepath.Join(baseDir, "overlap")
+	binary := writeOverlappingFakeTerraform(t, baseDir)
+
+	startChild := func(node string, stderr io.Writer) *osexec.Cmd {
+		cmd := osexec.Command(os.Args[0], "-test.run=^"+t.Name()+"$")
+		cmd.Env = append(os.Environ(),
+			applyChildEnv+"=1",
+			applyChildNodeEnv+"="+node,
+			applyBlueprintEnv+"="+blueprintPath,
+			applyBinaryEnv+"="+binary,
+			"TG_BUSY="+busy,
+			"TG_OVERLAP="+overlap,
+		)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = stderr
+		if err := cmd.Start(); err != nil {
+			t.Fatalf("starting apply %s: %v", node, err)
+		}
+		return cmd
+	}
+
+	cmdA := startChild("a", os.Stderr)
+	waitForBusyDir(t, busy)
+
+	var bErr bytes.Buffer
+	cmdB := startChild("b", &bErr)
+	errA := cmdA.Wait()
+	errB := cmdB.Wait()
+	if errA != nil {
+		t.Fatalf("apply --node a: %v", errA)
+	}
+	if errB != nil {
+		t.Fatalf("apply --node b: %v", errB)
+	}
+
+	if data, err := os.ReadFile(overlap); err == nil && len(data) > 0 {
+		t.Fatalf("concurrent processes overlapped their terraform runs:\n%s", data)
+	}
+	if !strings.Contains(bErr.String(), "waiting for another terragraph process using this blueprint to finish") {
+		t.Fatalf("expected the waiting process to say so, stderr = %q", bErr.String())
+	}
+}
+
+// In-process --parallelism is one process holding one lock, so independent nodes
+// in the same level must still run terraform concurrently.
+func TestApply_InProcessParallelismStillConcurrent(t *testing.T) {
+	baseDir := t.TempDir()
+	moduleDir := filepath.Join(baseDir, "module")
+	writeModule(t, moduleDir)
+	blueprintPath := writeBlueprint(t, baseDir, `
+node "a" {
+  source = "./module"
+  backend_config = { path = "state-a.tfstate" }
+}
+node "b" {
+  source = "./module"
+  backend_config = { path = "state-b.tfstate" }
+}
+`)
+	busy := filepath.Join(baseDir, "busy")
+	overlap := filepath.Join(baseDir, "overlap")
+	t.Setenv("TG_BUSY", busy)
+	t.Setenv("TG_OVERLAP", overlap)
+
+	e, err := Load(blueprintPath, exec.Binary(writeOverlappingFakeTerraform(t, baseDir)), &bytes.Buffer{}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if err := e.Apply(Options{AutoApprove: true, Parallelism: 2}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if _, err := os.Stat(overlap); err != nil {
+		t.Fatalf("expected in-process --parallelism to overlap independent nodes: %v", err)
+	}
+}
+
+func runApplyChild(t *testing.T) {
+	t.Helper()
+	e, err := Load(os.Getenv(applyBlueprintEnv), exec.Binary(os.Getenv(applyBinaryEnv)), os.Stdout, os.Stderr)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if err := e.Apply(Options{Node: os.Getenv(applyChildNodeEnv), AutoApprove: true}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+}
+
+func waitForBusyDir(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if fi, err := os.Stat(path); err == nil && fi.IsDir() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", path)
+}
+
+func writeOverlappingFakeTerraform(t *testing.T, dir string) string {
+	t.Helper()
+	path := filepath.Join(dir, "terraform-overlap")
+	// mkdir is the atomic test-and-set: a second apply that reaches terraform
+	// while the first still holds TG_BUSY records overlap instead of racing a
+	// check-then-touch file.
+	script := `#!/bin/sh
+case "$1" in
+  init)
+    exit 0
+    ;;
+  plan)
+    planout=''
+    for arg in "$@"; do
+      case "$arg" in
+        -out=*) planout="${arg#-out=}" ;;
+      esac
+    done
+    if [ -n "$planout" ]; then
+      echo plan > "$planout"
+    fi
+    exit 2
+    ;;
+  apply)
+    if ! mkdir "$TG_BUSY" 2>/dev/null; then
+      echo overlap >> "$TG_OVERLAP"
+    else
+      sleep 0.4
+      rmdir "$TG_BUSY"
+    fi
+    exit 0
+    ;;
+  show)
+    printf '{"resource_changes":[{"address":"fake.managed","change":{"actions":["create"]}}]}'
+    exit 0
+    ;;
+  output)
+    printf '{"managed":{"value":"ok"}}'
+    exit 0
+    ;;
+esac
+exit 1
+`
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("writing overlapping fake terraform: %v", err)
+	}
+	return path
 }
 
 // Concurrent nodes buffer their output, so there is nowhere to put a prompt.

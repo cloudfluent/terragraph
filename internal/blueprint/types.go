@@ -143,7 +143,7 @@ type VendorConfig struct {
 type TFVarsLocation string
 
 const (
-	// TFVarsLocationWorkdir writes to <blueprint dir>/.terragraph/vars/<node>.tfvars.json, next to the node's other engine-managed state (tfdata, cache.json). Never touches the module's own directory, so nothing needs adding to a module's .gitignore, and a node reused by several instances (backend_config) never collides on a shared filename. This is the default: it keeps every module directory clean, which matters most for a module that's vendored (read-only, not yours to add a .gitignore entry to) or reused across many near-identical instances.
+	// TFVarsLocationWorkdir writes to <blueprint dir>/.terragraph/vars/<node>.tfvars.json, next to the node's other engine-managed state (tfdata, plans). Never touches the module's own directory, so nothing needs adding to a module's .gitignore, and a node reused by several instances (backend_config) never collides on a shared filename. This is the default: it keeps every module directory clean, which matters most for a module that's vendored (read-only, not yours to add a .gitignore entry to) or reused across many near-identical instances.
 	TFVarsLocationWorkdir TFVarsLocation = "workdir"
 	// TFVarsLocationModule writes to <node source>/.terragraph.<node>.tfvars.json, alongside the module's own .tf files, for teams that want a node's resolved input values visible next to its source while debugging. Requires the module's .gitignore to exclude the engine-managed pattern (see docs/execution-model.md); terragraph validate warns about a stale file left behind by a since-renamed or since-removed node sharing that directory, but never deletes one on your behalf.
 	TFVarsLocationModule TFVarsLocation = "module"

@@ -170,3 +170,39 @@ func TestRootCmd_LogLevel_DefaultStaysSilent(t *testing.T) {
 		t.Fatalf("expected no stderr output at the default log level, got %q", stderr)
 	}
 }
+
+func TestVendor_TakesBlueprintLock(t *testing.T) {
+	dir := t.TempDir()
+	writeFixtureFile(t, filepath.Join(dir, "blueprint.hcl"), `node "a" { source = "./stacks/a" }`)
+	writeFixtureFile(t, filepath.Join(dir, "stacks/a/main.tf"), `output "x" { value = "hi" }`)
+
+	root := NewRootCmd("test")
+	var outBuf, errBuf bytes.Buffer
+	root.SetOut(&outBuf)
+	root.SetErr(&errBuf)
+	root.SetArgs([]string{"--blueprint", dir, "vendor"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("vendor: %v (stderr: %s)", err, errBuf.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".terragraph", "lock")); err != nil {
+		t.Fatalf("vendor should acquire the blueprint lock: %v", err)
+	}
+}
+
+func TestGraph_DoesNotTakeBlueprintLock(t *testing.T) {
+	dir := t.TempDir()
+	writeFixtureFile(t, filepath.Join(dir, "blueprint.hcl"), `node "a" { source = "./stacks/a" }`)
+	writeFixtureFile(t, filepath.Join(dir, "stacks/a/main.tf"), `output "x" { value = "hi" }`)
+
+	root := NewRootCmd("test")
+	var outBuf, errBuf bytes.Buffer
+	root.SetOut(&outBuf)
+	root.SetErr(&errBuf)
+	root.SetArgs([]string{"--blueprint", dir, "graph"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("graph: %v (stderr: %s)", err, errBuf.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".terragraph", "lock")); !os.IsNotExist(err) {
+		t.Fatalf("graph should not take the blueprint lock, stat error = %v", err)
+	}
+}

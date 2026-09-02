@@ -13,6 +13,7 @@ import (
 	"github.com/cloudfluent/terragraph/internal/exec"
 	"github.com/cloudfluent/terragraph/internal/graph"
 	"github.com/cloudfluent/terragraph/internal/lsp"
+	"github.com/cloudfluent/terragraph/internal/runlock"
 	"github.com/cloudfluent/terragraph/internal/vendor"
 )
 
@@ -310,6 +311,12 @@ func newVendorCmd(blueprintPath *string, loggerOf func() *slog.Logger) *cobra.Co
 			if err != nil {
 				return fmt.Errorf("resolving blueprint directory: %w", err)
 			}
+
+			lock, err := runlock.Acquire(baseDir, cmd.ErrOrStderr())
+			if err != nil {
+				return fmt.Errorf("locking blueprint: %w", err)
+			}
+			defer func() { _ = lock.Close() }()
 
 			nodes := bp.Nodes
 			if node != "" {
