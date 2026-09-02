@@ -14,19 +14,31 @@ func lock(f *os.File, nonblocking bool) error {
 	if nonblocking {
 		flags |= syscall.LOCK_NB
 	}
-	err := syscall.Flock(int(f.Fd()), flags)
-	if nonblocking && (errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN)) {
-		return ErrHeld
+	// flock is interrupted by signals; retry so a waiter does not fail with EINTR.
+	for {
+		err := syscall.Flock(int(f.Fd()), flags)
+		if errors.Is(err, syscall.EINTR) {
+			continue
+		}
+		if nonblocking && (errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN)) {
+			return ErrHeld
+		}
+		if err != nil {
+			return fmt.Errorf("acquiring lock: %w", err)
+		}
+		return nil
 	}
-	if err != nil {
-		return fmt.Errorf("acquiring lock: %w", err)
-	}
-	return nil
 }
 
 func unlock(f *os.File) error {
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_UN); err != nil {
-		return fmt.Errorf("releasing lock: %w", err)
+	for {
+		err := syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		if errors.Is(err, syscall.EINTR) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("releasing lock: %w", err)
+		}
+		return nil
 	}
-	return nil
 }

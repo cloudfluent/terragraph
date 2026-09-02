@@ -9,6 +9,7 @@ import (
 	osexec "os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -470,6 +471,7 @@ node "b" {
 `)
 	busy := filepath.Join(baseDir, "busy")
 	overlap := filepath.Join(baseDir, "overlap")
+	release := filepath.Join(baseDir, "release")
 	binary := writeOverlappingFakeTerraform(t, baseDir)
 
 	startChild := func(node string, stderr io.Writer) *osexec.Cmd {
@@ -481,34 +483,37 @@ node "b" {
 			applyBinaryEnv+"="+binary,
 			"TG_BUSY="+busy,
 			"TG_OVERLAP="+overlap,
+			"TG_RELEASE="+release,
 		)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = stderr
 		if err := cmd.Start(); err != nil {
 			t.Fatalf("starting apply %s: %v", node, err)
 		}
+		t.Cleanup(func() { _ = cmd.Process.Kill() })
 		return cmd
 	}
 
 	cmdA := startChild("a", os.Stderr)
+	t.Cleanup(func() { _ = os.WriteFile(release, []byte("1"), 0o644) })
 	waitForBusyDir(t, busy)
 
-	var bErr bytes.Buffer
+	var bErr lockedBuffer
 	cmdB := startChild("b", &bErr)
-	errA := cmdA.Wait()
-	errB := cmdB.Wait()
-	if errA != nil {
-		t.Fatalf("apply --node a: %v", errA)
+	waitForWaitNotice(t, &bErr)
+	if err := os.WriteFile(release, []byte("1"), 0o644); err != nil {
+		t.Fatalf("releasing first apply: %v", err)
 	}
-	if errB != nil {
-		t.Fatalf("apply --node b: %v", errB)
+
+	if err := cmdA.Wait(); err != nil {
+		t.Fatalf("apply --node a: %v", err)
+	}
+	if err := cmdB.Wait(); err != nil {
+		t.Fatalf("apply --node b: %v", err)
 	}
 
 	if data, err := os.ReadFile(overlap); err == nil && len(data) > 0 {
 		t.Fatalf("concurrent processes overlapped their terraform runs:\n%s", data)
-	}
-	if !strings.Contains(bErr.String(), "waiting for another terragraph process using this blueprint to finish") {
-		t.Fatalf("expected the waiting process to say so, stderr = %q", bErr.String())
 	}
 }
 
@@ -568,6 +573,37 @@ func waitForBusyDir(t *testing.T, path string) {
 	t.Fatalf("timed out waiting for %s", path)
 }
 
+const waitNotice = "waiting for another terragraph process using this blueprint to finish"
+
+func waitForWaitNotice(t *testing.T, buf *lockedBuffer) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if strings.Contains(buf.String(), waitNotice) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("expected the waiting process to say so, stderr = %q", buf.String())
+}
+
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (w *lockedBuffer) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.b.Write(p)
+}
+
+func (w *lockedBuffer) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.b.String()
+}
+
 func writeOverlappingFakeTerraform(t *testing.T, dir string) string {
 	t.Helper()
 	path := filepath.Join(dir, "terraform-overlap")
@@ -595,7 +631,13 @@ case "$1" in
     if ! mkdir "$TG_BUSY" 2>/dev/null; then
       echo overlap >> "$TG_OVERLAP"
     else
-      sleep 0.4
+      if [ -n "$TG_RELEASE" ]; then
+        while [ ! -f "$TG_RELEASE" ]; do
+          sleep 0.01
+        done
+      else
+        sleep 0.4
+      fi
       rmdir "$TG_BUSY"
     fi
     exit 0
