@@ -151,3 +151,27 @@ func TestApply_PrintsAPerNodeChangeSummary(t *testing.T) {
 		t.Fatalf("expected %q in output, got:\n%s", want, out.String())
 	}
 }
+
+// destroy has no saved plan for terragraph to ask about, so terraform's own confirmation is the approval — which needs a stdin to read from, the same defect apply had.
+func TestDestroy_WithoutAutoApproveReadsApprovalFromStdin(t *testing.T) {
+	e, _, _ := loadApplyTestEngine(t)
+	if err := e.Apply(Options{AutoApprove: true}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	e.Stdin = strings.NewReader("yes\n")
+	if err := e.Destroy(Options{}); err != nil {
+		t.Fatalf("Destroy without auto-approve: %v", err)
+	}
+}
+
+func TestDestroy_ParallelismRequiresAutoApprove(t *testing.T) {
+	e, _, _ := loadApplyTestEngine(t)
+	err := e.Destroy(Options{Parallelism: 2})
+	if err == nil {
+		t.Fatal("expected --parallelism without --auto-approve to be refused")
+	}
+	if !strings.Contains(err.Error(), "--auto-approve") {
+		t.Fatalf("expected the error to name --auto-approve, got: %v", err)
+	}
+}

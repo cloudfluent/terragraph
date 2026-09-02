@@ -78,6 +78,18 @@ case "$1" in
     esac
     exit 0
     ;;
+  destroy)
+    printf 'destroy\n' >> "$TG_COMMAND_LOG"
+    # Mirrors the real CLI: -input=false does not suppress the confirmation, so without -auto-approve an answer has to arrive on stdin.
+    case "$*" in
+      *-auto-approve*) rm -f managed.out; exit 0 ;;
+    esac
+    read -r answer || exit 1
+    case "$answer" in
+      yes|y) rm -f managed.out; exit 0 ;;
+      *) exit 1 ;;
+    esac
+    ;;
   show)
     # show -json <plan file>: report what that plan does. TG_PLAN_ACTIONS names the actions, so a test can plan a destroy or a replace without a real provider.
     printf '{"resource_changes":[{"address":"fake.managed","change":{"actions":[%s]}}]}' "${TG_PLAN_ACTIONS:-\"create\"}"
