@@ -1,0 +1,673 @@
+// Package language provides the editor-facing, tolerant view of a Blueprint
+// workspace. Unlike blueprint.ParseFile it accepts incomplete documents so it
+// remains useful while a user is typing.
+package language
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"sync"
+
+	"github.com/hashicorp/hcl/v2"
+	"github.com/hashicorp/hcl/v2/hclsyntax"
+	"github.com/zclconf/go-cty/cty"
+
+	"github.com/cloudfluent/terragraph/internal/blueprint"
+	"github.com/cloudfluent/terragraph/internal/module"
+)
+
+// Completion is an editor-neutral suggestion. Start and End are byte offsets
+// in the document and identify the expression fragment to replace.
+type Completion struct {
+	Label         string
+	Insert        string
+	Detail        string
+	Documentation string
+	Start         int
+	End           int
+}
+
+// Location identifies a byte range in a workspace file.
+type Location struct {
+	Path       string
+	Start, End int
+}
+
+// Diagnostic is an editor-neutral error range and message.
+type Diagnostic struct {
+	Start, End int
+	Message    string
+}
+
+// Workspace is the language Module. Its small Interface is document overlays
+// plus completion; the HCL recovery and Terraform inspection implementation is
+// deliberately kept behind it.
+type Workspace struct {
+	mu        sync.RWMutex
+	root      string
+	documents map[string][]byte
+}
+
+func NewWorkspace(root string) *Workspace {
+	return &Workspace{root: root, documents: make(map[string][]byte)}
+}
+
+func (w *Workspace) SetRoot(root string) { w.mu.Lock(); w.root = root; w.mu.Unlock() }
+
+func (w *Workspace) SetDocument(path string, text []byte) {
+	path = absolute(path)
+	w.mu.Lock()
+	w.documents[path] = append([]byte(nil), text...)
+	w.mu.Unlock()
+}
+
+func (w *Workspace) CloseDocument(path string) {
+	w.mu.Lock()
+	delete(w.documents, absolute(path))
+	w.mu.Unlock()
+}
+
+// Complete returns suggestions for the document offset, even when HCL has
+// syntax diagnostics. Context is reserved for future cancellable module reads.
+func (w *Workspace) Complete(_ context.Context, path string, offset int) []Completion {
+	path = absolute(path)
+	text := w.document(path)
+	if offset < 0 || offset > len(text) {
+		return nil
+	}
+
+	model := w.model(path, text)
+	start := traversalStart(text, offset)
+	fragment := string(text[start:offset])
+	objectAttribute := objectAttributeAt(text, offset)
+	if objectAttribute == "vars" && !strings.Contains(fragment, ".") {
+		return propertyCompletions(model.nodes[nodeAt(text, offset)], fragment, start, offset)
+	}
+	if objectAttribute != "" {
+		return nil
+	}
+	if strings.HasPrefix(fragment, "runtime") {
+		return runtimeCompletions(model, fragment, start, offset)
+	}
+	if strings.HasPrefix(fragment, "node") || strings.HasPrefix(fragment, "use") {
+		return traversalCompletions(model, fragment, directionAt(text, offset), start, offset)
+	}
+	return contextCompletions(blockAt(text, offset), fragment, start, offset)
+}
+
+type workspaceModel struct {
+	nodes    map[string]ports
+	uses     map[string]ports
+	runtimes []string
+}
+type ports struct {
+	inputs, outputs         []string
+	inputsMeta, outputsMeta map[string]portMeta
+}
+
+type portMeta struct {
+	typeName, description, deprecated string
+	sensitive, required               bool
+}
+
+func (w *Workspace) model(path string, text []byte) workspaceModel {
+	m := workspaceModel{nodes: map[string]ports{}, uses: map[string]ports{}}
+	for _, candidate := range w.blueprintFiles(path) {
+		contents := w.document(candidate)
+		if candidate == path {
+			contents = text
+		}
+		w.addFileToModel(&m, candidate, contents)
+	}
+	m.runtimes = uniqueSorted(m.runtimes)
+	return m
+}
+
+func (w *Workspace) addFileToModel(m *workspaceModel, path string, text []byte) {
+	file, _ := hclsyntax.ParseConfig(text, path, hcl.InitialPos)
+	body, ok := file.Body.(*hclsyntax.Body)
+	if !ok {
+		return
+	}
+	for _, block := range body.Blocks {
+		switch block.Type {
+		case "node":
+			if len(block.Labels) != 1 {
+				continue
+			}
+			if source := literalAttribute(block, "source"); source != "" {
+				m.nodes[block.Labels[0]] = inspectPorts(filepath.Dir(path), source)
+			} else {
+				m.nodes[block.Labels[0]] = ports{}
+			}
+		case "use":
+			if len(block.Labels) != 1 {
+				continue
+			}
+			as, source := literalAttribute(block, "as"), literalAttribute(block, "source")
+			if as != "" && source != "" {
+				m.uses[as] = inspectGroupPorts(filepath.Dir(path), source, block.Labels[0])
+			}
+		case "runtime":
+			if len(block.Labels) == 1 {
+				m.runtimes = append(m.runtimes, block.Labels[0])
+			}
+		}
+	}
+}
+
+func inspectPorts(base, source string) ports {
+	if blueprint.IsRemote(source) {
+		return ports{}
+	}
+	schema, err := module.Inspect(filepath.Join(base, source))
+	if err != nil {
+		return ports{}
+	}
+	p := ports{inputsMeta: map[string]portMeta{}, outputsMeta: map[string]portMeta{}}
+	for name, variable := range schema.Variables {
+		p.inputs = append(p.inputs, name)
+		p.inputsMeta[name] = portMeta{typeName: variable.Type, description: variable.Description, deprecated: variable.Deprecated, sensitive: variable.Sensitive, required: variable.Required}
+	}
+	for name, output := range schema.OutputDetails {
+		p.outputs = append(p.outputs, name)
+		p.outputsMeta[name] = portMeta{typeName: output.Type, description: output.Description, deprecated: output.Deprecated, sensitive: output.Sensitive}
+	}
+	sort.Strings(p.inputs)
+	sort.Strings(p.outputs)
+	return p
+}
+
+func inspectGroupPorts(base, source, groupName string) ports {
+	if blueprint.IsRemote(source) {
+		return ports{}
+	}
+	dir := filepath.Join(base, source)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ports{}
+	}
+	p := ports{inputsMeta: map[string]portMeta{}, outputsMeta: map[string]portMeta{}}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".hcl" {
+			continue
+		}
+		contents, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			continue
+		}
+		file, _ := hclsyntax.ParseConfig(contents, entry.Name(), hcl.InitialPos)
+		body, ok := file.Body.(*hclsyntax.Body)
+		if !ok {
+			continue
+		}
+		for _, block := range body.Blocks {
+			if block.Type != "group" || len(block.Labels) != 1 || block.Labels[0] != groupName {
+				continue
+			}
+			for _, export := range block.Body.Blocks {
+				if export.Type != "export" {
+					continue
+				}
+				if attr := export.Body.Attributes["input"]; attr != nil {
+					p.inputs = append(p.inputs, objectKeys(attr.Expr)...)
+				}
+				if attr := export.Body.Attributes["output"]; attr != nil {
+					p.outputs = append(p.outputs, objectKeys(attr.Expr)...)
+				}
+			}
+		}
+	}
+	p.inputs = uniqueSorted(p.inputs)
+	p.outputs = uniqueSorted(p.outputs)
+	return p
+}
+
+func literalAttribute(block *hclsyntax.Block, name string) string {
+	attr := block.Body.Attributes[name]
+	if attr == nil {
+		return ""
+	}
+	value, diags := attr.Expr.Value(nil)
+	if diags.HasErrors() || !value.IsKnown() || value.Type() != ctyString {
+		return ""
+	}
+	return value.AsString()
+}
+
+var ctyString = cty.String
+
+func objectKeys(expr hcl.Expression) []string {
+	obj, ok := expr.(*hclsyntax.ObjectConsExpr)
+	if !ok {
+		return nil
+	}
+	keys := make([]string, 0, len(obj.Items))
+	for _, item := range obj.Items {
+		value, diags := item.KeyExpr.Value(nil)
+		if !diags.HasErrors() && value.Type() == ctyString {
+			keys = append(keys, value.AsString())
+		}
+	}
+	return keys
+}
+
+func traversalCompletions(m workspaceModel, fragment, direction string, start, end int) []Completion {
+	parts := strings.Split(fragment, ".")
+	if len(parts) == 1 {
+		return nil
+	}
+	entities := m.nodes
+	noun := "node"
+	if parts[0] == "use" {
+		entities = m.uses
+		noun = "group"
+	}
+	if len(parts) == 2 {
+		return namedCompletions(entities, parts[1], func(name string) Completion {
+			return Completion{Label: name, Insert: parts[0] + "." + name, Detail: noun, Start: start, End: end}
+		})
+	}
+	p, exists := entities[parts[1]]
+	if !exists {
+		return nil
+	}
+	if len(parts) == 3 {
+		kinds := []string{"output", "input"}
+		if direction == "from" {
+			kinds = []string{"output"}
+		}
+		if direction == "to" {
+			kinds = []string{"input"}
+		}
+		return stringCompletions(kinds, parts[2], func(kind string) Completion {
+			return Completion{Label: kind, Insert: parts[0] + "." + parts[1] + "." + kind, Detail: "port kind", Start: start, End: end}
+		})
+	}
+	if len(parts) == 4 && (parts[2] == "input" || parts[2] == "output") {
+		names := p.inputs
+		if parts[2] == "output" {
+			names = p.outputs
+		}
+		return stringCompletions(names, parts[3], func(name string) Completion {
+			meta := p.inputsMeta[name]
+			if parts[2] == "output" {
+				meta = p.outputsMeta[name]
+			}
+			return portCompletion(name, strings.Join(parts[:3], ".")+"."+name, meta, parts[2] == "output", start, end)
+		})
+	}
+	return nil
+}
+
+func propertyCompletions(p ports, prefix string, start, end int) []Completion {
+	return stringCompletions(p.inputs, prefix, func(name string) Completion {
+		return portCompletion(name, name, p.inputsMeta[name], false, start, end)
+	})
+}
+
+type attributeSpec struct {
+	name, insert, detail, documentation string
+}
+
+var completionSchemas = map[string][]attributeSpec{
+	"": {
+		{name: "node", insert: "node \"name\" {\n  source = \"\"\n}", detail: "Blueprint block", documentation: "Declares one Terraform or OpenTofu module in the graph."},
+		{name: "edge", insert: "edge {\n  from = node.source.output.value\n  to   = node.target.input.value\n}", detail: "Blueprint block", documentation: "Connects a source node output to a target node input."},
+		{name: "runtime", insert: "runtime \"name\" {\n  binary = \"tofu\"\n}", detail: "Blueprint block", documentation: "Declares a reusable Terraform or OpenTofu runtime."},
+		{name: "group", insert: "group \"name\" {\n}", detail: "Blueprint block", documentation: "Declares a reusable sub-blueprint."},
+		{name: "use", insert: "use \"group\" {\n  as     = \"name\"\n  source = \"\"\n}", detail: "Blueprint block", documentation: "Instantiates a reusable group."},
+		{name: "vendor", insert: "vendor {\n}", detail: "Blueprint block", documentation: "Configures the local vendor directory."},
+		{name: "tfvars", insert: "tfvars {\n}", detail: "Blueprint block", documentation: "Configures where resolved input values are written."},
+	},
+	"node": {
+		{name: "source", insert: "source = \"\"", detail: "required string", documentation: "Path or remote source of the Terraform or OpenTofu module."},
+		{name: "vars", insert: "vars = {\n}", detail: "object", documentation: "Literal Terraform input values. Use an edge for another node's output."},
+		{name: "env", insert: "env = {\n}", detail: "map(string)", documentation: "Extra environment variables for this module's Terraform or OpenTofu process."},
+		{name: "runtime", insert: "runtime = runtime.", detail: "runtime reference", documentation: "Selects a declared runtime for this node."},
+		{name: "backend_config", insert: "backend_config = {\n}", detail: "map(string)", documentation: "Backend configuration passed to terraform init."},
+	},
+	"edge": {
+		{name: "from", insert: "from = node.", detail: "required output reference", documentation: "Source node output, or a bare node for an ordering-only edge."},
+		{name: "to", insert: "to = node.", detail: "required input reference", documentation: "Target node input, or a bare node for an ordering-only edge."},
+	},
+	"runtime": {
+		{name: "binary", insert: "binary = \"\"", detail: "required string", documentation: "Terraform or OpenTofu binary path, or a command resolved from PATH."},
+		{name: "version", insert: "version = \"\"", detail: "optional string", documentation: "Version label included in the incremental-apply cache key."},
+		{name: "default", insert: "default = true", detail: "optional bool", documentation: "Makes this runtime the blueprint-wide fallback."},
+	},
+	"use": {
+		{name: "as", insert: "as = \"\"", detail: "required string", documentation: "Namespace used to refer to this group instance."},
+		{name: "source", insert: "source = \"\"", detail: "required string", documentation: "Local path or remote source containing the group."},
+		{name: "runtime", insert: "runtime = runtime.", detail: "runtime reference", documentation: "Default runtime for nodes expanded from this group."},
+		{name: "env", insert: "env = {\n}", detail: "map(string)", documentation: "Environment variables inherited by nodes expanded from this group."},
+	},
+	"vendor": {
+		{name: "directory", insert: "directory = \"vendor\"", detail: "optional string", documentation: "Directory used to store vendored module sources."},
+		{name: "manifest_file", insert: "manifest_file = \"vendor.yaml\"", detail: "optional string", documentation: "Vendor manifest filename."},
+	},
+	"tfvars": {
+		{name: "location", insert: "location = \"workdir\"", detail: "optional string", documentation: "Either workdir (default) or module."},
+	},
+}
+
+func contextCompletions(block, prefix string, start, end int) []Completion {
+	fields := completionSchemas[block]
+	return stringCompletions(specNames(fields), prefix, func(name string) Completion {
+		for _, field := range fields {
+			if field.name == name {
+				return Completion{Label: field.name, Insert: field.insert, Detail: field.detail, Documentation: field.documentation, Start: start, End: end}
+			}
+		}
+		return Completion{}
+	})
+}
+
+func specNames(fields []attributeSpec) []string {
+	names := make([]string, 0, len(fields))
+	for _, field := range fields {
+		names = append(names, field.name)
+	}
+	return names
+}
+
+func runtimeCompletions(m workspaceModel, fragment string, start, end int) []Completion {
+	parts := strings.Split(fragment, ".")
+	if len(parts) != 2 {
+		return nil
+	}
+	return stringCompletions(m.runtimes, parts[1], func(name string) Completion {
+		return Completion{Label: name, Insert: "runtime." + name, Detail: "runtime", Start: start, End: end}
+	})
+}
+
+func portCompletion(name, insert string, meta portMeta, output bool, start, end int) Completion {
+	detail := meta.typeName
+	if output {
+		detail = ""
+	} else if detail == "" {
+		detail = "input variable"
+	}
+	tags := []string{}
+	if meta.required {
+		tags = append(tags, "required")
+	}
+	if meta.sensitive {
+		tags = append(tags, "sensitive")
+	}
+	if len(tags) > 0 {
+		tagText := "(" + strings.Join(tags, ", ") + ")"
+		if detail != "" {
+			detail += " " + tagText
+		} else {
+			detail = tagText
+		}
+	}
+	if meta.description != "" {
+		if detail != "" {
+			detail += " — "
+		}
+		detail += meta.description
+	}
+	documentation := meta.description
+	if meta.deprecated != "" {
+		documentation = strings.TrimSpace(documentation + "\n\nDeprecated: " + meta.deprecated)
+	}
+	return Completion{Label: name, Insert: insert, Detail: detail, Documentation: documentation, Start: start, End: end}
+}
+func namedCompletions(values map[string]ports, prefix string, build func(string) Completion) []Completion {
+	names := make([]string, 0, len(values))
+	for name := range values {
+		names = append(names, name)
+	}
+	return stringCompletions(names, prefix, build)
+}
+func stringCompletions(values []string, prefix string, build func(string) Completion) []Completion {
+	result := []Completion{}
+	for _, value := range uniqueSorted(values) {
+		if strings.HasPrefix(value, prefix) {
+			result = append(result, build(value))
+		}
+	}
+	return result
+}
+func uniqueSorted(values []string) []string {
+	set := map[string]bool{}
+	for _, value := range values {
+		set[value] = true
+	}
+	result := make([]string, 0, len(set))
+	for value := range set {
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result
+}
+
+var attrLine = regexp.MustCompile(`(?m)^\s*([[:alnum:]_-]+)\s*=`)
+
+func directionAt(text []byte, offset int) string {
+	line := strings.LastIndex(string(text[:offset]), "\n") + 1
+	match := attrLine.FindSubmatch(text[line:offset])
+	if len(match) == 2 {
+		return string(match[1])
+	}
+	return ""
+}
+func traversalStart(text []byte, offset int) int {
+	start := offset
+	for start > 0 && (text[start-1] == '.' || text[start-1] == '_' || text[start-1] == '-' || (text[start-1] >= 'a' && text[start-1] <= 'z') || (text[start-1] >= 'A' && text[start-1] <= 'Z') || (text[start-1] >= '0' && text[start-1] <= '9')) {
+		start--
+	}
+	return start
+}
+
+var objectAttribute = regexp.MustCompile(`(?s)([[:alnum:]_-]+)\s*=\s*\{[^{}]*$`)
+
+// objectAttributeAt returns the attribute owning the current simple object
+// expression. It prevents completions for the outer node block from leaking
+// into backend_config and env maps, while vars receives its specialised
+// Terraform-input completion.
+func objectAttributeAt(text []byte, offset int) string {
+	match := objectAttribute.FindStringSubmatch(string(text[:offset]))
+	if len(match) != 2 {
+		return ""
+	}
+	return match[1]
+}
+func nodeAt(text []byte, offset int) string {
+	before := string(text[:offset])
+	matches := regexp.MustCompile(`(?s)node\s+"([^"]+)"\s*\{`).FindAllStringSubmatch(before, -1)
+	if len(matches) == 0 {
+		return ""
+	}
+	return matches[len(matches)-1][1]
+}
+
+var blockHeader = regexp.MustCompile(`(?s)(node|edge|runtime|group|use|vendor|tfvars)\s*(?:"[^\"]*")?\s*$`)
+
+// blockAt returns the nearest containing Blueprint block. Object braces are
+// tracked too so a closing brace for vars or env cannot end the outer block.
+func blockAt(text []byte, offset int) string {
+	stack := []string{}
+	for i := 0; i < offset; i++ {
+		switch text[i] {
+		case '{':
+			match := blockHeader.FindSubmatch(text[:i])
+			if len(match) == 2 {
+				stack = append(stack, string(match[1]))
+			} else {
+				stack = append(stack, "")
+			}
+		case '}':
+			if len(stack) > 0 {
+				stack = stack[:len(stack)-1]
+			}
+		}
+	}
+	for i := len(stack) - 1; i >= 0; i-- {
+		if stack[i] != "" {
+			return stack[i]
+		}
+	}
+	return ""
+}
+
+// Definition resolves the node or runtime segment under offset. It searches
+// every .hcl file directly in the same blueprint directory, matching the
+// parser's multi-file blueprint layout.
+func (w *Workspace) Definition(_ context.Context, path string, offset int) (Location, bool) {
+	path = absolute(path)
+	text := w.document(path)
+	kind, name, ok := referenceAt(text, offset)
+	if !ok {
+		return Location{}, false
+	}
+	for _, candidate := range w.blueprintFiles(path) {
+		file, _ := hclsyntax.ParseConfig(w.document(candidate), candidate, hcl.InitialPos)
+		body, ok := file.Body.(*hclsyntax.Body)
+		if !ok {
+			continue
+		}
+		for _, block := range body.Blocks {
+			if block.Type != kind || len(block.Labels) != 1 || block.Labels[0] != name || len(block.LabelRanges) == 0 {
+				continue
+			}
+			label := block.LabelRanges[0]
+			return Location{Path: candidate, Start: label.Start.Byte, End: label.End.Byte}, true
+		}
+	}
+	return Location{}, false
+}
+
+// Diagnose checks references that can be validated without evaluating HCL.
+// It deliberately accepts incomplete documents so errors update while typing.
+func (w *Workspace) Diagnose(_ context.Context, path string) []Diagnostic {
+	path = absolute(path)
+	text := w.document(path)
+	model := w.model(path, text)
+	diagnostics := []Diagnostic{}
+	for _, match := range nodeReference.FindAllSubmatchIndex(text, -1) {
+		nameStart, nameEnd := match[2], match[3]
+		kindStart, kindEnd := match[4], match[5]
+		portStart, portEnd := match[6], match[7]
+		name := string(text[nameStart:nameEnd])
+		ports, ok := model.nodes[name]
+		if !ok {
+			diagnostics = append(diagnostics, Diagnostic{Start: nameStart, End: nameEnd, Message: "Unknown node " + name})
+			continue
+		}
+		if kindStart < 0 {
+			continue // Bare nodes are valid ordering-only edge endpoints.
+		}
+		kind := string(text[kindStart:kindEnd])
+		direction := directionAt(text, nameStart)
+		if (direction == "from" && kind != "output") || (direction == "to" && kind != "input") {
+			expected := "output"
+			if direction == "to" {
+				expected = "input"
+			}
+			diagnostics = append(diagnostics, Diagnostic{Start: kindStart, End: kindEnd, Message: direction + " must reference node " + expected})
+		}
+		if portStart < 0 {
+			continue
+		}
+		port := string(text[portStart:portEnd])
+		available := ports.inputs
+		if kind == "output" {
+			available = ports.outputs
+		}
+		if !containsString(available, port) {
+			diagnostics = append(diagnostics, Diagnostic{Start: portStart, End: portEnd, Message: "Unknown " + kind + " " + port + availableHint(available)})
+		}
+	}
+	for _, match := range objectKey.FindAllSubmatchIndex(text, -1) {
+		start, end := match[2], match[3]
+		if objectAttributeAt(text, start) != "vars" {
+			continue
+		}
+		ports, ok := model.nodes[nodeAt(text, start)]
+		if !ok || containsString(ports.inputs, string(text[start:end])) {
+			continue
+		}
+		diagnostics = append(diagnostics, Diagnostic{Start: start, End: end, Message: "Unknown input " + string(text[start:end]) + availableHint(ports.inputs)})
+	}
+	return diagnostics
+}
+
+var nodeReference = regexp.MustCompile(`\bnode\.([[:alnum:]_-]+)(?:\.(input|output)(?:\.([[:alnum:]_-]+))?)?`)
+var objectKey = regexp.MustCompile(`(?m)^\s*([[:alnum:]_-]+)\s*=`)
+
+func availableHint(values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	return "; available: " + strings.Join(values, ", ")
+}
+
+var reference = regexp.MustCompile(`\b(node|runtime)\.([[:alnum:]_-]+)\b`)
+
+func referenceAt(text []byte, offset int) (string, string, bool) {
+	for _, match := range reference.FindAllSubmatchIndex(text, -1) {
+		start, end := match[4], match[5]
+		if offset >= start && offset <= end {
+			return string(text[match[2]:match[3]]), string(text[start:end]), true
+		}
+	}
+	return "", "", false
+}
+
+func (w *Workspace) blueprintFiles(path string) []string {
+	dir := filepath.Dir(path)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return []string{path}
+	}
+	files := []string{}
+	for _, entry := range entries {
+		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".hcl" {
+			files = append(files, filepath.Join(dir, entry.Name()))
+		}
+	}
+	if !containsString(files, path) {
+		files = append(files, path)
+	}
+	return uniqueSorted(files)
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func (w *Workspace) document(path string) []byte {
+	w.mu.RLock()
+	text, ok := w.documents[path]
+	w.mu.RUnlock()
+	if ok {
+		return append([]byte(nil), text...)
+	}
+	text, _ = os.ReadFile(path)
+	return text
+}
+
+// Document returns the current editor overlay when present, otherwise the
+// on-disk contents. It is used to convert definition byte offsets to LSP
+// positions in the server adapter.
+func (w *Workspace) Document(path string) []byte { return w.document(absolute(path)) }
+
+func absolute(path string) string {
+	result, err := filepath.Abs(path)
+	if err != nil {
+		return path
+	}
+	return result
+}

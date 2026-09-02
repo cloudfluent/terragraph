@@ -81,6 +81,16 @@ edge {
 	}
 }
 
+func TestParseFile_RejectsReferenceWithoutName(t *testing.T) {
+	path := writeTemp(t, `
+node "a" { source = "./a" }
+edge { from = node to = node.a }
+`)
+	if _, err := ParseFile(path); err == nil {
+		t.Fatal("expected an error for a reference without a node name")
+	}
+}
+
 func TestParseFile_MixedEdgeRejected(t *testing.T) {
 	path := writeTemp(t, `
 node "a" { source = "./a" }

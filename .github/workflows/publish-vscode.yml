@@ -1,0 +1,134 @@
+name: Publish VS Code extension
+
+on:
+  workflow_call:
+    inputs:
+      tag_name:
+        description: Release tag, including the v prefix.
+        required: true
+        type: string
+    secrets:
+      VSCE_PAT:
+        description: Visual Studio Marketplace publishing token.
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    name: Package (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: darwin-x64
+            goos: darwin
+            goarch: amd64
+            executable: terragraph
+          - target: darwin-arm64
+            goos: darwin
+            goarch: arm64
+            executable: terragraph
+          - target: linux-x64
+            goos: linux
+            goarch: amd64
+            executable: terragraph
+          - target: linux-arm64
+            goos: linux
+            goarch: arm64
+            executable: terragraph
+          - target: win32-x64
+            goos: windows
+            goarch: amd64
+            executable: terragraph.exe
+          - target: win32-arm64
+            goos: windows
+            goarch: arm64
+            executable: terragraph.exe
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag_name }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.1"
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: editors/vscode/package-lock.json
+
+      - name: Set extension version from release tag
+        working-directory: editors/vscode
+        env:
+          TAG_NAME: ${{ inputs.tag_name }}
+        run: npm version "${TAG_NAME#v}" --no-git-tag-version --allow-same-version
+
+      - name: Build bundled language server
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+          OUTPUT: editors/vscode/bin/${{ matrix.executable }}
+          TAG_NAME: ${{ inputs.tag_name }}
+        run: |
+          mkdir -p editors/vscode/bin
+          VERSION="${TAG_NAME#v}"
+          go build -ldflags "-s -w -X main.version=$VERSION" -o "$OUTPUT" ./cmd/terragraph
+
+      - name: Package platform-specific VSIX
+        working-directory: editors/vscode
+        run: |
+          npm ci
+          npm run package -- --target ${{ matrix.target }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: terragraph-vsix-${{ matrix.target }}
+          path: editors/vscode/*.vsix
+          if-no-files-found: error
+
+  publish:
+    name: Publish Marketplace and release assets
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag_name }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: editors/vscode/package-lock.json
+
+      - name: Install extension publishing tools
+        working-directory: editors/vscode
+        run: npm ci
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: terragraph-vsix-*
+          path: dist/vsix
+          merge-multiple: true
+
+      - name: Publish platform-specific packages to Marketplace
+        working-directory: editors/vscode
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          for vsix in $(find ../../dist/vsix -name '*.vsix' -print | sort); do
+            npx --no-install vsce publish --packagePath "$vsix"
+          done
+
+      - name: Attach VSIX packages to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ inputs.tag_name }}
+        run: gh release upload "$TAG_NAME" dist/vsix/*.vsix --clobber

@@ -15,7 +15,7 @@ install: ## go install terragraph onto $$GOBIN/$$GOPATH/bin
 
 .PHONY: test
 test: ## Run the test suite (race detector on)
-	go test ./... -race
+	go list ./... | grep -v '/editors/vscode/node_modules/' | xargs go test -race
 
 .PHONY: fmt
 fmt: $(BIN)/golangci-lint ## Reformat the codebase in place
@@ -38,8 +38,15 @@ docs-check: docs ## Fail if docs/cli/*.md is stale (what CI runs)
 	git diff --exit-code -- docs/cli || \
 	  (echo "docs/cli/*.md is stale, run 'make docs' and commit the result" >&2; exit 1)
 
+.PHONY: vscode-check
+vscode-check: ## Type-check, lint, and format-check the VS Code extension
+	cd editors/vscode && npm ci
+	cd editors/vscode && npm run check
+	cd editors/vscode && npm run lint
+	cd editors/vscode && npm run format:check
+
 .PHONY: check
-check: fmt-check lint docs-check build test ## Everything CI runs, in the same order
+check: fmt-check lint docs-check build test vscode-check ## Everything CI runs, in the same order
 
 .PHONY: release-check
 release-check: ## Validate .goreleaser.yaml (requires goreleaser on PATH)

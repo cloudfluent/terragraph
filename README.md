@@ -22,6 +22,10 @@ go install github.com/cloudfluent/terragraph/cmd/terragraph@latest
 
 Requires Go 1.27.1+ to build, and `terraform` or `tofu` on `PATH` to run.
 
+## VS Code
+
+Install **Terragraph Blueprint** from the VS Code Marketplace to get completion, definition navigation, hover metadata, and validation for `blueprint.hcl` and `group.hcl`. The extension contains a matching language server, so editor features do not require a separate CLI installation. See [`editors/vscode`](editors/vscode) for source-development and override details.
+
 ## Quick look
 
 A blueprint (`blueprint.hcl`) is a flat list of `node` and `edge` facts:

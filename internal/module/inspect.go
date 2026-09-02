@@ -11,15 +11,27 @@ import (
 type Variable struct {
 	Name string
 	// Type is the raw declared type constraint text (e.g. "string", "list(string)"), or "" if the variable has no type constraint.
-	Type string
+	Type        string
+	Description string
+	Sensitive   bool
+	Deprecated  string
 	// Required is true when the variable has no default value.
 	Required bool
 }
 
+type Output struct {
+	Name        string
+	Type        string
+	Description string
+	Sensitive   bool
+	Deprecated  string
+}
+
 // Schema is the subset of a root module's shape that terragraph cares about: its declared input variables (with type/required metadata) and the names of its output values. Standard root module outputs don't declare a type (that's an HCP Terraform Stacks-only feature), so Outputs only tracks presence.
 type Schema struct {
-	Variables map[string]Variable
-	Outputs   map[string]bool
+	Variables     map[string]Variable
+	Outputs       map[string]bool
+	OutputDetails map[string]Output
 }
 
 // Inspect statically parses the root module at dir and returns its variable/output schema.
@@ -30,18 +42,23 @@ func Inspect(dir string) (*Schema, error) {
 	}
 
 	schema := &Schema{
-		Variables: make(map[string]Variable, len(mod.Variables)),
-		Outputs:   make(map[string]bool, len(mod.Outputs)),
+		Variables:     make(map[string]Variable, len(mod.Variables)),
+		Outputs:       make(map[string]bool, len(mod.Outputs)),
+		OutputDetails: make(map[string]Output, len(mod.Outputs)),
 	}
 	for name, v := range mod.Variables {
 		schema.Variables[name] = Variable{
-			Name:     name,
-			Type:     v.Type,
-			Required: v.Required,
+			Name:        name,
+			Type:        v.Type,
+			Description: v.Description,
+			Sensitive:   v.Sensitive,
+			Deprecated:  v.Deprecated,
+			Required:    v.Required,
 		}
 	}
-	for name := range mod.Outputs {
+	for name, output := range mod.Outputs {
 		schema.Outputs[name] = true
+		schema.OutputDetails[name] = Output{Name: name, Type: output.Type, Description: output.Description, Sensitive: output.Sensitive, Deprecated: output.Deprecated}
 	}
 	return schema, nil
 }
