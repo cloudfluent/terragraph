@@ -2,17 +2,17 @@ package graph
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/cloudfluent/terragraph/internal/blueprint"
 	"github.com/cloudfluent/terragraph/internal/module"
 )
 
-// resolveContext tracks in-progress group resolutions (by absolute source directory + group name) to catch group self-reference cycles: a group that, directly or transitively, uses itself.
+// resolveContext tracks state for one Build() call: in-progress group resolutions (by absolute source directory + group name), to catch group self-reference cycles, plus per-directory caches so a group source directory or a node's module directory is only ever read and parsed once no matter how many times it's referenced (multiple `use` instances of the same group, or multiple nodes sharing one `source` via backend_config). Both caches are safe uncontended: Build runs entirely single-threaded, and every goroutine terragraph ever spawns (see engine.runLevels) starts only after the graph it walks has already been fully built.
 type resolveContext struct {
-	stack []string
+	stack     []string
+	groupDirs map[string]*blueprint.Blueprint
+	schemas   map[string]*module.Schema
 }
 
 func (rc *resolveContext) push(dir, name string) (func(), error) {
@@ -26,26 +26,47 @@ func (rc *resolveContext) push(dir, name string) (func(), error) {
 	return func() { rc.stack = rc.stack[:len(rc.stack)-1] }, nil
 }
 
-// loadGroupDef parses the .hcl files directly inside dir (not recursively; group source directories aren't tree-scanned) and returns the group definition named groupName.
-func loadGroupDef(dir, groupName string) (*blueprint.Group, error) {
-	entries, err := os.ReadDir(dir)
+// parseGroupDir returns dir merged as a Blueprint (every .hcl file directly inside it, see blueprint.ParseDir), parsing it at most once per Build() call regardless of how many `use` blocks reference dir.
+func (rc *resolveContext) parseGroupDir(dir string) (*blueprint.Blueprint, error) {
+	if bp, ok := rc.groupDirs[dir]; ok {
+		return bp, nil
+	}
+	bp, err := blueprint.ParseDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	if rc.groupDirs == nil {
+		rc.groupDirs = map[string]*blueprint.Blueprint{}
+	}
+	rc.groupDirs[dir] = bp
+	return bp, nil
+}
+
+// inspect returns dir's module schema (see module.Inspect), inspecting it at most once per Build() call regardless of how many nodes share dir as their source (the backend_config pattern docs/blueprint.md documents for reusing one module across instances).
+func (rc *resolveContext) inspect(dir string) (*module.Schema, error) {
+	if s, ok := rc.schemas[dir]; ok {
+		return s, nil
+	}
+	s, err := module.Inspect(dir)
+	if err != nil {
+		return nil, err
+	}
+	if rc.schemas == nil {
+		rc.schemas = map[string]*module.Schema{}
+	}
+	rc.schemas[dir] = s
+	return s, nil
+}
+
+// loadGroupDef returns the group definition named groupName from dir, a group source directory (see resolveContext.parseGroupDir for how dir's .hcl files are merged and cached).
+func loadGroupDef(rc *resolveContext, dir, groupName string) (*blueprint.Group, error) {
+	bp, err := rc.parseGroupDir(dir)
 	if err != nil {
 		return nil, fmt.Errorf("reading group source directory %s: %w", dir, err)
 	}
-
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".hcl") {
-			continue
-		}
-		path := filepath.Join(dir, e.Name())
-		bp, err := blueprint.ParseFile(path)
-		if err != nil {
-			return nil, fmt.Errorf("parsing %s: %w", path, err)
-		}
-		for i := range bp.Groups {
-			if bp.Groups[i].Name == groupName {
-				return &bp.Groups[i], nil
-			}
+	for i := range bp.Groups {
+		if bp.Groups[i].Name == groupName {
+			return &bp.Groups[i], nil
 		}
 	}
 	return nil, fmt.Errorf("no group named %q found in %s", groupName, dir)
