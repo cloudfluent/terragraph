@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.2.0](https://github.com/cloudfluent/terragraph/compare/v0.1.5...v0.2.0) (2026-09-02)
+
+
+### ⚠ BREAKING CHANGES
+
+* make applying a granted permission and let Terraform decide what needs applying ([#30](https://github.com/cloudfluent/terragraph/issues/30))
+
+### Features
+
+* make applying a granted permission and let Terraform decide what needs applying ([#30](https://github.com/cloudfluent/terragraph/issues/30)) ([df69e08](https://github.com/cloudfluent/terragraph/commit/df69e085ebc6e0b732d1afae8f848056f7b12862))
+
+
+### Bug Fixes
+
+* verify incremental cache hits with refreshed plans ([#22](https://github.com/cloudfluent/terragraph/issues/22)) ([5aba5c6](https://github.com/cloudfluent/terragraph/commit/5aba5c643451fa3f3725e7176eaf8d8a7850b278))
+
 ## [0.1.5](https://github.com/cloudfluent/terragraph/compare/v0.1.4...v0.1.5) (2026-09-02)
 
 
