@@ -167,6 +167,9 @@ func filePathFor(raw string, platform uri.Platform) string {
 	if err == nil && parsed.Scheme() == "file" {
 		return uri.FsPathFor(parsed, platform, false)
 	}
+	if platform == uri.PlatformWindows && len(raw) >= 2 && raw[1] == ':' {
+		return strings.ToLower(raw[:1]) + raw[1:]
+	}
 	return raw
 }
 
