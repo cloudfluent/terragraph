@@ -1,8 +1,9 @@
 name: PR title
 
+# pull_request_target, not pull_request: a plain pull_request trigger doesn't get a usable GITHUB_TOKEN for a fork-based PR and errors out outright, which is exactly the case this check most needs to cover. The workflow definition used is always the one on main regardless of the PR's own branch, so a fork PR can't tamper with it to bypass the check. No fork code is checked out or run here at all, only the PR title (event metadata) is read, so the extra token this trigger grants is never exercised.
 on:
-  pull_request:
-    types: [opened, edited, synchronize]
+  pull_request_target:
+    types: [opened, edited, reopened]
 
 permissions:
   pull-requests: read
@@ -12,7 +13,7 @@ jobs:
     name: Validate PR title
     runs-on: ubuntu-latest
     steps:
-      - uses: amannn/action-semantic-pull-requests@v5
+      - uses: amannn/action-semantic-pull-request@v6
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
