@@ -39,18 +39,18 @@ func (e *Engine) Apply(opts Options) error {
 			return nil, fmt.Errorf("init: %w", err)
 		}
 
-		// An enhanced backend runs the plan on HCP and cannot write a local plan file, so those nodes plan and apply separately, as every node used to.
-		savedPlan := ""
-		if r.SupportsSavedPlan() {
-			savedPlan = e.planPath(name)
-			if err := os.MkdirAll(filepath.Dir(savedPlan), 0o755); err != nil {
-				return nil, fmt.Errorf("creating plan directory: %w", err)
-			}
-			// Removed however this node exits: the file holds resolved input values in cleartext, and a plan left behind is only ever stale by the next run.
-			defer func() { _ = os.Remove(savedPlan) }()
-		} else {
-			e.logger().Debug("backend cannot save a plan, applying separately", "node", name, "backend", r.BackendType())
+		// remote/cloud run the plan on HCP and cannot write a local plan file. Applying without one would skip the approve gate, so this path is refused until that backend can be inspected the same way. State-storage backends (s3, gcs, ...) are unaffected.
+		if !r.SupportsSavedPlan() {
+			e.logger().Warn("apply refused: backend cannot produce a local plan", "node", name, "backend", r.BackendType())
+			return nil, savedPlanUnsupportedError(name, r.BackendType())
 		}
+
+		savedPlan := e.planPath(name)
+		if err := os.MkdirAll(filepath.Dir(savedPlan), 0o755); err != nil {
+			return nil, fmt.Errorf("creating plan directory: %w", err)
+		}
+		// Removed however this node exits: the file holds resolved input values in cleartext, and a plan left behind is only ever stale by the next run.
+		defer func() { _ = os.Remove(savedPlan) }()
 
 		changes, err := r.PlanChanges(savedPlan, varFileArgs...)
 		if err != nil {
@@ -66,47 +66,31 @@ func (e *Engine) Apply(opts Options) error {
 			return outputs, nil
 		}
 
-		if savedPlan != "" {
-			// What the plan actually does, read back from the file before any of it happens. Local only: no state is refreshed and no provider is called.
-			changeSet, err := r.PlanChangeSet(savedPlan)
+		// What the plan actually does, read back from the file before any of it happens. Local only: no state is refreshed and no provider is called.
+		changeSet, err := r.PlanChangeSet(savedPlan)
+		if err != nil {
+			return nil, fmt.Errorf("reading plan: %w", err)
+		}
+		_, _ = fmt.Fprintf(out, "node %s: %s\n", name, summarizeChanges(changeSet))
+
+		// Levels run in order, so refusing here means nothing downstream runs either: the cascade is cut at the node that caused it rather than audited after the fact.
+		level := e.approveFor(name, opts.Approve)
+		if blocked := notPermitted(changeSet, level); len(blocked) > 0 {
+			return nil, gateError(name, level, blocked)
+		}
+
+		// The plan Terraform just printed is the plan about to be applied, so this asks about something the user has actually seen — which is the whole reason approval belongs here rather than inside a second `apply` that would plan again from scratch.
+		if !opts.AutoApprove {
+			approved, err := e.approve(name, out)
 			if err != nil {
-				return nil, fmt.Errorf("reading plan: %w", err)
+				return nil, err
 			}
-			_, _ = fmt.Fprintf(out, "node %s: %s\n", name, summarizeChanges(changeSet))
-
-			// Levels run in order, so refusing here means nothing downstream runs either: the cascade is cut at the node that caused it rather than audited after the fact.
-			level := e.approveFor(name, opts.Approve)
-			if blocked := notPermitted(changeSet, level); len(blocked) > 0 {
-				return nil, gateError(name, level, blocked)
+			if !approved {
+				return nil, fmt.Errorf("apply cancelled: node %s was not approved", name)
 			}
-
-			// The plan Terraform just printed is the plan about to be applied, so this asks about something the user has actually seen — which is the whole reason approval belongs here rather than inside a second `apply` that would plan again from scratch.
-			if !opts.AutoApprove {
-				approved, err := e.approve(name, out)
-				if err != nil {
-					return nil, err
-				}
-				if !approved {
-					return nil, fmt.Errorf("apply cancelled: node %s was not approved", name)
-				}
-			}
-			if err := r.ApplyPlan(savedPlan); err != nil {
-				return nil, fmt.Errorf("apply: %w", err)
-			}
-		} else {
-			// No plan file, so there is nothing to inspect and the gate cannot run here. Saying so beats letting an enhanced-backend node look like it was checked.
-			e.logger().Warn("approve level not enforced: this backend cannot produce a local plan to inspect", "node", name, "backend", r.BackendType())
-
-			// Terraform's own prompt is the approval, and it needs somewhere to read the answer from. Left nil when auto-approving, so a non-interactive run can never block on a question.
-			if !opts.AutoApprove {
-				if e.Stdin == nil {
-					return nil, noApprovalError(name)
-				}
-				r.Stdin = e.Stdin
-			}
-			if err := r.Apply(opts.AutoApprove, varFileArgs...); err != nil {
-				return nil, fmt.Errorf("apply: %w", err)
-			}
+		}
+		if err := r.ApplyPlan(savedPlan); err != nil {
+			return nil, fmt.Errorf("apply: %w", err)
 		}
 
 		outputs, err := r.Outputs()
@@ -115,4 +99,8 @@ func (e *Engine) Apply(opts Options) error {
 		}
 		return outputs, nil
 	}, nil)
+}
+
+func savedPlanUnsupportedError(name, backend string) error {
+	return fmt.Errorf("node %s uses the %q backend, which cannot produce a local plan; terragraph apply needs one to decide what may be applied. Use a state-storage backend (s3, gcs, azurerm, http, local) instead", name, backend)
 }

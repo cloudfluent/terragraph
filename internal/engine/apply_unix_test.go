@@ -292,33 +292,38 @@ func TestApply_SavedPlanIsRemovedAfterTheRun(t *testing.T) {
 	}
 }
 
-// An enhanced backend cannot write a local plan file, so those nodes keep the two-invocation path instead of failing.
-func TestApply_EnhancedBackendSkipsTheSavedPlan(t *testing.T) {
-	e, moduleDir, commandLog := loadApplyTestEngine(t)
-	t.Setenv("TG_BACKEND_TYPE", "remote")
+// An enhanced backend cannot write a local plan file, so apply refuses rather than applying without the approve gate.
+func TestApply_EnhancedBackendIsRefused(t *testing.T) {
+	for _, backend := range []string{"remote", "cloud"} {
+		t.Run(backend, func(t *testing.T) {
+			e, moduleDir, commandLog := loadApplyTestEngine(t)
+			t.Setenv("TG_BACKEND_TYPE", backend)
 
-	if err := e.Apply(Options{AutoApprove: true}); err != nil {
-		t.Fatalf("first Apply: %v", err)
-	}
-	if err := os.Remove(filepath.Join(moduleDir, "managed.out")); err != nil {
-		t.Fatalf("removing managed output: %v", err)
-	}
-	if err := e.Apply(Options{AutoApprove: true}); err != nil {
-		t.Fatalf("drifted Apply: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(moduleDir, "managed.out")); err != nil {
-		t.Fatalf("expected drifted output to be recreated: %v", err)
-	}
+			err := e.Apply(Options{AutoApprove: true})
+			if err == nil {
+				t.Fatal("expected apply to refuse an enhanced backend")
+			}
+			for _, want := range []string{backend, "local plan", "s3"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("expected the error to mention %q, got: %v", want, err)
+				}
+			}
+			if _, statErr := os.Stat(filepath.Join(moduleDir, "managed.out")); !os.IsNotExist(statErr) {
+				t.Fatalf("expected nothing to be applied, stat error = %v", statErr)
+			}
 
-	data, err := os.ReadFile(commandLog)
-	if err != nil {
-		t.Fatalf("reading command log: %v", err)
-	}
-	if got := strings.Count(string(data), "plan-saved\n"); got != 0 {
-		t.Fatalf("saved plan count = %d, want 0; log:\n%s", got, data)
-	}
-	if got, want := strings.Count(string(data), "apply\n"), 2; got != want {
-		t.Fatalf("apply count = %d, want %d; log:\n%s", got, want, data)
+			data, readErr := os.ReadFile(commandLog)
+			if readErr != nil && !os.IsNotExist(readErr) {
+				t.Fatalf("reading command log: %v", readErr)
+			}
+			log := string(data)
+			if got := strings.Count(log, "plan\n"); got != 0 {
+				t.Fatalf("plan count = %d, want 0; log:\n%s", got, log)
+			}
+			if got := strings.Count(log, "apply\n"); got != 0 {
+				t.Fatalf("apply count = %d, want 0; log:\n%s", got, log)
+			}
+		})
 	}
 }
 

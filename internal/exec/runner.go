@@ -29,7 +29,7 @@ type Runner struct {
 	DataDir string
 	// Env, if set, adds extra environment variables (e.g. AWS_PROFILE for a per-node provider configuration; see blueprint.Node.Env) on top of the process's own environment. A key here overrides any same-named variable already inherited, the same "last one wins" rule DataDir already relies on for TF_DATA_DIR.
 	Env map[string]string
-	// Stdin, if set, is handed to the subprocess. Nil leaves it at os/exec's default, the null device, which is what every non-interactive command wants: a terraform/tofu invocation that decides to ask a question there reads EOF and fails rather than hanging forever waiting on a terminal nobody is watching. Set it only where an answer is genuinely being offered (see engine.Apply's enhanced-backend approval path).
+	// Stdin, if set, is handed to the subprocess. Nil leaves it at os/exec's default, the null device, which is what every non-interactive command wants: a terraform/tofu invocation that decides to ask a question there reads EOF and fails rather than hanging forever waiting on a terminal nobody is watching.
 	Stdin  io.Reader
 	Stdout io.Writer
 	Stderr io.Writer
@@ -168,7 +168,7 @@ func (r *Runner) PlanChangeSet(planPath string) ([]ResourceChange, error) {
 
 // BackendType reports the backend a previous Init configured for this node, read from the metadata Terraform writes into its own data directory. An empty string means no backend was recorded, which is the ordinary case for a module that declares no backend block at all (the implicit local backend).
 //
-// This exists only to tell the two enhanced backends apart from every other one: `remote` and `cloud` run the plan on HCP rather than locally, and cannot write a local plan file for ApplyPlan to consume. Every state-storage backend (s3, gcs, azurerm, http, ...) keeps state remote but runs operations here, so it is indistinguishable from local for this purpose. A read failure is reported as "unknown", not as an error: the caller's fallback is the two-invocation path that worked before saved plans existed, so guessing wrong costs a round trip, never correctness.
+// This exists only to tell the two enhanced backends apart from every other one: `remote` and `cloud` run the plan on HCP rather than locally, and cannot write a local plan file for ApplyPlan to consume. Every state-storage backend (s3, gcs, azurerm, http, ...) keeps state remote but runs operations here, so it is indistinguishable from local for this purpose. A read failure is reported as empty, not as an error: the caller then treats the node as supporting a saved plan, and a backend that in fact cannot will fail at `plan -out` rather than applying uninspected.
 func (r *Runner) BackendType() string {
 	dir := r.DataDir
 	if dir == "" {

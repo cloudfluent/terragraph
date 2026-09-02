@@ -43,7 +43,7 @@ If the plan reports changes, **that same plan is what gets applied** — it is w
 
 The plan file lives at `<blueprint dir>/.terragraph/plans/<node>.tfplan` and is removed when the run ends. Like the tfvars file, it holds resolved input values in cleartext, so the same "keep `.terragraph/` out of version control" rule applies.
 
-A node on the `remote` or `cloud` backend falls back to planning and applying as two separate invocations: these run the plan on HCP rather than locally and cannot produce a local plan file. Every state-storage backend — `s3`, `gcs`, `azurerm`, `http`, `local`, ... — keeps state remote but runs operations locally, and is unaffected.
+A node on the `remote` or `cloud` backend cannot produce a local plan file: those backends run the plan on HCP rather than locally. `terragraph apply` refuses that node rather than applying without inspecting the plan. Every state-storage backend — `s3`, `gcs`, `azurerm`, `http`, `local`, ... — keeps state remote but runs operations locally, and is unaffected. HCP support is left for later; until then, store state in one of those backends.
 
 ## What a node may do: `approve`
 
@@ -103,7 +103,7 @@ If this is intended, declare approve = "all" on that node, or re-run with --appr
 
 This is checked whether or not anyone is watching. An interactive `yes` answers "apply this plan", not "override the standing policy"; overriding it is `--approve=all`, which is a visible, deliberate act.
 
-The check reads the saved plan file, so it cannot run on the `remote`/`cloud` backends, which have none. Those nodes log a warning saying the level was not enforced rather than quietly appearing to have passed.
+The check reads the saved plan file, so it cannot run on the `remote`/`cloud` backends, which have none. Apply stops on those nodes with an error rather than applying uninspected.
 
 ## Approval
 

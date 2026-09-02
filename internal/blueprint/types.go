@@ -154,7 +154,7 @@ type Runtime struct {
 	Name string
 	// Binary is the command terragraph shells out to for this runtime: a bare name resolved on PATH ("tofu"), or an absolute path to pin an exact install ("/opt/terraform_1.5.7"). Always required: a runtime block with nothing else set would have no identity to select by.
 	Binary string
-	// Version is an optional, free-form version constraint (e.g. ">= 1.8.0") describing which versions of Binary this runtime block is meant to represent. It is never resolved against the binary's actual reported version (no subprocess is run to check it); its only effect today is to distinguish one declared runtime identity from another for the incremental-apply cache (see cache.Combine), so bumping Binary within the range you already documented here doesn't look like a change, but pointing Binary at a different install does.
+	// Version is an optional, free-form version constraint (e.g. ">= 1.8.0") describing which versions of Binary this runtime block is meant to represent. It is never resolved against the binary's actual reported version (no subprocess is run to check it); it is documentation-only.
 	Version string
 	// Default marks this runtime as the blueprint-wide fallback for a node that resolves to no runtime at all (no explicit Node.Runtime, no cascaded Use.Runtime). At most one Runtime in a given parse scope may set this; parsing rejects a second. Only a Default set at the blueprint's own top level is ever consulted this way (see engine.Engine.runtimeFor); one set inside a group's own source directory is validated the same way but never applied automatically, so instantiating that group elsewhere can never silently change its nodes' toolchain out from under the caller.
 	Default bool
