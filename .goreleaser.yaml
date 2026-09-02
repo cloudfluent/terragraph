@@ -1,0 +1,49 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+# Release pipeline for tagged pushes (see .github/workflows/release.yml). Validate locally with
+# `goreleaser check`, or build without publishing via `goreleaser release --snapshot --clean`.
+version: 2
+
+project_name: terragraph
+
+builds:
+  - id: terragraph
+    main: ./cmd/terragraph
+    binary: terragraph
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  - id: terragraph
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    # Matches the OS/arch spelling `uname -s`/`uname -m` report, so an install script can build the
+    # download name straight from `uname` output without a lookup table.
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else }}{{ .Arch }}{{ end }}
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  github:
+    owner: cloudfluent
+    name: terragraph

@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: fmt, lint, docs, build, test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.1"
+          cache: true
+
+      # Runs the exact same fmt-check + lint + docs-check + build + test steps a contributor runs locally via `make check`: one place defines what "passing" means, so CI never drifts from the local dev loop.
+      - run: make check
+
+  cross-platform:
+    name: build & test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.1"
+          cache: true
+
+      # Not `make check`: fmt/lint/docs-check are OS-independent and already covered by the check job above on ubuntu-latest. This job exists only to catch OS-specific build/runtime bugs (path separators, process spawning) that cross-compiling for a target from one OS, as the release pipeline does, can't catch.
+      - run: go build ./...
+      - run: go test ./... -race

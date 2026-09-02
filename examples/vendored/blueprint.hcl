@@ -1,0 +1,3 @@
+node "vpc" {
+  source = "git::file:///Users/seungmun/Workspaces/cloudfluent/internal/terragraph/examples/vendored/upstream?ref=v1.0.0"
+}

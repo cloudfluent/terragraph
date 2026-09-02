@@ -1,0 +1,11 @@
+/terragraph
+/bin/
+/dist/
+*.auto.tfvars.json
+.terraform/
+.terraform.lock.hcl
+terraform.tfstate
+terraform.tfstate.backup
+*.tfplan
+.terragraph/
+examples/basic/stacks/*/vpc_id.txt
