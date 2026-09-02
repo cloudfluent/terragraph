@@ -39,7 +39,7 @@ Nodes are grouped into levels: every node in level *i* only depends on nodes in 
 
 `--parallelism` is in-process. Two separate `terragraph` invocations against the same blueprint are a different boundary: they would otherwise share `.terragraph/` (tfvars, `TF_DATA_DIR`, saved plans) and, for nodes that reuse a module `source`, that directory's `.terraform.lock.hcl`.
 
-`plan`, `apply`, `destroy` and `vendor` take an exclusive lock at `<blueprint dir>/.terragraph/lock` for the whole run. A second process targeting the same blueprint prints a one-line wait notice and blocks until the first exits; the lock is released on process exit, so a crash cannot leave it stuck. `validate`, `graph` and `language-server` do not take it, so they stay usable while a long apply is running. One process that already holds the lock can still use `--parallelism` inside the run.
+`plan`, `apply`, `destroy` and `vendor` take an exclusive lock at `<blueprint dir>/.terragraph/lock` before they read or write module files, and hold it until the command exits. A second process targeting the same blueprint prints a one-line wait notice and blocks until the first exits; the lock is released on process exit, so a crash cannot leave it stuck. `validate`, `graph` and `language-server` do not take it, so they stay usable while a long apply is running. One process that already holds the lock can still use `--parallelism` inside the run.
 
 ## Deciding whether a node needs applying
 

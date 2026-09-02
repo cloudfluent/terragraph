@@ -24,6 +24,100 @@ const (
 // graph/validate only read the blueprint, so they must not take the process lock
 // an apply is already holding — otherwise `terragraph graph` during a long apply
 // would hang for the whole run.
+func TestLoad_DoesNotCreateLockFile(t *testing.T) {
+	baseDir := t.TempDir()
+	writeModule(t, filepath.Join(baseDir, "module"))
+	path := writeBlueprint(t, baseDir, `node "a" { source = "./module" }`)
+	if _, err := Load(path, exec.Terraform, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(baseDir, ".terragraph", "lock")); !os.IsNotExist(err) {
+		t.Fatalf("Load should not take the blueprint lock, stat error = %v", err)
+	}
+}
+
+func TestLoadLocked_CreatesLockFile(t *testing.T) {
+	baseDir := t.TempDir()
+	writeModule(t, filepath.Join(baseDir, "module"))
+	path := writeBlueprint(t, baseDir, `node "a" { source = "./module" }`)
+	e, unlock, err := LoadLocked(path, exec.Terraform, &bytes.Buffer{}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("LoadLocked: %v", err)
+	}
+	defer unlock()
+	if _, err := os.Stat(filepath.Join(e.BaseDir, ".terragraph", "lock")); err != nil {
+		t.Fatalf("LoadLocked should acquire the blueprint lock: %v", err)
+	}
+}
+
+const loadLockedChildEnv = "TG_LOADLOCKED_CHILD"
+
+func TestLoadLocked_WaitsForHeldLock(t *testing.T) {
+	if os.Getenv(lockHoldEnv) == "1" {
+		runLockHoldHelper()
+		return
+	}
+	if os.Getenv(loadLockedChildEnv) == "1" {
+		_, unlock, err := LoadLocked(os.Getenv(applyBlueprintEnv), exec.Terraform, os.Stdout, os.Stderr)
+		if err != nil {
+			_, _ = os.Stderr.WriteString(err.Error() + "\n")
+			os.Exit(1)
+		}
+		unlock()
+		os.Exit(0)
+	}
+
+	baseDir := t.TempDir()
+	writeModule(t, filepath.Join(baseDir, "module"))
+	blueprintPath := writeBlueprint(t, baseDir, `node "a" { source = "./module" }`)
+	e, err := Load(blueprintPath, exec.Terraform, &bytes.Buffer{}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	held := filepath.Join(baseDir, "held")
+	release := filepath.Join(baseDir, "release")
+	holder := osexec.Command(os.Args[0], "-test.run=^"+t.Name()+"$")
+	holder.Env = append(os.Environ(),
+		lockHoldEnv+"=1",
+		lockDirEnv+"="+e.BaseDir,
+		lockHeldEnv+"="+held,
+		lockReleaseEnv+"="+release,
+	)
+	if err := holder.Start(); err != nil {
+		t.Fatalf("starting lock holder: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.WriteFile(release, []byte("1"), 0o644)
+		_ = holder.Process.Kill()
+	})
+	waitForTestFile(t, held)
+
+	var stderr lockedBuffer
+	child := osexec.Command(os.Args[0], "-test.run=^"+t.Name()+"$")
+	child.Env = append(os.Environ(),
+		loadLockedChildEnv+"=1",
+		applyBlueprintEnv+"="+blueprintPath,
+	)
+	child.Stdout = os.Stdout
+	child.Stderr = &stderr
+	if err := child.Start(); err != nil {
+		t.Fatalf("starting LoadLocked child: %v", err)
+	}
+	t.Cleanup(func() { _ = child.Process.Kill() })
+	waitForWaitNotice(t, &stderr)
+
+	if err := os.WriteFile(release, []byte("1"), 0o644); err != nil {
+		t.Fatalf("releasing helper: %v", err)
+	}
+	if err := child.Wait(); err != nil {
+		t.Fatalf("LoadLocked child: %v", err)
+	}
+	if err := holder.Wait(); err != nil {
+		t.Fatalf("lock holder: %v", err)
+	}
+}
+
 func TestValidate_DoesNotTakeRunLock(t *testing.T) {
 	if os.Getenv(lockHoldEnv) == "1" {
 		runLockHoldHelper()

@@ -1,7 +1,8 @@
 // Package runlock serializes terragraph processes that mutate a blueprint's working state.
 //
-// plan, apply, destroy and vendor all write under the same blueprint directory:
-// engine-managed files in .terragraph/ (tfvars, TF_DATA_DIR, saved plans) and, for
+// plan, apply, destroy and vendor all read and write under the same blueprint
+// directory: module sources (graph.Build inspects .tf files; vendor rewrites them),
+// engine-managed files in .terragraph/ (tfvars, TF_DATA_DIR, saved plans), and, for
 // nodes that share a module source, that directory's .terraform.lock.hcl. Two CLI
 // processes doing that at once is a lost-update race, not in-process --parallelism
 // (which is one process, one lock, and still allowed).

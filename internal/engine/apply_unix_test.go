@@ -552,10 +552,11 @@ node "b" {
 
 func runApplyChild(t *testing.T) {
 	t.Helper()
-	e, err := Load(os.Getenv(applyBlueprintEnv), exec.Binary(os.Getenv(applyBinaryEnv)), os.Stdout, os.Stderr)
+	e, unlock, err := LoadLocked(os.Getenv(applyBlueprintEnv), exec.Binary(os.Getenv(applyBinaryEnv)), os.Stdout, os.Stderr)
 	if err != nil {
-		t.Fatalf("Load: %v", err)
+		t.Fatalf("LoadLocked: %v", err)
 	}
+	defer unlock()
 	if err := e.Apply(Options{Node: os.Getenv(applyChildNodeEnv), AutoApprove: true}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}

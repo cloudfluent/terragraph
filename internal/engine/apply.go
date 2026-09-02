@@ -15,11 +15,11 @@ import (
 //
 // When the plan does report changes, that plan is what gets applied (see Runner.PlanChanges/ApplyPlan), so a node refreshes once and the change made is the change that was planned. A second terragraph process targeting the same blueprint waits for this run to finish (see lockRun).
 func (e *Engine) Apply(opts Options) error {
-	lock, err := e.lockRun()
+	unlock, err := e.lockRun()
 	if err != nil {
 		return err
 	}
-	defer func() { _ = lock.Close() }()
+	defer unlock()
 
 	e.logger().Info("apply starting", "node", opts.Node, "parallelism", opts.parallelism(), "autoApprove", opts.AutoApprove)
 
