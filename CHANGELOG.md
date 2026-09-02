@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.5](https://github.com/cloudfluent/terragraph/compare/v0.1.4...v0.1.5) (2026-09-02)
+
+
+### Features
+
+* allow multiple input mappings on one edge via nested input blocks ([#23](https://github.com/cloudfluent/terragraph/issues/23)) ([ac1035e](https://github.com/cloudfluent/terragraph/commit/ac1035e100cf6ac27dfeba233f225fd3f4981527))
+* reject multiple data edges targeting the same input ([#19](https://github.com/cloudfluent/terragraph/issues/19)) ([8c92632](https://github.com/cloudfluent/terragraph/commit/8c92632b927da0308f42e4d93ae6033189a44c1b))
+
 ## [0.1.4](https://github.com/cloudfluent/terragraph/compare/v0.1.3...v0.1.4) (2026-09-02)
 
 
