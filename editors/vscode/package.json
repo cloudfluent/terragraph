@@ -1,7 +1,7 @@
 {
   "name": "terragraph-vscode",
-  "displayName": "Terragraph Blueprint",
-  "description": "IntelliSense for Terragraph Blueprint HCL files",
+  "displayName": "Terragraph",
+  "description": "Language support and IntelliSense for Terragraph configuration files",
   "version": "0.1.0",
   "publisher": "cloudfluent",
   "license": "Apache-2.0",
