@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.2](https://github.com/cloudfluent/terragraph/compare/v0.1.1...v0.1.2) (2026-09-02)
+
+
+### Bug Fixes
+
+* strip quarantine in a cask preflight, not postflight ([3f32b32](https://github.com/cloudfluent/terragraph/commit/3f32b32b355f366b3e1a4f8dd13c6e588106a52f))
+
+
+### Documentation
+
+* remove dangling doc-sync file reference from CONTRIBUTING ([a010b94](https://github.com/cloudfluent/terragraph/commit/a010b941a34dca95a64dd0a7eb57fbdf12c33126))
+
 ## [0.1.1](https://github.com/cloudfluent/terragraph/compare/v0.1.0...v0.1.1) (2026-09-02)
 
 
