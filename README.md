@@ -1,6 +1,6 @@
 # TerraGraph
 
-[![CI](https://github.com/cloudfluent/terragraph/actions/workflows/ci.yml/badge.svg)](https://github.com/cloudfluent/terragraph/actions/workflows/ci.yml) [![Go Reference](https://pkg.go.dev/badge/github.com/cloudfluent/terragraph.svg)](https://pkg.go.dev/github.com/cloudfluent/terragraph) [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/cloudfluent/terragraph)](https://github.com/cloudfluent/terragraph/releases) [![CI](https://github.com/cloudfluent/terragraph/actions/workflows/ci.yml/badge.svg)](https://github.com/cloudfluent/terragraph/actions/workflows/ci.yml) [![Go Reference](https://pkg.go.dev/badge/github.com/cloudfluent/terragraph.svg)](https://pkg.go.dev/github.com/cloudfluent/terragraph) [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
 Split infrastructure into independent Terraform modules and you lose the one thing a single workspace gives you for free: one module's outputs feeding straight into another's inputs. In practice that gap gets closed by hand: `apply`, copy a value, paste it into the next module's tfvars, repeat. Or it gets closed by giving up the isolation and merging everything back into one giant workspace.
 
