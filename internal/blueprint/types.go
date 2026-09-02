@@ -63,6 +63,8 @@ type Node struct {
 	Vars          map[string]any
 	// Runtime is the name of a `runtime` block this node explicitly selects (e.g. "tofu" for `runtime = runtime.tofu`), or "" if unset. An unset Runtime doesn't necessarily mean "the built-in terraform default": it may still inherit a runtime from an enclosing Use.Runtime override, or from the blueprint's own default-marked runtime block; see graph.Node.Runtime for the fully resolved value and engine.Engine.runtimeFor for where CLI/built-in fallback is applied on top of that.
 	Runtime string
+	// Env is optional and sets extra environment variables the node's terraform/tofu subprocess runs with (e.g. AWS_PROFILE, AWS_REGION for a per-account/per-region provider configuration), keyed by variable name. Unlike Runtime (a single, replace-on-override choice), Env cascades by merging: a node's own Env entries win key-by-key over whatever an enclosing Use.Env contributed, rather than discarding the rest of it. See graph.Node.Env for the fully merged result an enclosing chain of Use.Env overrides plus this node's own Env produces.
+	Env map[string]string
 }
 
 // IsRemote reports whether a Node's Source should be vendored rather than resolved as a local path relative to the blueprint. Mirrors Terraform's own module.source rule: anything not starting with "./" or "../" is remote.
@@ -88,6 +90,8 @@ type Use struct {
 	Source    string // directory containing the group definition
 	// Runtime, if set, names a `runtime` block (resolved in the scope that wrote this Use, not the group's own) that becomes the default for every node this instantiation expands to, unless that node sets its own explicit Runtime. A group definition deliberately has no equivalent of its own: which toolchain deploys a reusable group is a fact about where it's instantiated, not about the group itself, so only the instantiation site (here) can set it, never the group body.
 	Runtime string
+	// Env, if set, contributes extra environment variables to every node this instantiation expands to (e.g. which AWS account/region/role the whole group deploys into), merged under whatever ambient Env an enclosing Use.Env already contributed and merged under, key-by-key, by each internal node's own Env in turn. Like Runtime, a group definition has no equivalent of its own: which account a reusable group deploys into is a fact about where it's instantiated.
+	Env map[string]string
 }
 
 // ExportInput is one input port a group exposes to the outside. To may list more than one internal target: a single exposed value sometimes needs to fan out to several internal nodes that each independently need it, and, unlike execution ordering (which is inferable from the internal graph's shape), there is no way to infer that fan-out from structure alone, so the group author must declare it explicitly.

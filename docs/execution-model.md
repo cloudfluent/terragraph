@@ -37,7 +37,7 @@ Nodes are grouped into levels: every node in level *i* only depends on nodes in 
 
 ## Incremental apply
 
-`terragraph apply` skips a node (without touching Terraform at all beyond reading its existing outputs) when none of its source files, resolved input values, or resolved runtime (see [blueprint.md](blueprint.md#choosing-a-runtime-per-node-runtime)) have changed since its last recorded apply (a content-addressed cache, in the spirit of Bazel/Nix, stored at `<blueprint dir>/.terragraph/cache.json`). Pass `--force` to bypass it and always re-run. `terragraph destroy` drops the cache entries for whatever it actually tore down, so a later `apply` never mistakes now-gone infrastructure for "unchanged."
+`terragraph apply` skips a node (without touching Terraform at all beyond reading its existing outputs) when none of its source files, resolved input values, resolved runtime (see [blueprint.md](blueprint.md#choosing-a-runtime-per-node-runtime)), or resolved `env` (see [blueprint.md](blueprint.md#extra-environment-variables-per-node-env)) have changed since its last recorded apply (a content-addressed cache, in the spirit of Bazel/Nix, stored at `<blueprint dir>/.terragraph/cache.json`). Pass `--force` to bypass it and always re-run. `terragraph destroy` drops the cache entries for whatever it actually tore down, so a later `apply` never mistakes now-gone infrastructure for "unchanged."
 
 ## Known limitation
 

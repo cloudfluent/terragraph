@@ -73,6 +73,24 @@ A node that names no `runtime` falls back, in order: the blueprint's own `defaul
 
 A `use` block can also set `runtime`, which becomes the default for every node the group instance expands to (unless one of those nodes names its own): see [groups.md](groups.md#choosing-a-runtime-for-an-instance). A group's own definition has no equivalent: which toolchain deploys a reusable group is a fact about where it's instantiated, not about the group itself.
 
+## Extra environment variables per node (`env`)
+
+Different nodes sometimes need to run against different cloud accounts, regions, or roles: the same module deployed once per tenant, each into its own AWS account, say. That's ordinarily expressed through whatever a provider block reads from its environment (`AWS_PROFILE`, `AWS_REGION`, `ARM_SUBSCRIPTION_ID`, and so on), so a node can set `env` to add exactly those, keyed by variable name:
+
+```hcl
+node "prod_vpc" {
+  source = "./stacks/vpc"
+  env = {
+    AWS_PROFILE = "prod"
+    AWS_REGION  = "ap-northeast-2"
+  }
+}
+```
+
+Each entry is added to (and, on a name collision, overrides) the terragraph process's own environment before the node's `terraform`/`tofu` subprocess starts; nothing else about that environment is touched. This is deliberately the *only* mechanism terragraph offers for this: it never generates or edits a `provider` block (see [execution-model.md](execution-model.md#how-values-are-passed) for the same "no generated `.tf`" rule applied to values), so a provider that needs something `env` can't express (a literal value baked into the config, say) should instead read it as a variable and take that through an edge or `vars`, the same as any other input.
+
+Unlike `runtime` (a single choice that replaces whatever it inherits), `env` merges: a `use` block's own `env` (see [groups.md](groups.md#choosing-a-runtime-for-an-instance)) contributes defaults to every node the instance expands to, and a node's own `env` only overrides the specific keys it names, leaving everything else it inherited in place. `env` also counts toward the incremental-apply cache (see [execution-model.md](execution-model.md#incremental-apply)) for the same reason `runtime` does: changing which account/region a node targets is a real change, even when its source and resolved input values are not.
+
 ## Literal input values (`vars`)
 
 An edge wires one node's real output into another node's input, but not every input is another node's data. Sometimes a value is just this node's own: "this tenant's CIDR is 10.16.0.0/20." A node can set `vars` to supply such values directly, keyed by variable name:

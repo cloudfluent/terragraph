@@ -54,6 +54,7 @@ var nodeSchema = &hcl.BodySchema{
 		{Name: "backend_config", Required: false},
 		{Name: "vars", Required: false},
 		{Name: "runtime", Required: false},
+		{Name: "env", Required: false},
 	},
 }
 
@@ -78,6 +79,7 @@ var useSchema = &hcl.BodySchema{
 		{Name: "as", Required: true},
 		{Name: "source", Required: true},
 		{Name: "runtime", Required: false},
+		{Name: "env", Required: false},
 	},
 }
 
@@ -489,12 +491,22 @@ func parseNodeBlock(block *hcl.Block) (Node, error) {
 		return Node{}, err
 	}
 
+	var env map[string]string
+	if attr, ok := content.Attributes["env"]; ok {
+		var err error
+		env, err = parseEnvAttr(attr)
+		if err != nil {
+			return Node{}, err
+		}
+	}
+
 	return Node{
 		Name:          block.Labels[0],
 		Source:        val.AsString(),
 		BackendConfig: backendConfig,
 		Vars:          vars,
 		Runtime:       runtime,
+		Env:           env,
 	}, nil
 }
 
@@ -531,12 +543,22 @@ func parseVarsAttr(attr *hcl.Attribute) (map[string]any, error) {
 
 // parseBackendConfig evaluates the optional backend_config attribute, an object/map of string keys to string values passed through as `terraform init -backend-config=key=value` flags.
 func parseBackendConfig(attr *hcl.Attribute) (map[string]string, error) {
+	return parseStringMapAttr(attr, "backend_config")
+}
+
+// parseEnvAttr evaluates the optional env attribute (see Node.Env/Use.Env), an object/map of environment variable name to value.
+func parseEnvAttr(attr *hcl.Attribute) (map[string]string, error) {
+	return parseStringMapAttr(attr, "env")
+}
+
+// parseStringMapAttr evaluates attr as an object/map of string keys to string values, the shape shared by backend_config and env. attrName only labels error messages with which attribute failed.
+func parseStringMapAttr(attr *hcl.Attribute, attrName string) (map[string]string, error) {
 	val, diags := attr.Expr.Value(nil)
 	if diags.HasErrors() {
-		return nil, fmt.Errorf("%s: backend_config must be a literal map of strings: %s", attr.Range, diags.Error())
+		return nil, fmt.Errorf("%s: %s must be a literal map of strings: %s", attr.Range, attrName, diags.Error())
 	}
 	if !val.CanIterateElements() {
-		return nil, fmt.Errorf("%s: backend_config must be a map/object of strings", attr.Range)
+		return nil, fmt.Errorf("%s: %s must be a map/object of strings", attr.Range, attrName)
 	}
 
 	result := make(map[string]string)
@@ -545,10 +567,10 @@ func parseBackendConfig(attr *hcl.Attribute) (map[string]string, error) {
 		k, v := it.Element()
 		str, err := convert.Convert(v, cty.String)
 		if err != nil {
-			return nil, fmt.Errorf("%s: backend_config.%s must be a string: %s", attr.Range, k.AsString(), err)
+			return nil, fmt.Errorf("%s: %s.%s must be a string: %s", attr.Range, attrName, k.AsString(), err)
 		}
 		if str.IsNull() {
-			return nil, fmt.Errorf("%s: backend_config.%s must not be null", attr.Range, k.AsString())
+			return nil, fmt.Errorf("%s: %s.%s must not be null", attr.Range, attrName, k.AsString())
 		}
 		result[k.AsString()] = str.AsString()
 	}
@@ -792,11 +814,21 @@ func parseUseBlock(block *hcl.Block) (Use, error) {
 		return Use{}, err
 	}
 
+	var env map[string]string
+	if attr, ok := content.Attributes["env"]; ok {
+		var err error
+		env, err = parseEnvAttr(attr)
+		if err != nil {
+			return Use{}, err
+		}
+	}
+
 	return Use{
 		GroupName: block.Labels[0],
 		As:        asVal.AsString(),
 		Source:    sourceVal.AsString(),
 		Runtime:   runtime,
+		Env:       env,
 	}, nil
 }
 

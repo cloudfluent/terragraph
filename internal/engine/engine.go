@@ -94,7 +94,30 @@ func (e *Engine) dataDir(name string) string {
 
 // runner builds a Runner for internal, non-buffered use (reading an upstream node's already-applied outputs). The per-node runners used for the actual plan/apply/destroy commands (see plan.go/apply.go/destroy.go) are built separately, against that node's own buffered output writer.
 func (e *Engine) runner(name string) *exec.Runner {
-	return &exec.Runner{Binary: e.runtimeFor(name).Binary, Dir: e.nodeDir(name), DataDir: e.dataDir(name), Stdout: e.Stdout, Stderr: e.Stderr}
+	return &exec.Runner{Binary: e.runtimeFor(name).Binary, Dir: e.nodeDir(name), DataDir: e.dataDir(name), Env: e.envFor(name), Stdout: e.Stdout, Stderr: e.Stderr}
+}
+
+// envFor returns name's fully resolved extra environment variables (see graph.Node.Env): whatever an enclosing Use.Env cascade contributed, already merged with the node's own Env. Unlike runtimeFor, there is no further CLI-level fallback layer to apply on top: env has no CLI equivalent, so whatever the graph already resolved is final.
+func (e *Engine) envFor(name string) map[string]string {
+	return e.Graph.Nodes[name].Env
+}
+
+// envIdentity folds a resolved environment into the single opaque string cache.Combine mixes into a node's incremental-apply hash, alongside resolvedRuntime.cacheIdentity (see apply.go): a value like AWS_PROFILE or AWS_REGION can change which real infrastructure "apply" targets even when source/vars/runtime are all unchanged, so a change here must never look "unchanged" either. Sorted so the result (and therefore the hash) is deterministic regardless of map iteration order.
+func envIdentity(env map[string]string) string {
+	keys := make([]string, 0, len(env))
+	for k := range env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	var b strings.Builder
+	for _, k := range keys {
+		b.WriteString(k)
+		b.WriteByte('=')
+		b.WriteString(env[k])
+		b.WriteByte(0)
+	}
+	return b.String()
 }
 
 // resolvedRuntime is what a node actually runs against once every fallback layer has been applied (see runtimeFor): which binary to shell out to, and, for the incremental-apply cache only (see cache.Combine), the declared version constraint that identity carries, if any. Version is never checked against the binary's real reported version; it exists purely so a node's cache entry changes when its declared runtime identity changes.
