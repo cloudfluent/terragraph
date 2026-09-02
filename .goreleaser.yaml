@@ -34,6 +34,24 @@ archives:
       {{- if eq .Arch "amd64" }}x86_64
       {{- else }}{{ .Arch }}{{ end }}
 
+# brews (Formula-based) is deprecated by GoReleaser in favor of homebrew_casks; see
+# https://goreleaser.com/deprecations/#brews.
+homebrew_casks:
+  - name: terragraph
+    directory: Casks
+    repository:
+      owner: cloudfluent
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: "https://github.com/cloudfluent/terragraph"
+    description: "Graph-based orchestration for independent Terraform/OpenTofu root modules"
+    license: "Apache-2.0"
+    binaries:
+      - terragraph
+    generate_completions_from_executable:
+      executable: terragraph
+      shell_parameter_format: cobra
+
 # release-please owns the changelog (release-please-config.json's changelog-sections) and writes it as the release body before this pipeline ever runs; generating one here too would just be discarded (see release.mode below) or, worse, fail the whole release over an unrelated changelog error.
 changelog:
   disable: true
