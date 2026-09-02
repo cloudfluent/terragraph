@@ -61,6 +61,10 @@ type Node struct {
 	Source        string
 	BackendConfig map[string]string
 	Vars          map[string]any
+	// Runtime is the name of a `runtime` block this node explicitly selects (e.g. "tofu" for `runtime = runtime.tofu`), or "" if unset. An unset Runtime doesn't necessarily mean "the built-in terraform default": it may still inherit a runtime from an enclosing Use.Runtime override, or from the blueprint's own default-marked runtime block; see graph.Node.Runtime for the fully resolved value and engine.Engine.runtimeFor for where CLI/built-in fallback is applied on top of that.
+	Runtime string
+	// Env is optional and sets extra environment variables the node's terraform/tofu subprocess runs with (e.g. AWS_PROFILE, AWS_REGION for a per-account/per-region provider configuration), keyed by variable name. Unlike Runtime (a single, replace-on-override choice), Env cascades by merging: a node's own Env entries win key-by-key over whatever an enclosing Use.Env contributed, rather than discarding the rest of it. See graph.Node.Env for the fully merged result an enclosing chain of Use.Env overrides plus this node's own Env produces.
+	Env map[string]string
 }
 
 // IsRemote reports whether a Node's Source should be vendored rather than resolved as a local path relative to the blueprint. Mirrors Terraform's own module.source rule: anything not starting with "./" or "../" is remote.
@@ -84,6 +88,10 @@ type Use struct {
 	GroupName string // which group (by its declared name) to instantiate
 	As        string // instance name; the namespace prefix for this instantiation
 	Source    string // directory containing the group definition
+	// Runtime, if set, names a `runtime` block (resolved in the scope that wrote this Use, not the group's own) that becomes the default for every node this instantiation expands to, unless that node sets its own explicit Runtime. A group definition deliberately has no equivalent of its own: which toolchain deploys a reusable group is a fact about where it's instantiated, not about the group itself, so only the instantiation site (here) can set it, never the group body.
+	Runtime string
+	// Env, if set, contributes extra environment variables to every node this instantiation expands to (e.g. which AWS account/region/role the whole group deploys into), merged under whatever ambient Env an enclosing Use.Env already contributed and merged under, key-by-key, by each internal node's own Env in turn. Like Runtime, a group definition has no equivalent of its own: which account a reusable group deploys into is a fact about where it's instantiated.
+	Env map[string]string
 }
 
 // ExportInput is one input port a group exposes to the outside. To may list more than one internal target: a single exposed value sometimes needs to fan out to several internal nodes that each independently need it, and, unlike execution ordering (which is inferable from the internal graph's shape), there is no way to infer that fan-out from structure alone, so the group author must declare it explicitly.
@@ -125,6 +133,32 @@ type VendorConfig struct {
 	ManifestFile string
 }
 
+// TFVarsLocation selects where the engine writes the ephemeral, per-node variable file it resolves from data edges and vars before every plan/apply/destroy (see exec.WriteTFVars). Neither location relies on Terraform's *.auto.tfvars.json auto-loading; the engine always passes the file explicitly via -var-file, since auto-loading a name that's ever shared by two nodes (e.g. two instances of the same module source) has no way to keep their values apart.
+type TFVarsLocation string
+
+const (
+	// TFVarsLocationWorkdir writes to <blueprint dir>/.terragraph/vars/<node>.tfvars.json, next to the node's other engine-managed state (tfdata, cache.json). Never touches the module's own directory, so nothing needs adding to a module's .gitignore, and a node reused by several instances (backend_config) never collides on a shared filename. This is the default: it keeps every module directory clean, which matters most for a module that's vendored (read-only, not yours to add a .gitignore entry to) or reused across many near-identical instances.
+	TFVarsLocationWorkdir TFVarsLocation = "workdir"
+	// TFVarsLocationModule writes to <node source>/.terragraph.<node>.tfvars.json, alongside the module's own .tf files, for teams that want a node's resolved input values visible next to its source while debugging. Requires the module's .gitignore to exclude the engine-managed pattern (see docs/execution-model.md); terragraph validate warns about a stale file left behind by a since-renamed or since-removed node sharing that directory, but never deletes one on your behalf.
+	TFVarsLocationModule TFVarsLocation = "module"
+)
+
+// Runtime is a named, reusable selection of which terraform/tofu binary a node runs against and (optionally) which version of it is expected. Declared once at the top level of a blueprint (or, for a group's own internal nodes, once in that group's own source directory: see Node.Runtime) and referenced by name from as many nodes/uses as need it, rather than repeating a binary path on every node.
+type Runtime struct {
+	Name string
+	// Binary is the command terragraph shells out to for this runtime: a bare name resolved on PATH ("tofu"), or an absolute path to pin an exact install ("/opt/terraform_1.5.7"). Always required: a runtime block with nothing else set would have no identity to select by.
+	Binary string
+	// Version is an optional, free-form version constraint (e.g. ">= 1.8.0") describing which versions of Binary this runtime block is meant to represent. It is never resolved against the binary's actual reported version (no subprocess is run to check it); its only effect today is to distinguish one declared runtime identity from another for the incremental-apply cache (see cache.Combine), so bumping Binary within the range you already documented here doesn't look like a change, but pointing Binary at a different install does.
+	Version string
+	// Default marks this runtime as the blueprint-wide fallback for a node that resolves to no runtime at all (no explicit Node.Runtime, no cascaded Use.Runtime). At most one Runtime in a given parse scope may set this; parsing rejects a second. Only a Default set at the blueprint's own top level is ever consulted this way (see engine.Engine.runtimeFor); one set inside a group's own source directory is validated the same way but never applied automatically, so instantiating that group elsewhere can never silently change its nodes' toolchain out from under the caller.
+	Default bool
+}
+
+// TFVarsConfig customizes where the engine writes per-node ephemeral variable files. Project-wide only, like VendorConfig: a single blueprint uses one location for every node, so a node's resolved inputs are always found the same way regardless of which node you're looking at.
+type TFVarsConfig struct {
+	Location TFVarsLocation
+}
+
 // Blueprint is the fully parsed graph topology: nodes and the edges between them, plus any group definitions and instantiations. It carries no resource configuration, only wiring.
 type Blueprint struct {
 	Nodes  []Node
@@ -133,6 +167,30 @@ type Blueprint struct {
 	Uses   []Use
 	// Vendor is nil when the blueprint declares no `vendor` block. Use the VendorDirectory/VendorManifestFile accessors, never this field directly, so callers never need to branch on nil.
 	Vendor *VendorConfig
+	// TFVars is nil when the blueprint declares no `tfvars` block. Use the TFVarsLocation accessor, never this field directly, so callers never need to branch on nil.
+	TFVars *TFVarsConfig
+	// Runtimes holds every `runtime` block declared in this parse scope (see Runtime). Parsing guarantees names are unique and at most one sets Default within this same slice; it does not guarantee every Node.Runtime/Use.Runtime reference in this scope resolves to a name here until validateRuntimes has run, which ParseFile/ParseDir always do before returning.
+	Runtimes []Runtime
+}
+
+// RuntimeByName returns the runtime declared with this name in this parse scope, or false if none matches.
+func (b *Blueprint) RuntimeByName(name string) (Runtime, bool) {
+	for _, rt := range b.Runtimes {
+		if rt.Name == name {
+			return rt, true
+		}
+	}
+	return Runtime{}, false
+}
+
+// DefaultRuntime returns this scope's Default-marked runtime, or false if none is marked (see Runtime.Default).
+func (b *Blueprint) DefaultRuntime() (Runtime, bool) {
+	for _, rt := range b.Runtimes {
+		if rt.Default {
+			return rt, true
+		}
+	}
+	return Runtime{}, false
 }
 
 // VendorDirectory returns the effective vendor directory: the blueprint's configured value, or DefaultVendorDirectory.
@@ -149,6 +207,14 @@ func (b *Blueprint) VendorManifestFile() string {
 		return b.Vendor.ManifestFile
 	}
 	return DefaultVendorManifestFile
+}
+
+// TFVarsLocation returns the effective tfvars location: the blueprint's configured value, or TFVarsLocationWorkdir.
+func (b *Blueprint) TFVarsLocation() TFVarsLocation {
+	if b.TFVars != nil && b.TFVars.Location != "" {
+		return b.TFVars.Location
+	}
+	return TFVarsLocationWorkdir
 }
 
 // NodeByName returns the node with the given name, or false if absent.

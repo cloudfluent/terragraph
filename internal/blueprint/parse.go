@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/hashicorp/hcl/v2"
@@ -21,6 +22,8 @@ var topSchema = &hcl.BodySchema{
 		{Type: "group", LabelNames: []string{"name"}},
 		{Type: "use", LabelNames: []string{"name"}},
 		{Type: "vendor"},
+		{Type: "tfvars"},
+		{Type: "runtime", LabelNames: []string{"name"}},
 	},
 }
 
@@ -31,11 +34,27 @@ var vendorSchema = &hcl.BodySchema{
 	},
 }
 
+var tfvarsSchema = &hcl.BodySchema{
+	Attributes: []hcl.AttributeSchema{
+		{Name: "location", Required: false},
+	},
+}
+
+var runtimeSchema = &hcl.BodySchema{
+	Attributes: []hcl.AttributeSchema{
+		{Name: "binary", Required: true},
+		{Name: "version", Required: false},
+		{Name: "default", Required: false},
+	},
+}
+
 var nodeSchema = &hcl.BodySchema{
 	Attributes: []hcl.AttributeSchema{
 		{Name: "source", Required: true},
 		{Name: "backend_config", Required: false},
 		{Name: "vars", Required: false},
+		{Name: "runtime", Required: false},
+		{Name: "env", Required: false},
 	},
 }
 
@@ -59,6 +78,8 @@ var useSchema = &hcl.BodySchema{
 	Attributes: []hcl.AttributeSchema{
 		{Name: "as", Required: true},
 		{Name: "source", Required: true},
+		{Name: "runtime", Required: false},
+		{Name: "env", Required: false},
 	},
 }
 
@@ -83,11 +104,15 @@ func ParseFile(path string) (*Blueprint, error) {
 	seenNodes := map[string]bool{}
 	seenGroups := map[string]bool{}
 	seenUses := map[string]bool{}
+	seenRuntimes := map[string]bool{}
 
-	if err := parseOneFile(path, bp, seenNodes, seenGroups, seenUses); err != nil {
+	if err := parseOneFile(path, bp, seenNodes, seenGroups, seenUses, seenRuntimes); err != nil {
 		return nil, err
 	}
 	if err := validateEdges(bp, seenNodes, seenUses); err != nil {
+		return nil, err
+	}
+	if err := validateRuntimes(bp); err != nil {
 		return nil, err
 	}
 	return bp, nil
@@ -104,17 +129,21 @@ func ParseDir(dir string) (*Blueprint, error) {
 	seenNodes := map[string]bool{}
 	seenGroups := map[string]bool{}
 	seenUses := map[string]bool{}
+	seenRuntimes := map[string]bool{}
 
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".hcl") {
 			continue
 		}
-		if err := parseOneFile(filepath.Join(dir, e.Name()), bp, seenNodes, seenGroups, seenUses); err != nil {
+		if err := parseOneFile(filepath.Join(dir, e.Name()), bp, seenNodes, seenGroups, seenUses, seenRuntimes); err != nil {
 			return nil, err
 		}
 	}
 
 	if err := validateEdges(bp, seenNodes, seenUses); err != nil {
+		return nil, err
+	}
+	if err := validateRuntimes(bp); err != nil {
 		return nil, err
 	}
 	return bp, nil
@@ -134,8 +163,8 @@ func LoadPath(path string) (*Blueprint, string, error) {
 	return bp, filepath.Dir(path), err
 }
 
-// parseOneFile parses one HCL file and merges its node/edge/group/use/vendor blocks into bp, checking name and vendor-block uniqueness against the caller-supplied seen-sets (shared across every file being merged into the same bp). Edge endpoint validation deliberately does not happen here: it happens once, in validateEdges, after every file that will ever contribute to bp has been merged, so an edge in one file may reference a node or use instance declared in another.
-func parseOneFile(path string, bp *Blueprint, seenNodes, seenGroups, seenUses map[string]bool) error {
+// parseOneFile parses one HCL file and merges its node/edge/group/use/vendor/runtime blocks into bp, checking name and vendor/tfvars-block uniqueness against the caller-supplied seen-sets (shared across every file being merged into the same bp). Edge endpoint and runtime-reference validation deliberately does not happen here: it happens once, in validateEdges/validateRuntimes, after every file that will ever contribute to bp has been merged, so a reference in one file may target a node, use instance, or runtime declared in another.
+func parseOneFile(path string, bp *Blueprint, seenNodes, seenGroups, seenUses, seenRuntimes map[string]bool) error {
 	src, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("reading blueprint file: %w", err)
@@ -199,9 +228,75 @@ func parseOneFile(path string, bp *Blueprint, seenNodes, seenGroups, seenUses ma
 				return err
 			}
 			bp.Vendor = vc
+		case "tfvars":
+			if bp.TFVars != nil {
+				return fmt.Errorf("%s: duplicate tfvars block", block.DefRange)
+			}
+			tc, err := parseTFVarsBlock(block)
+			if err != nil {
+				return err
+			}
+			bp.TFVars = tc
+		case "runtime":
+			rt, err := parseRuntimeBlock(block)
+			if err != nil {
+				return err
+			}
+			if seenRuntimes[rt.Name] {
+				return fmt.Errorf("%s: duplicate runtime %q", block.DefRange, rt.Name)
+			}
+			seenRuntimes[rt.Name] = true
+			bp.Runtimes = append(bp.Runtimes, rt)
 		}
 	}
 
+	return nil
+}
+
+// validateRuntimes checks every Node.Runtime/Use.Runtime reference declared anywhere in this parse scope (including inside a group body: a group's own internal nodes/uses resolve runtime names against this same scope, its own source directory, never the outer blueprint that instantiates it, exactly like a node reference itself is scoped) against bp.Runtimes, and rejects more than one Runtime marking itself Default within this scope.
+func validateRuntimes(bp *Blueprint) error {
+	defaults := 0
+	for _, rt := range bp.Runtimes {
+		if rt.Default {
+			defaults++
+		}
+	}
+	if defaults > 1 {
+		return fmt.Errorf("blueprint declares %d runtime blocks with default = true; at most one is allowed", defaults)
+	}
+
+	checkRef := func(kind, owner, ref string) error {
+		if ref == "" {
+			return nil
+		}
+		if _, ok := bp.RuntimeByName(ref); !ok {
+			return fmt.Errorf("%s %q: runtime.%s is not declared in this blueprint", kind, owner, ref)
+		}
+		return nil
+	}
+
+	for _, n := range bp.Nodes {
+		if err := checkRef("node", n.Name, n.Runtime); err != nil {
+			return err
+		}
+	}
+	for _, u := range bp.Uses {
+		if err := checkRef("use", u.As, u.Runtime); err != nil {
+			return err
+		}
+	}
+	for _, g := range bp.Groups {
+		for _, n := range g.Nodes {
+			if err := checkRef("node", g.Name+"."+n.Name, n.Runtime); err != nil {
+				return err
+			}
+		}
+		for _, u := range g.Uses {
+			if err := checkRef("use", g.Name+"."+u.As, u.Runtime); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 
@@ -259,10 +354,109 @@ func parseVendorBlock(block *hcl.Block) (*VendorConfig, error) {
 	return vc, nil
 }
 
+// parseTFVarsBlock parses the optional `tfvars { }` block: project-wide selection of where the engine writes each node's resolved input values (see Blueprint.TFVarsLocation). A missing block, or a missing location field within it, means TFVarsLocationWorkdir applies.
+func parseTFVarsBlock(block *hcl.Block) (*TFVarsConfig, error) {
+	content, diags := block.Body.Content(tfvarsSchema)
+	if diags.HasErrors() {
+		return nil, fmt.Errorf("%s: %s", block.DefRange, diags.Error())
+	}
+
+	tc := &TFVarsConfig{}
+
+	if attr, ok := content.Attributes["location"]; ok {
+		val, diags := attr.Expr.Value(nil)
+		if diags.HasErrors() || val.Type() != cty.String {
+			return nil, fmt.Errorf("%s: location must be a literal string", attr.Range)
+		}
+		loc := TFVarsLocation(val.AsString())
+		if loc != TFVarsLocationWorkdir && loc != TFVarsLocationModule {
+			return nil, fmt.Errorf("%s: location must be %q or %q, got %q", attr.Range, TFVarsLocationWorkdir, TFVarsLocationModule, loc)
+		}
+		tc.Location = loc
+	}
+
+	return tc, nil
+}
+
+// parseRuntimeBlock parses a `runtime "<name>" { }` block (see Runtime).
+func parseRuntimeBlock(block *hcl.Block) (Runtime, error) {
+	content, diags := block.Body.Content(runtimeSchema)
+	if diags.HasErrors() {
+		return Runtime{}, fmt.Errorf("%s: %s", block.DefRange, diags.Error())
+	}
+	if err := validateName("runtime", block.Labels[0], block.DefRange); err != nil {
+		return Runtime{}, err
+	}
+
+	binaryAttr := content.Attributes["binary"]
+	binaryVal, diags := binaryAttr.Expr.Value(nil)
+	if diags.HasErrors() || binaryVal.Type() != cty.String {
+		return Runtime{}, fmt.Errorf("%s: binary must be a literal string", binaryAttr.Range)
+	}
+	if binaryVal.AsString() == "" {
+		return Runtime{}, fmt.Errorf("%s: binary must not be empty", binaryAttr.Range)
+	}
+
+	rt := Runtime{Name: block.Labels[0], Binary: binaryVal.AsString()}
+
+	if attr, ok := content.Attributes["version"]; ok {
+		val, diags := attr.Expr.Value(nil)
+		if diags.HasErrors() || val.Type() != cty.String {
+			return Runtime{}, fmt.Errorf("%s: version must be a literal string", attr.Range)
+		}
+		rt.Version = val.AsString()
+	}
+
+	if attr, ok := content.Attributes["default"]; ok {
+		val, diags := attr.Expr.Value(nil)
+		if diags.HasErrors() || val.Type() != cty.Bool {
+			return Runtime{}, fmt.Errorf("%s: default must be a literal bool", attr.Range)
+		}
+		rt.Default = val.True()
+	}
+
+	return rt, nil
+}
+
+// parseRuntimeRef evaluates the optional runtime attribute on a node or use block: a reference of the form runtime.<name> (see Runtime), naming a `runtime` block declared elsewhere in this same parse scope. Returns "" if attr is nil (the attribute was absent).
+func parseRuntimeRef(attr *hcl.Attribute) (string, error) {
+	if attr == nil {
+		return "", nil
+	}
+
+	traversal, diags := hcl.AbsTraversalForExpr(attr.Expr)
+	if diags.HasErrors() || len(traversal) != 2 {
+		return "", fmt.Errorf("%s: runtime must be a reference of the form runtime.<name>", attr.Range)
+	}
+	root, ok := traversal[0].(hcl.TraverseRoot)
+	if !ok || root.Name != "runtime" {
+		return "", fmt.Errorf("%s: runtime must be a reference of the form runtime.<name>", attr.Range)
+	}
+	name, err := traverseAttrName(traversal[1], attr.Range)
+	if err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
+// nameRegexp constrains node, group, and use-instance names to characters that are always safe as a single path segment on every platform terragraph targets. Both tfvars locations turn a node's name into part of a filename (see Blueprint.TFVarsLocation), and a use instance's "as" name becomes a namespace prefix joined with "." into every node it expands (see graph.Build); an unconstrained name could otherwise inject a path separator or a ".." segment.
+var nameRegexp = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
+// validateName checks a node/group/use name against nameRegexp, labeling the error with what kind of name it is (for a clearer message) and the HCL range that declared it.
+func validateName(kind, name string, rng hcl.Range) error {
+	if !nameRegexp.MatchString(name) {
+		return fmt.Errorf("%s: %s name %q is invalid: must contain only letters, digits, underscores, and hyphens", rng, kind, name)
+	}
+	return nil
+}
+
 func parseNodeBlock(block *hcl.Block) (Node, error) {
 	content, diags := block.Body.Content(nodeSchema)
 	if diags.HasErrors() {
 		return Node{}, fmt.Errorf("%s: %s", block.DefRange, diags.Error())
+	}
+	if err := validateName("node", block.Labels[0], block.DefRange); err != nil {
+		return Node{}, err
 	}
 
 	sourceAttr := content.Attributes["source"]
@@ -292,11 +486,27 @@ func parseNodeBlock(block *hcl.Block) (Node, error) {
 		}
 	}
 
+	runtime, err := parseRuntimeRef(content.Attributes["runtime"])
+	if err != nil {
+		return Node{}, err
+	}
+
+	var env map[string]string
+	if attr, ok := content.Attributes["env"]; ok {
+		var err error
+		env, err = parseEnvAttr(attr)
+		if err != nil {
+			return Node{}, err
+		}
+	}
+
 	return Node{
 		Name:          block.Labels[0],
 		Source:        val.AsString(),
 		BackendConfig: backendConfig,
 		Vars:          vars,
+		Runtime:       runtime,
+		Env:           env,
 	}, nil
 }
 
@@ -333,12 +543,22 @@ func parseVarsAttr(attr *hcl.Attribute) (map[string]any, error) {
 
 // parseBackendConfig evaluates the optional backend_config attribute, an object/map of string keys to string values passed through as `terraform init -backend-config=key=value` flags.
 func parseBackendConfig(attr *hcl.Attribute) (map[string]string, error) {
+	return parseStringMapAttr(attr, "backend_config")
+}
+
+// parseEnvAttr evaluates the optional env attribute (see Node.Env/Use.Env), an object/map of environment variable name to value.
+func parseEnvAttr(attr *hcl.Attribute) (map[string]string, error) {
+	return parseStringMapAttr(attr, "env")
+}
+
+// parseStringMapAttr evaluates attr as an object/map of string keys to string values, the shape shared by backend_config and env. attrName only labels error messages with which attribute failed.
+func parseStringMapAttr(attr *hcl.Attribute, attrName string) (map[string]string, error) {
 	val, diags := attr.Expr.Value(nil)
 	if diags.HasErrors() {
-		return nil, fmt.Errorf("%s: backend_config must be a literal map of strings: %s", attr.Range, diags.Error())
+		return nil, fmt.Errorf("%s: %s must be a literal map of strings: %s", attr.Range, attrName, diags.Error())
 	}
 	if !val.CanIterateElements() {
-		return nil, fmt.Errorf("%s: backend_config must be a map/object of strings", attr.Range)
+		return nil, fmt.Errorf("%s: %s must be a map/object of strings", attr.Range, attrName)
 	}
 
 	result := make(map[string]string)
@@ -347,10 +567,10 @@ func parseBackendConfig(attr *hcl.Attribute) (map[string]string, error) {
 		k, v := it.Element()
 		str, err := convert.Convert(v, cty.String)
 		if err != nil {
-			return nil, fmt.Errorf("%s: backend_config.%s must be a string: %s", attr.Range, k.AsString(), err)
+			return nil, fmt.Errorf("%s: %s.%s must be a string: %s", attr.Range, attrName, k.AsString(), err)
 		}
 		if str.IsNull() {
-			return nil, fmt.Errorf("%s: backend_config.%s must not be null", attr.Range, k.AsString())
+			return nil, fmt.Errorf("%s: %s.%s must not be null", attr.Range, attrName, k.AsString())
 		}
 		result[k.AsString()] = str.AsString()
 	}
@@ -493,6 +713,10 @@ func parseGroupBlock(block *hcl.Block) (Group, error) {
 		return Group{}, fmt.Errorf("%s: %s", block.DefRange, diags.Error())
 	}
 
+	if err := validateName("group", block.Labels[0], block.DefRange); err != nil {
+		return Group{}, err
+	}
+
 	g := Group{Name: block.Labels[0]}
 	seenNodes := map[string]bool{}
 	seenUses := map[string]bool{}
@@ -575,6 +799,9 @@ func parseUseBlock(block *hcl.Block) (Use, error) {
 	if diags.HasErrors() || asVal.Type() != cty.String {
 		return Use{}, fmt.Errorf("%s: as must be a literal string", asAttr.Range)
 	}
+	if err := validateName("use instance", asVal.AsString(), asAttr.Range); err != nil {
+		return Use{}, err
+	}
 
 	sourceAttr := content.Attributes["source"]
 	sourceVal, diags := sourceAttr.Expr.Value(nil)
@@ -582,10 +809,26 @@ func parseUseBlock(block *hcl.Block) (Use, error) {
 		return Use{}, fmt.Errorf("%s: source must be a literal string", sourceAttr.Range)
 	}
 
+	runtime, err := parseRuntimeRef(content.Attributes["runtime"])
+	if err != nil {
+		return Use{}, err
+	}
+
+	var env map[string]string
+	if attr, ok := content.Attributes["env"]; ok {
+		var err error
+		env, err = parseEnvAttr(attr)
+		if err != nil {
+			return Use{}, err
+		}
+	}
+
 	return Use{
 		GroupName: block.Labels[0],
 		As:        asVal.AsString(),
 		Source:    sourceVal.AsString(),
+		Runtime:   runtime,
+		Env:       env,
 	}, nil
 }
 

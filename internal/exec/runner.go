@@ -1,4 +1,4 @@
-// Package exec wraps the terraform/tofu CLI as a subprocess and writes the ephemeral variable files terragraph uses to pass values between nodes. It never generates or modifies any .tf file, only a gitignored *.auto.tfvars.json that Terraform loads automatically.
+// Package exec wraps the terraform/tofu CLI as a subprocess and writes the ephemeral variable file terragraph uses to pass values between nodes. It never generates or modifies any .tf file, only a gitignored, engine-managed tfvars file passed explicitly via -var-file (see WriteTFVars/VarFileArgs).
 package exec
 
 import (
@@ -25,15 +25,32 @@ type Runner struct {
 	Dir    string
 	// DataDir, if set, becomes TF_DATA_DIR: it isolates where Terraform keeps .terraform/ (downloaded providers and, critically, its cached backend configuration) away from Dir. Without this, two nodes that reuse the same module Source but configure different backend_config would collide: Terraform stores which backend it was last configured with inside .terraform/, keyed by working directory, so the second node's init would fail with "Backend configuration changed" even though -backend-config correctly gave it its own state. DataDir sidesteps that by giving every node its own .terraform/ regardless of whether Dir is shared.
 	DataDir string
-	Stdout  io.Writer
-	Stderr  io.Writer
+	// Env, if set, adds extra environment variables (e.g. AWS_PROFILE for a per-node provider configuration; see blueprint.Node.Env) on top of the process's own environment. A key here overrides any same-named variable already inherited, the same "last one wins" rule DataDir already relies on for TF_DATA_DIR.
+	Env    map[string]string
+	Stdout io.Writer
+	Stderr io.Writer
 }
 
 func (r *Runner) env() []string {
-	if r.DataDir == "" {
+	if r.DataDir == "" && len(r.Env) == 0 {
 		return nil // nil -> os/exec inherits os.Environ() as-is
 	}
-	return append(os.Environ(), "TF_DATA_DIR="+r.DataDir)
+
+	env := os.Environ()
+	if r.DataDir != "" {
+		env = append(env, "TF_DATA_DIR="+r.DataDir)
+	}
+
+	// Sorted so the resulting environment is deterministic across runs, matching Init's own reason for sorting backend-config flags: same inputs, same generated command every time.
+	keys := make([]string, 0, len(r.Env))
+	for k := range r.Env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		env = append(env, k+"="+r.Env[k])
+	}
+	return env
 }
 
 func (r *Runner) run(args ...string) error {

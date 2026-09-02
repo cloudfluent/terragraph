@@ -25,6 +25,9 @@ func (e *Engine) Apply(opts Options) error {
 		}
 
 		nodeDir := e.nodeDir(name)
+		rt := e.runtimeFor(name)
+		env := e.envFor(name)
+		executionIdentity := rt.cacheIdentity() + "\x00" + envIdentity(env)
 		sourceHash, err := cache.HashDir(nodeDir)
 		if err != nil {
 			return nil, fmt.Errorf("hashing source: %w", err)
@@ -33,13 +36,13 @@ func (e *Engine) Apply(opts Options) error {
 		if err != nil {
 			return nil, fmt.Errorf("hashing inputs: %w", err)
 		}
-		combined := cache.Combine(sourceHash, inputHash)
+		combined := cache.Combine(sourceHash, inputHash, executionIdentity)
 
 		storeMu.Lock()
 		prev, hasPrev := store[name]
 		storeMu.Unlock()
 
-		r := &exec.Runner{Binary: e.Binary, Dir: nodeDir, DataDir: e.dataDir(name), Stdout: out, Stderr: out}
+		r := &exec.Runner{Binary: rt.Binary, Dir: nodeDir, DataDir: e.dataDir(name), Env: env, Stdout: out, Stderr: out}
 
 		if !opts.Force && hasPrev && prev == combined {
 			e.logger().Debug("cache hit, skipping apply", "node", name)
@@ -51,13 +54,14 @@ func (e *Engine) Apply(opts Options) error {
 			return outputs, nil
 		}
 
-		if _, err := exec.WriteTFVars(nodeDir, vars); err != nil {
+		varsPath := e.tfVarsPath(name)
+		if _, err := exec.WriteTFVars(varsPath, vars); err != nil {
 			return nil, err
 		}
 		if err := r.Init(e.Graph.Nodes[name].BackendConfig); err != nil {
 			return nil, fmt.Errorf("init: %w", err)
 		}
-		if err := r.Apply(opts.AutoApprove); err != nil {
+		if err := r.Apply(opts.AutoApprove, exec.VarFileArgs(varsPath, vars)...); err != nil {
 			return nil, fmt.Errorf("apply: %w", err)
 		}
 
@@ -71,7 +75,7 @@ func (e *Engine) Apply(opts Options) error {
 		if err != nil {
 			return nil, fmt.Errorf("hashing source after apply: %w", err)
 		}
-		finalCombined := cache.Combine(finalSourceHash, inputHash)
+		finalCombined := cache.Combine(finalSourceHash, inputHash, executionIdentity)
 
 		storeMu.Lock()
 		store[name] = finalCombined

@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 
 	"github.com/cloudfluent/terragraph/internal/blueprint"
 	"github.com/cloudfluent/terragraph/internal/exec"
@@ -58,9 +61,12 @@ func Load(blueprintPath string, binary exec.Binary, stdout, stderr io.Writer) (*
 	}, nil
 }
 
-// Validate returns every structural problem found in the graph (missing ports, cycles, unresolved required variables). Check each Problem's IsError(): only errors should block graph/plan/apply/destroy, warnings are advisory.
+// Validate returns every structural problem found in the graph (missing ports, cycles, unresolved required variables) plus any tfvars orphan warnings (see tfVarsOrphans) and shared-source runtime conflict warnings (see runtimeConflicts). Check each Problem's IsError(): only errors should block graph/plan/apply/destroy, warnings are advisory.
 func (e *Engine) Validate() []graph.Problem {
-	return graph.Validate(e.Graph)
+	problems := graph.Validate(e.Graph)
+	problems = append(problems, e.tfVarsOrphans()...)
+	problems = append(problems, e.runtimeConflicts()...)
+	return problems
 }
 
 // TopoOrder returns node names in valid execution order.
@@ -88,5 +94,162 @@ func (e *Engine) dataDir(name string) string {
 
 // runner builds a Runner for internal, non-buffered use (reading an upstream node's already-applied outputs). The per-node runners used for the actual plan/apply/destroy commands (see plan.go/apply.go/destroy.go) are built separately, against that node's own buffered output writer.
 func (e *Engine) runner(name string) *exec.Runner {
-	return &exec.Runner{Binary: e.Binary, Dir: e.nodeDir(name), DataDir: e.dataDir(name), Stdout: e.Stdout, Stderr: e.Stderr}
+	return &exec.Runner{Binary: e.runtimeFor(name).Binary, Dir: e.nodeDir(name), DataDir: e.dataDir(name), Env: e.envFor(name), Stdout: e.Stdout, Stderr: e.Stderr}
+}
+
+// envFor returns name's fully resolved extra environment variables (see graph.Node.Env): whatever an enclosing Use.Env cascade contributed, already merged with the node's own Env. Unlike runtimeFor, there is no further CLI-level fallback layer to apply on top: env has no CLI equivalent, so whatever the graph already resolved is final.
+func (e *Engine) envFor(name string) map[string]string {
+	return e.Graph.Nodes[name].Env
+}
+
+// envIdentity folds a resolved environment into the single opaque string cache.Combine mixes into a node's incremental-apply hash, alongside resolvedRuntime.cacheIdentity (see apply.go): a value like AWS_PROFILE or AWS_REGION can change which real infrastructure "apply" targets even when source/vars/runtime are all unchanged, so a change here must never look "unchanged" either. Sorted so the result (and therefore the hash) is deterministic regardless of map iteration order.
+func envIdentity(env map[string]string) string {
+	keys := make([]string, 0, len(env))
+	for k := range env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	var b strings.Builder
+	for _, k := range keys {
+		b.WriteString(k)
+		b.WriteByte('=')
+		b.WriteString(env[k])
+		b.WriteByte(0)
+	}
+	return b.String()
+}
+
+// resolvedRuntime is what a node actually runs against once every fallback layer has been applied (see runtimeFor): which binary to shell out to, and, for the incremental-apply cache only (see cache.Combine), the declared version constraint that identity carries, if any. Version is never checked against the binary's real reported version; it exists purely so a node's cache entry changes when its declared runtime identity changes.
+type resolvedRuntime struct {
+	Binary  exec.Binary
+	Version string
+}
+
+// runtimeFor resolves which runtime a node actually runs against, applying each fallback layer in order until one supplies an answer: (1) the node's own resolved blueprint.Runtime, already following the blueprint.Node.Runtime -> enclosing blueprint.Use.Runtime cascade (see graph.Node.Runtime); (2) the top-level blueprint's own Default-marked runtime, if it declared one (deliberately never a group's own default: see blueprint.Runtime.Default); (3) e.Binary, the CLI's --tofu flag or its own built-in terraform default. A CLI flag can only ever fill a gap nothing else spoke to, never override an explicit choice made in the blueprint.
+func (e *Engine) runtimeFor(name string) resolvedRuntime {
+	if rt := e.Graph.Nodes[name].Runtime; rt != nil {
+		return resolvedRuntime{Binary: exec.Binary(rt.Binary), Version: rt.Version}
+	}
+	if e.Blueprint != nil {
+		if rt, ok := e.Blueprint.DefaultRuntime(); ok {
+			return resolvedRuntime{Binary: exec.Binary(rt.Binary), Version: rt.Version}
+		}
+	}
+	return resolvedRuntime{Binary: e.Binary}
+}
+
+// cacheIdentity folds a resolvedRuntime into the single opaque string cache.Combine mixes into a node's incremental-apply hash (see apply.go): distinct runtimes must never look "unchanged" to each other. Binary alone would already catch a switch between two commands/paths; Version is folded in too so redeclaring the same binary under a different documented version constraint also counts as a change, even though nothing is actually probed to confirm the binary matches either string.
+func (r resolvedRuntime) cacheIdentity() string {
+	return string(r.Binary) + "\x00" + r.Version
+}
+
+// runtimeConflicts warns about two or more nodes that share a module directory (see Node.BackendConfig, the mechanism for reusing one Source across instances) but resolve to different binaries. They also share that directory's single .terraform.lock.hcl, and Terraform/OpenTofu each rewrite it to their own registry host on every init (registry.terraform.io vs registry.opentofu.org), so whichever node happened to init last wins the file underneath the other, and neither node's incremental-apply cache (which hashes the module directory, lock file included) ever settles on a consistent "unchanged" verdict. Nothing else in the model can trigger this: every node's own .terraform/ metadata is already isolated per node (see dataDir), so this is specific to the shared-Source pattern.
+func (e *Engine) runtimeConflicts() []graph.Problem {
+	byDir := map[string][]string{}
+	names := make([]string, 0, len(e.Graph.Nodes))
+	for name := range e.Graph.Nodes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		dir := e.Graph.Nodes[name].Dir
+		byDir[dir] = append(byDir[dir], name)
+	}
+
+	dirs := make([]string, 0, len(byDir))
+	for dir := range byDir {
+		dirs = append(dirs, dir)
+	}
+	sort.Strings(dirs)
+
+	var problems []graph.Problem
+	for _, dir := range dirs {
+		nodesInDir := byDir[dir]
+		if len(nodesInDir) < 2 {
+			continue
+		}
+		first := e.runtimeFor(nodesInDir[0]).Binary
+		mixed := false
+		for _, n := range nodesInDir[1:] {
+			if e.runtimeFor(n).Binary != first {
+				mixed = true
+				break
+			}
+		}
+		if mixed {
+			problems = append(problems, graph.Problem{
+				Severity: graph.SeverityWarning,
+				Message: fmt.Sprintf(
+					"%s: nodes %s share this module directory but resolve to different runtimes; their .terraform.lock.hcl will conflict on every apply",
+					dir, strings.Join(nodesInDir, ", "),
+				),
+			})
+		}
+	}
+	return problems
+}
+
+// tfVarsFileName is the base filename for a node's ephemeral tfvars file, shared by both TFVarsLocation modes: workdir puts it under its own per-node subdirectory, so this alone is unambiguous there, while module puts every node's file directly in the (possibly shared) module directory, where the leading "." plus this name is what keeps one node's file from colliding with another's (see tfVarsPath).
+func tfVarsFileName(name string) string {
+	return fmt.Sprintf(".terragraph.%s.tfvars.json", name)
+}
+
+// tfVarsPath returns where the engine writes name's resolved input values before every plan/apply/destroy, per the blueprint's configured blueprint.TFVarsLocation.
+func (e *Engine) tfVarsPath(name string) string {
+	if e.Blueprint.TFVarsLocation() == blueprint.TFVarsLocationModule {
+		return filepath.Join(e.nodeDir(name), tfVarsFileName(name))
+	}
+	return filepath.Join(e.BaseDir, ".terragraph", "vars", name+".tfvars.json")
+}
+
+// tfVarsOrphans warns about a stale module-location tfvars file left behind in a node's directory by a node that no longer exists under that name (renamed or removed from the blueprint), so it doesn't sit there indefinitely looking like current state. Only relevant for TFVarsLocationModule: the workdir location namespaces every node into its own subdirectory, so nothing there can ever go stale from another node's rename. Never deletes anything; a module directory (especially a vendored or otherwise not-yours-to-write one) is not terragraph's to clean up unasked.
+func (e *Engine) tfVarsOrphans() []graph.Problem {
+	if e.Blueprint == nil || e.Blueprint.TFVarsLocation() != blueprint.TFVarsLocationModule {
+		return nil
+	}
+
+	currentByDir := map[string]map[string]bool{}
+	for name, n := range e.Graph.Nodes {
+		if currentByDir[n.Dir] == nil {
+			currentByDir[n.Dir] = map[string]bool{}
+		}
+		currentByDir[n.Dir][name] = true
+	}
+
+	var problems []graph.Problem
+	dirs := make([]string, 0, len(currentByDir))
+	for dir := range currentByDir {
+		dirs = append(dirs, dir)
+	}
+	sort.Strings(dirs)
+
+	for _, dir := range dirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue // Build already stat'd this directory successfully; a failure here isn't worth failing validate over.
+		}
+		var stale []string
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			fname := entry.Name()
+			if !strings.HasPrefix(fname, ".terragraph.") || !strings.HasSuffix(fname, ".tfvars.json") {
+				continue
+			}
+			owner := strings.TrimSuffix(strings.TrimPrefix(fname, ".terragraph."), ".tfvars.json")
+			if !currentByDir[dir][owner] {
+				stale = append(stale, fname)
+			}
+		}
+		sort.Strings(stale)
+		for _, fname := range stale {
+			problems = append(problems, graph.Problem{
+				Severity: graph.SeverityWarning,
+				Message:  fmt.Sprintf("%s: belongs to no node in this blueprint; remove it if the node was renamed or deleted", filepath.Join(dir, fname)),
+			})
+		}
+	}
+	return problems
 }

@@ -1,7 +1,7 @@
 /terragraph
 /bin/
 /dist/
-*.auto.tfvars.json
+.terragraph.*.tfvars.json
 .terraform/
 .terraform.lock.hcl
 terraform.tfstate
