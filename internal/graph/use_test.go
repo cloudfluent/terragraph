@@ -403,3 +403,122 @@ edge {
 		t.Fatalf("message = %q, want %q", problems[0].Message, want)
 	}
 }
+
+// An edge with nested input blocks is a shorthand for one data edge per block, so each expanded edge resolves through the instance's export exactly as a separately written one would, fan-out included.
+func TestBuild_EdgeInputBlocksResolveThroughExport(t *testing.T) {
+	root := t.TempDir()
+
+	writeFixtureFile(t, filepath.Join(root, "modules/vpc/outputs.tf"), `
+output "vid"     { value = "vpc-123" }
+output "subnets" { value = ["a", "b"] }
+`)
+	writeFixtureFile(t, filepath.Join(root, "modules/a/variables.tf"), `
+variable "x" { type = string }
+variable "s" { type = list(string) }
+`)
+	writeFixtureFile(t, filepath.Join(root, "modules/b/variables.tf"), `
+variable "s" { type = list(string) }
+`)
+	writeFixtureFile(t, filepath.Join(root, "groups/g/group.hcl"), `
+group "g" {
+  node "a" { source = "../../modules/a" }
+  node "b" { source = "../../modules/b" }
+
+  export {
+    input "x"       { to = node.a.input.x }
+    input "subnets" { to = [node.a.input.s, node.b.input.s] }
+  }
+}
+`)
+	writeFixtureFile(t, filepath.Join(root, "blueprint.hcl"), `
+node "vpc" { source = "./modules/vpc" }
+use "g" {
+  as     = "inst"
+  source = "./groups/g"
+}
+edge {
+  from = node.vpc
+  to   = use.inst
+
+  input "x"       { from = output.vid }
+  input "subnets" { from = output.subnets }
+}
+`)
+
+	bp, err := blueprint.ParseFile(filepath.Join(root, "blueprint.hcl"))
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	g, err := Build(bp, root)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	got := map[string]string{}
+	for _, e := range g.Edges {
+		if e.From.Node == "vpc" {
+			got[e.To.Node+"."+e.To.Name] = e.From.Name
+		}
+	}
+	want := map[string]string{
+		"inst.a.x": "vid",
+		"inst.a.s": "subnets",
+		"inst.b.s": "subnets",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d expanded edges out of vpc, got %d: %+v", len(want), len(got), got)
+	}
+	for target, output := range want {
+		if got[target] != output {
+			t.Fatalf("%s fed by output %q, want %q (all: %+v)", target, got[target], output, got)
+		}
+	}
+
+	if problems := Validate(g); len(problems) != 0 {
+		t.Fatalf("expected a valid graph, got problems: %v", problems)
+	}
+}
+
+// The one-source-per-input rule applies to expanded edges like any other: writing the shorthand does not exempt an input from colliding with a separately declared edge.
+func TestBuild_EdgeInputBlockCollidesWithSeparateEdge(t *testing.T) {
+	root := t.TempDir()
+
+	writeFixtureFile(t, filepath.Join(root, "modules/vpc/outputs.tf"), `output "vid" { value = "x" }`)
+	writeFixtureFile(t, filepath.Join(root, "modules/other/outputs.tf"), `output "vid" { value = "y" }`)
+	writeFixtureFile(t, filepath.Join(root, "modules/a/variables.tf"), `variable "x" { type = string }`)
+	writeFixtureFile(t, filepath.Join(root, "blueprint.hcl"), `
+node "vpc"   { source = "./modules/vpc" }
+node "other" { source = "./modules/other" }
+node "a"     { source = "./modules/a" }
+
+edge {
+  from = node.vpc
+  to   = node.a
+
+  input "x" { from = output.vid }
+}
+
+edge {
+  from = node.other.output.vid
+  to   = node.a.input.x
+}
+`)
+
+	bp, err := blueprint.ParseFile(filepath.Join(root, "blueprint.hcl"))
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	g, err := Build(bp, root)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	problems := Validate(g)
+	if len(problems) != 1 || !problems[0].IsError() {
+		t.Fatalf("expected 1 Error for the colliding input, got %v", problems)
+	}
+	want := "node.a.input.x: set by more than one data edge; remove extras"
+	if problems[0].Message != want {
+		t.Fatalf("message = %q, want %q", problems[0].Message, want)
+	}
+}

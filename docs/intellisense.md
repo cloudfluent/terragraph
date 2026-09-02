@@ -1,19 +1,19 @@
 # VS Code IntelliSense
 
-Terragraph Blueprint 확장은 `blueprint.hcl`과 `group.hcl`을 편집할 때 언어 서버 기반 편집 기능을 제공합니다. VS Code Marketplace에서 **Terragraph Blueprint** 확장을 설치하면 바로 사용할 수 있습니다.
+The Terragraph Blueprint extension gives `blueprint.hcl` and `group.hcl` language-server-backed editing. Install **Terragraph Blueprint** from the VS Code Marketplace and it works immediately.
 
-확장에는 호환되는 언어 서버가 함께 포함되므로, IntelliSense만 사용하려고 `terragraph` CLI를 따로 설치할 필요는 없습니다.
+The extension bundles a compatible language server, so nothing here requires installing the `terragraph` CLI separately.
 
-## 자동 완성
+## Completion
 
-`Ctrl+Space` 또는 macOS의 `Control+Space`로 완성 목록을 열 수 있습니다.
+Open the completion list with `Ctrl+Space` (`Control+Space` on macOS).
 
-- 최상위 Blueprint block: `node`, `edge`, `runtime`, `group`, `use`, `vendor`, `tfvars`
-- 각 block에서 사용할 수 있는 속성: 예를 들어 node의 `source`, `vars`, `env`, `runtime`, `backend_config`
-- Terraform/OpenTofu 모듈의 input 변수와 output 값
-- 선언된 runtime 이름
+- Top-level blueprint blocks: `node`, `edge`, `runtime`, `group`, `use`, `vendor`, `tfvars`
+- The attributes each block accepts: a node's `source`, `vars`, `env`, `runtime`, `backend_config`, and so on
+- A Terraform/OpenTofu module's own input variables and outputs
+- Declared runtime names
 
-`vars = {}` 내부에서는 해당 node의 모듈이 선언한 input 변수만 제안됩니다. 다른 node의 결과를 넘길 때는 `vars`가 아니라 `edge`를 사용합니다.
+Inside `vars = {}` only the input variables the node's own module declares are suggested. To pass another node's result, use an `edge` rather than `vars`.
 
 ```hcl
 edge {
@@ -22,26 +22,40 @@ edge {
 }
 ```
 
-input 완성 항목에는 타입, required 여부, sensitive 여부, description이 표시됩니다. output은 이름과 description, sensitive 여부만 표시합니다.
+An input suggestion shows its type, whether it's required, whether it's sensitive, and its description. An output shows its name, description, and whether it's sensitive.
 
-## 정의로 이동
+An edge's nested `input` blocks (see [blueprint.md](blueprint.md#several-values-between-the-same-two-nodes-input)) complete the same way: the block label suggests the input variables declared by the edge's `to` node, and `from = output.` suggests the outputs of its `from` node. Neither reference repeats a node name, so both suggestion lists come from that edge's own endpoints.
 
-`node.vpc` 또는 `runtime.tofu`에서 `Cmd+Click`(macOS), `Ctrl+Click`(Windows/Linux), 또는 `F12`를 누르면 해당 선언으로 이동합니다. 같은 Blueprint 디렉터리의 다른 `.hcl` 파일에 선언한 node와 runtime도 찾습니다.
+```hcl
+edge {
+  from = node.vpc
+  to   = node.eks
 
-## 오류 표시
+  input "vpc_id" {
+    from = output.vpc_id
+  }
+}
+```
 
-다음과 같이 정적으로 확인할 수 있는 오류는 입력 중에도 빨간 밑줄로 표시됩니다.
+## Go to definition
 
-- 존재하지 않는 node 이름
-- 존재하지 않는 module input 또는 output 이름
-- `from`에서 input을 참조하거나 `to`에서 output을 참조한 경우
-- `vars`에 모듈에 없는 input 변수를 설정한 경우
+`Cmd+Click` (macOS), `Ctrl+Click` (Windows/Linux), or `F12` on `node.vpc` or `runtime.tofu` jumps to its declaration, including nodes and runtimes declared in another `.hcl` file in the same blueprint directory.
 
-오류 위에 마우스를 올리면 가능한 input 또는 output 이름을 확인할 수 있습니다.
+## Error reporting
 
-## 언어 서버 경로를 직접 지정하기
+Mistakes that can be found without evaluating anything are underlined as you type:
 
-보통은 필요하지 않지만, 개발 중인 바이너리나 특정 버전의 CLI를 사용하려면 VS Code 설정에 다음 값을 넣습니다.
+- A node name that isn't declared
+- A module input or output name that doesn't exist
+- A `from` referencing an input, or a `to` referencing an output
+- A `vars` entry the module has no such input variable for
+- An edge `input` block whose label isn't an input of the `to` node, or whose `from = output.<attr>` isn't an output of the `from` node
+
+Hovering an error lists the input or output names that are available.
+
+## Pointing at your own language server
+
+Rarely needed, but to use a binary you're developing or a specific CLI version, set this in your VS Code settings:
 
 ```json
 {
@@ -49,11 +63,11 @@ input 완성 항목에는 타입, required 여부, sensitive 여부, description
 }
 ```
 
-경로를 비우면 확장에 포함된 언어 서버를 다시 사용합니다.
+Clearing the path goes back to the language server bundled with the extension.
 
-## 자동 완성이 보이지 않을 때
+## When completion doesn't appear
 
-1. 파일 이름이 `blueprint.hcl` 또는 `group.hcl`인지 확인합니다.
-2. `Developer: Reload Window` 명령으로 VS Code 창을 다시 로드합니다.
-3. **View: Output**에서 `Terragraph Blueprint` 채널을 선택해 언어 서버 시작 오류를 확인합니다.
-4. 개발 중이라면 저장소 루트에서 `make build`를 실행한 뒤 Extension Development Host를 재시작합니다.
+1. Check the file is named `blueprint.hcl` or `group.hcl`.
+2. Reload the window with the `Developer: Reload Window` command.
+3. Under **View: Output**, select the `Terragraph Blueprint` channel and look for a language server startup error.
+4. If you're developing, run `make build` in the repository root and restart the Extension Development Host.

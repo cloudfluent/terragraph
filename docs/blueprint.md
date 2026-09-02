@@ -27,6 +27,33 @@ An input is a single slot: two data edges targeting the same input are a validat
 
 Node canvas layout (for the future visual editor) lives in a separate `blueprint.layout.json`, so moving a box never shows up in a `blueprint.hcl` diff.
 
+## Several values between the same two nodes (`input`)
+
+One `edge` block is one pair, which is faithful to "a flat list of facts" but noisy when two modules that already expose many flat variables need ten of them wired. An edge whose `from` and `to` are bare references may instead carry nested `input` blocks, the same shape as a group's [`export` input](groups.md):
+
+```hcl
+edge {
+  from = node.vpc
+  to   = node.eks
+
+  input "vpc_id" {
+    from = output.vpc_id
+  }
+
+  input "subnet_ids" {
+    from = output.private_subnet_ids
+  }
+}
+```
+
+The block label is the destination input on the `to` node, and `from` is a relative `output.<attr>` on the `from` node: the enclosing edge already names the source, so it is never repeated (an absolute `node.vpc.output.vpc_id` inside the block is rejected rather than accepted-if-it-matches). Duplicate labels on one edge are an error, the same as in an `export` block.
+
+This is shorthand and nothing more. With no `input` blocks the edge is the ordering-only edge above; with one or more, it expands at parse time into exactly that many ordinary data edges (`node.vpc.output.vpc_id` → `node.eks.input.vpc_id`, and so on), and everything downstream — the one-source-per-input rule below, `use` export resolution, cycle detection, the [incremental-apply cache](execution-model.md#incremental-apply) — treats them as if they had been written out one block each. An edge that already names a specific port on either side has exactly one value to carry, so combining that with `input` blocks is rejected.
+
+When you own both modules, the better reduction is still one `object`-typed output wired into one `object`-typed input by one ordinary edge (see [`vars`](#literal-input-values-vars) for the same argument applied to literal values). This shorthand is for the modules you don't get to reshape.
+
+Either endpoint may be a group instance (`use.<name>`), and each expanded edge then resolves through that instance's `export` exactly as a separately written one would, fan-out included: see [groups.md](groups.md).
+
 ## Reusing the same module across instances
 
 A node can optionally set `backend_config` to reuse one module `source` across multiple instances (e.g. the same `./stacks/vpc` for both `dev` and `prod`) without their state colliding:
