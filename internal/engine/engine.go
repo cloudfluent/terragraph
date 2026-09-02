@@ -87,6 +87,13 @@ func (e *Engine) cachePath() string {
 	return filepath.Join(e.BaseDir, ".terragraph", "cache.json")
 }
 
+// planPath returns where the engine has a node's verification plan written before deciding whether to apply it (see Runner.PlanChanges/ApplyPlan). It sits beside the engine's other managed per-node state rather than inside dataDir, which is Terraform's own (see dataDir): a plan file is terragraph's artifact, not part of Terraform's metadata.
+//
+// A saved plan embeds the resolved input values it was created with, in cleartext, exactly as the tfvars file does. It therefore lives under the same .terragraph/ directory that tfVarsPath's workdir default already requires be kept out of version control, and apply removes it once the run is over.
+func (e *Engine) planPath(name string) string {
+	return filepath.Join(e.BaseDir, ".terragraph", "plans", name+".tfplan")
+}
+
 // dataDir returns the node's isolated TF_DATA_DIR (see Runner.DataDir). Every node gets one, always (not just nodes with a shared Source), keeping the module's own directory untouched by tool-managed metadata and every node's .terraform/ state independent of the others'.
 func (e *Engine) dataDir(name string) string {
 	return filepath.Join(e.BaseDir, ".terragraph", "tfdata", name)

@@ -9,8 +9,8 @@ import (
 	"io"
 	"os"
 	osexec "os/exec"
+	"path/filepath"
 	"sort"
-	"strings"
 )
 
 // Binary selects which CLI terragraph shells out to.
@@ -20,9 +20,6 @@ const (
 	Terraform Binary = "terraform"
 	OpenTofu  Binary = "tofu"
 )
-
-// ErrUnsafeCachePlan reports that CLI argument injection could make the validation plan differ from apply.
-var ErrUnsafeCachePlan = errors.New("TF_CLI_ARGS overrides make cache validation unsafe")
 
 // Runner executes one binary against one node's working directory.
 type Runner struct {
@@ -67,27 +64,6 @@ func (r *Runner) run(args ...string) error {
 	return cmd.Run()
 }
 
-func hasNonEmptyEnvPrefix(env []string, prefix string) bool {
-	if env == nil {
-		env = os.Environ()
-	}
-	prefix = normalizeEnvKey(prefix)
-	values := make(map[string]string)
-	for _, entry := range env {
-		name, value, ok := strings.Cut(entry, "=")
-		name = normalizeEnvKey(name)
-		if ok && strings.HasPrefix(name, prefix) {
-			values[name] = value
-		}
-	}
-	for _, value := range values {
-		if value != "" {
-			return true
-		}
-	}
-	return false
-}
-
 // Init runs `terraform init`. backendConfig entries are passed as -backend-config=key=value flags (Terraform's partial backend configuration mechanism), which lets the same module be reused by multiple nodes with distinct backend settings (e.g. state file path) without generating or editing any .tf file. A nil/empty map passes no such flags, leaving the module's own backend configuration as-is.
 func (r *Runner) Init(backendConfig map[string]string) error {
 	args := []string{"init", "-input=false"}
@@ -109,11 +85,14 @@ func (r *Runner) Plan(extraArgs ...string) error {
 }
 
 // PlanChanges runs a refresh-enabled plan and distinguishes Terraform's detailed exit codes: zero means no changes, two means changes are present, and every other failure remains an error.
-func (r *Runner) PlanChanges(extraArgs ...string) (bool, error) {
-	if hasNonEmptyEnvPrefix(r.env(), "TF_CLI_ARGS") {
-		return false, ErrUnsafeCachePlan
+//
+// planPath, if non-empty, is passed as -out, so the plan this verdict is based on can be handed straight to ApplyPlan. That, not any inspection of the environment, is what keeps a following apply from describing a different desired configuration than the plan that authorized it: `apply <plan file>` re-reads nothing. -refresh=true stays explicit for the same reason it always did, and is what makes that safe: a command-line flag beats the same flag arriving through TF_CLI_ARGS_plan, so an ambient -refresh=false cannot turn this into a stale-state check that reports "no changes" against infrastructure nobody looked at.
+func (r *Runner) PlanChanges(planPath string, extraArgs ...string) (bool, error) {
+	args := []string{"plan", "-input=false", "-refresh=true", "-detailed-exitcode"}
+	if planPath != "" {
+		args = append(args, "-out="+planPath)
 	}
-	args := append([]string{"plan", "-input=false", "-refresh=true", "-detailed-exitcode"}, extraArgs...)
+	args = append(args, extraArgs...)
 	err := r.run(args...)
 	if err == nil {
 		return false, nil
@@ -123,6 +102,44 @@ func (r *Runner) PlanChanges(extraArgs ...string) (bool, error) {
 		return true, nil
 	}
 	return false, err
+}
+
+// ApplyPlan applies a plan file previously written by PlanChanges. It deliberately passes no -var-file and no -auto-approve: a saved plan already carries the variable values it was created with (re-supplying them is at best ignored, and an error for -var), and Terraform never asks for approval when applying one, so the decision to call this *is* the approval.
+func (r *Runner) ApplyPlan(planPath string) error {
+	return r.run("apply", "-input=false", planPath)
+}
+
+// BackendType reports the backend a previous Init configured for this node, read from the metadata Terraform writes into its own data directory. An empty string means no backend was recorded, which is the ordinary case for a module that declares no backend block at all (the implicit local backend).
+//
+// This exists only to tell the two enhanced backends apart from every other one: `remote` and `cloud` run the plan on HCP rather than locally, and cannot write a local plan file for ApplyPlan to consume. Every state-storage backend (s3, gcs, azurerm, http, ...) keeps state remote but runs operations here, so it is indistinguishable from local for this purpose. A read failure is reported as "unknown", not as an error: the caller's fallback is the two-invocation path that worked before saved plans existed, so guessing wrong costs a round trip, never correctness.
+func (r *Runner) BackendType() string {
+	dir := r.DataDir
+	if dir == "" {
+		dir = filepath.Join(r.Dir, ".terraform")
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "terraform.tfstate"))
+	if err != nil {
+		return ""
+	}
+	var meta struct {
+		Backend struct {
+			Type string `json:"type"`
+		} `json:"backend"`
+	}
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return ""
+	}
+	return meta.Backend.Type
+}
+
+// SupportsSavedPlan reports whether this node's backend can write the plan file the saved-plan apply path depends on. See BackendType: only the enhanced backends cannot.
+func (r *Runner) SupportsSavedPlan() bool {
+	switch r.BackendType() {
+	case "remote", "cloud":
+		return false
+	default:
+		return true
+	}
 }
 
 func (r *Runner) Apply(autoApprove bool, extraArgs ...string) error {

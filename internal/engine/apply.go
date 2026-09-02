@@ -1,16 +1,17 @@
 package engine
 
 import (
-	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"sync"
 
 	"github.com/cloudfluent/terragraph/internal/cache"
 	"github.com/cloudfluent/terragraph/internal/exec"
 )
 
-// Apply runs `terraform apply` over the selected nodes in topological order, feeding each node's real outputs into whatever downstream nodes are applied later in the same run. A node whose local cache identity is unchanged is skipped only when a refreshed plan also reports no changes, unless opts.Force is set.
+// Apply runs `terraform apply` over the selected nodes in topological order, feeding each node's real outputs into whatever downstream nodes are applied later in the same run. A node whose local cache identity is unchanged is skipped only when a refreshed plan also reports no changes, unless opts.Force is set. When that plan does report changes, it is the plan that gets applied, so the two never disagree about what the node should look like.
 func (e *Engine) Apply(opts Options) error {
 	e.logger().Info("apply starting", "node", opts.Node, "parallelism", opts.parallelism(), "force", opts.Force)
 	store, err := cache.Load(e.cachePath())
@@ -51,18 +52,34 @@ func (e *Engine) Apply(opts Options) error {
 		r := &exec.Runner{Binary: rt.Binary, Dir: nodeDir, DataDir: e.dataDir(name), Env: env, Stdout: out, Stderr: out}
 		initialized := false
 
+		// appliedSavedPlan records that the verification plan below already did the applying, via ApplyPlan. Falling through to r.Apply in that case would re-plan against state the saved plan has just moved on from, which is the double refresh this whole path exists to avoid.
+		appliedSavedPlan := false
+
 		if !opts.Force && hasPrev && prev == combined {
 			e.logger().Debug("local cache hit, verifying with plan", "node", name)
 			if err := r.Init(e.Graph.Nodes[name].BackendConfig); err != nil {
 				return nil, fmt.Errorf("init: %w", err)
 			}
 			initialized = true
-			changes, err := r.PlanChanges(varFileArgs...)
-			if errors.Is(err, exec.ErrUnsafeCachePlan) {
-				e.logger().Debug("cache validation bypassed by TF_CLI_ARGS override", "node", name)
-			} else if err != nil {
+
+			// The plan is only worth saving if it can be handed to apply, and it can only be handed to apply if terragraph is the one deciding to apply it. Without -auto-approve, applying the saved plan would be applying without ever asking: Terraform never prompts for a plan file, and its prompt is currently the only approval an interactive run gets. So that case keeps the two-invocation path until approval has somewhere else to come from.
+			savedPlan := ""
+			if opts.AutoApprove && r.SupportsSavedPlan() {
+				savedPlan = e.planPath(name)
+				if err := os.MkdirAll(filepath.Dir(savedPlan), 0o755); err != nil {
+					return nil, fmt.Errorf("creating plan directory: %w", err)
+				}
+				// Removed however this node exits: the file holds resolved input values in cleartext, and a plan left behind is only ever stale by the next run.
+				defer func() { _ = os.Remove(savedPlan) }()
+			} else if opts.AutoApprove {
+				e.logger().Debug("backend cannot save a plan, applying separately", "node", name, "backend", r.BackendType())
+			}
+
+			changes, err := r.PlanChanges(savedPlan, varFileArgs...)
+			if err != nil {
 				return nil, fmt.Errorf("checking cached node plan: %w", err)
-			} else if !changes {
+			}
+			if !changes {
 				e.logger().Debug("plan confirmed cache hit, skipping apply", "node", name)
 				_, _ = fmt.Fprintf(out, "node %s: unchanged, skipping apply\n", name)
 				outputs, err := r.Outputs()
@@ -78,6 +95,13 @@ func (e *Engine) Apply(opts Options) error {
 				storeMu.Unlock()
 				return outputs, nil
 			}
+			if savedPlan != "" {
+				e.logger().Debug("applying the plan that reported the changes", "node", name)
+				if err := r.ApplyPlan(savedPlan); err != nil {
+					return nil, fmt.Errorf("apply: %w", err)
+				}
+				appliedSavedPlan = true
+			}
 		}
 
 		if !initialized {
@@ -85,8 +109,10 @@ func (e *Engine) Apply(opts Options) error {
 				return nil, fmt.Errorf("init: %w", err)
 			}
 		}
-		if err := r.Apply(opts.AutoApprove, varFileArgs...); err != nil {
-			return nil, fmt.Errorf("apply: %w", err)
+		if !appliedSavedPlan {
+			if err := r.Apply(opts.AutoApprove, varFileArgs...); err != nil {
+				return nil, fmt.Errorf("apply: %w", err)
+			}
 		}
 
 		outputs, err := r.Outputs()
