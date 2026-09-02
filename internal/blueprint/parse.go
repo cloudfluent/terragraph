@@ -55,6 +55,7 @@ var nodeSchema = &hcl.BodySchema{
 		{Name: "vars", Required: false},
 		{Name: "runtime", Required: false},
 		{Name: "env", Required: false},
+		{Name: "approve", Required: false},
 	},
 }
 
@@ -87,6 +88,7 @@ var useSchema = &hcl.BodySchema{
 		{Name: "source", Required: true},
 		{Name: "runtime", Required: false},
 		{Name: "env", Required: false},
+		{Name: "approve", Required: false},
 	},
 }
 
@@ -507,6 +509,11 @@ func parseNodeBlock(block *hcl.Block) (Node, error) {
 		}
 	}
 
+	approve, err := parseApproveAttr(content.Attributes["approve"])
+	if err != nil {
+		return Node{}, err
+	}
+
 	return Node{
 		Name:          block.Labels[0],
 		Source:        val.AsString(),
@@ -514,7 +521,27 @@ func parseNodeBlock(block *hcl.Block) (Node, error) {
 		Vars:          vars,
 		Runtime:       runtime,
 		Env:           env,
+		Approve:       approve,
 	}, nil
+}
+
+// parseApproveAttr evaluates the optional approve attribute, a bare literal string naming one of the levels (see Approve). Unset yields "", which means "inherit"; every layer that can supply one is applied later, in engine.
+func parseApproveAttr(attr *hcl.Attribute) (Approve, error) {
+	if attr == nil {
+		return "", nil
+	}
+	val, diags := attr.Expr.Value(nil)
+	if diags.HasErrors() {
+		return "", fmt.Errorf("%s: approve must be a literal string: %s", attr.Range, diags.Error())
+	}
+	if val.Type() != cty.String {
+		return "", fmt.Errorf("%s: approve must be a string", attr.Range)
+	}
+	a, err := ParseApprove(val.AsString())
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", attr.Range, err)
+	}
+	return a, nil
 }
 
 // parseVarsAttr evaluates the optional vars attribute: literal input values declared directly on a node, keyed by the target variable's name (see Node.Vars). The expression is evaluated with no variables or functions in scope, so a reference to another node's or use instance's output (e.g. node.vpc.output.vpc_id) fails to parse here exactly as intended: that kind of value must come from a real edge, not vars, since only an edge records the dependency the engine needs to sequence execution and wait for the value to actually exist.
@@ -899,12 +926,18 @@ func parseUseBlock(block *hcl.Block) (Use, error) {
 		}
 	}
 
+	approve, err := parseApproveAttr(content.Attributes["approve"])
+	if err != nil {
+		return Use{}, err
+	}
+
 	return Use{
 		GroupName: block.Labels[0],
 		As:        asVal.AsString(),
 		Source:    sourceVal.AsString(),
 		Runtime:   runtime,
 		Env:       env,
+		Approve:   approve,
 	}, nil
 }
 

@@ -35,9 +35,8 @@ node "vpc" {
 		t.Fatalf("Load: %v", err)
 	}
 
-	rt := e.runtimeFor("vpc")
-	if rt.Binary != "tofu" || rt.Version != ">= 1.8.0" {
-		t.Fatalf("unexpected runtime: %+v", rt)
+	if rt := e.runtimeFor("vpc"); rt != "tofu" {
+		t.Fatalf("unexpected runtime: %q", rt)
 	}
 }
 
@@ -58,9 +57,8 @@ node "vpc" { source = "./stacks/vpc" }
 		t.Fatalf("Load: %v", err)
 	}
 
-	rt := e.runtimeFor("vpc")
-	if rt.Binary != "/opt/terraform_1.5.7" {
-		t.Fatalf("expected the blueprint's default runtime to apply, got %+v", rt)
+	if rt := e.runtimeFor("vpc"); rt != "/opt/terraform_1.5.7" {
+		t.Fatalf("expected the blueprint's default runtime to apply, got %q", rt)
 	}
 }
 
@@ -76,9 +74,8 @@ node "vpc" { source = "./stacks/vpc" }
 		t.Fatalf("Load: %v", err)
 	}
 
-	rt := e.runtimeFor("vpc")
-	if rt.Binary != exec.OpenTofu || rt.Version != "" {
-		t.Fatalf("expected the CLI-selected binary as a last resort, got %+v", rt)
+	if rt := e.runtimeFor("vpc"); rt != exec.OpenTofu {
+		t.Fatalf("expected the CLI-selected binary as a last resort, got %q", rt)
 	}
 }
 
@@ -173,35 +170,5 @@ group "g" {
 	env := e.envFor("inst.vpc")
 	if env["AWS_PROFILE"] != "prod" {
 		t.Fatalf("expected inst.vpc to inherit the use block's env, got %+v", env)
-	}
-}
-
-func TestEnvIdentity_DeterministicAndSensitiveToValueChanges(t *testing.T) {
-	a := envIdentity(map[string]string{"AWS_PROFILE": "prod", "AWS_REGION": "ap-northeast-2"})
-	b := envIdentity(map[string]string{"AWS_REGION": "ap-northeast-2", "AWS_PROFILE": "prod"})
-	if a != b {
-		t.Fatalf("expected map iteration order not to affect envIdentity: %q != %q", a, b)
-	}
-
-	c := envIdentity(map[string]string{"AWS_PROFILE": "dev", "AWS_REGION": "ap-northeast-2"})
-	if a == c {
-		t.Fatalf("expected a changed value to change envIdentity")
-	}
-
-	if envIdentity(nil) != "" {
-		t.Fatalf("expected envIdentity(nil) to be empty")
-	}
-}
-
-func TestResolvedRuntime_CacheIdentityDistinguishesBinaryAndVersion(t *testing.T) {
-	a := resolvedRuntime{Binary: exec.Terraform, Version: ">= 1.8.0"}
-	b := resolvedRuntime{Binary: exec.OpenTofu, Version: ">= 1.8.0"}
-	c := resolvedRuntime{Binary: exec.Terraform, Version: ">= 1.9.0"}
-
-	if a.cacheIdentity() == b.cacheIdentity() {
-		t.Fatalf("expected distinct binaries to produce distinct cache identities")
-	}
-	if a.cacheIdentity() == c.cacheIdentity() {
-		t.Fatalf("expected distinct declared versions to produce distinct cache identities")
 	}
 }

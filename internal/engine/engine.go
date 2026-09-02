@@ -2,6 +2,8 @@
 package engine
 
 import (
+	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -23,8 +25,44 @@ type Engine struct {
 	Graph     *graph.Graph
 	Stdout    io.Writer
 	Stderr    io.Writer
-	// Logger receives internal-machinery diagnostics (node dispatch, cache hits, load steps); it never carries a command's actual result, which always goes through Stdout/Stderr directly. Nil is valid and discards everything, so callers that don't care about logging (including every existing test that builds an Engine by hand) need no changes.
+	// Stdin is where an interactive approval is read from. Nil means no answer can be obtained, which is not an error in itself: a run where nothing has changed never asks. Apply only fails on a missing Stdin at the moment a node actually needs approving.
+	Stdin io.Reader
+	// Logger receives internal-machinery diagnostics (node dispatch, plan verdicts, load steps); it never carries a command's actual result, which always goes through Stdout/Stderr directly. Nil is valid and discards everything, so callers that don't care about logging (including every existing test that builds an Engine by hand) need no changes.
 	Logger *slog.Logger
+
+	stdin *bufio.Reader
+}
+
+// approvals is the single reader every prompt shares. A fresh bufio.Reader per question would buffer past the newline it needed and swallow the next question's answer.
+func (e *Engine) approvals() *bufio.Reader {
+	if e.stdin == nil {
+		e.stdin = bufio.NewReader(e.Stdin)
+	}
+	return e.stdin
+}
+
+// errNoApproval reports that a node needs approving and there is no answer to be had — stdin was never wired up, or it is closed or empty (a CI runner with no terminal, `</dev/null`). Distinct from a declined approval, which is a decision someone actually made.
+var errNoApproval = errors.New("no approval could be read")
+
+func noApprovalError(name string) error {
+	return fmt.Errorf("node %s has changes but %w; pass --auto-approve to apply without asking", name, errNoApproval)
+}
+
+// approve asks whether name's planned changes should be applied, having just streamed that node's plan to out. Only "y" or "yes" approves.
+//
+// An immediate EOF is not a "no": there is a difference between someone declining and nobody being there, and silently treating an unattended run as a decline would report a refusal nobody made. Input that ends without a trailing newline still counts, so `echo yes | terragraph apply` works — which is why this reads for content rather than testing whether stdin is a terminal.
+func (e *Engine) approve(name string, out io.Writer) (bool, error) {
+	if e.Stdin == nil {
+		return false, noApprovalError(name)
+	}
+	_, _ = fmt.Fprintf(out, "\nApply these changes to node %s? [y/N]: ", name)
+	line, err := e.approvals().ReadString('\n')
+	answer := strings.ToLower(strings.TrimSpace(line))
+	if answer == "" && err != nil {
+		_, _ = fmt.Fprintln(out)
+		return false, noApprovalError(name)
+	}
+	return answer == "y" || answer == "yes", nil
 }
 
 func (e *Engine) logger() *slog.Logger {
@@ -83,8 +121,11 @@ func (e *Engine) nodeDir(name string) string {
 	return e.Graph.Nodes[name].Dir
 }
 
-func (e *Engine) cachePath() string {
-	return filepath.Join(e.BaseDir, ".terragraph", "cache.json")
+// planPath returns where the engine has a node's verification plan written before deciding whether to apply it (see Runner.PlanChanges/ApplyPlan). It sits beside the engine's other managed per-node state rather than inside dataDir, which is Terraform's own (see dataDir): a plan file is terragraph's artifact, not part of Terraform's metadata.
+//
+// A saved plan embeds the resolved input values it was created with, in cleartext, exactly as the tfvars file does. It therefore lives under the same .terragraph/ directory that tfVarsPath's workdir default already requires be kept out of version control, and apply removes it once the run is over.
+func (e *Engine) planPath(name string) string {
+	return filepath.Join(e.BaseDir, ".terragraph", "plans", name+".tfplan")
 }
 
 // dataDir returns the node's isolated TF_DATA_DIR (see Runner.DataDir). Every node gets one, always (not just nodes with a shared Source), keeping the module's own directory untouched by tool-managed metadata and every node's .terraform/ state independent of the others'.
@@ -94,7 +135,7 @@ func (e *Engine) dataDir(name string) string {
 
 // runner builds a Runner for internal, non-buffered use (reading an upstream node's already-applied outputs). The per-node runners used for the actual plan/apply/destroy commands (see plan.go/apply.go/destroy.go) are built separately, against that node's own buffered output writer.
 func (e *Engine) runner(name string) *exec.Runner {
-	return &exec.Runner{Binary: e.runtimeFor(name).Binary, Dir: e.nodeDir(name), DataDir: e.dataDir(name), Env: e.envFor(name), Stdout: e.Stdout, Stderr: e.Stderr}
+	return &exec.Runner{Binary: e.runtimeFor(name), Dir: e.nodeDir(name), DataDir: e.dataDir(name), Env: e.envFor(name), Stdout: e.Stdout, Stderr: e.Stderr}
 }
 
 // envFor returns name's fully resolved extra environment variables (see graph.Node.Env): whatever an enclosing Use.Env cascade contributed, already merged with the node's own Env. Unlike runtimeFor, there is no further CLI-level fallback layer to apply on top: env has no CLI equivalent, so whatever the graph already resolved is final.
@@ -102,49 +143,22 @@ func (e *Engine) envFor(name string) map[string]string {
 	return e.Graph.Nodes[name].Env
 }
 
-// envIdentity folds a resolved environment into the single opaque string cache.Combine mixes into a node's incremental-apply hash, alongside resolvedRuntime.cacheIdentity (see apply.go): a value like AWS_PROFILE or AWS_REGION can change which real infrastructure "apply" targets even when source/vars/runtime are all unchanged, so a change here must never look "unchanged" either. Sorted so the result (and therefore the hash) is deterministic regardless of map iteration order.
-func envIdentity(env map[string]string) string {
-	keys := make([]string, 0, len(env))
-	for k := range env {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
-	var b strings.Builder
-	for _, k := range keys {
-		b.WriteString(k)
-		b.WriteByte('=')
-		b.WriteString(env[k])
-		b.WriteByte(0)
-	}
-	return b.String()
-}
-
-// resolvedRuntime is what a node actually runs against once every fallback layer has been applied (see runtimeFor): which binary to shell out to, and, for the incremental-apply cache only (see cache.Combine), the declared version constraint that identity carries, if any. Version is never checked against the binary's real reported version; it exists purely so a node's cache entry changes when its declared runtime identity changes.
-type resolvedRuntime struct {
-	Binary  exec.Binary
-	Version string
-}
-
-// runtimeFor resolves which runtime a node actually runs against, applying each fallback layer in order until one supplies an answer: (1) the node's own resolved blueprint.Runtime, already following the blueprint.Node.Runtime -> enclosing blueprint.Use.Runtime cascade (see graph.Node.Runtime); (2) the top-level blueprint's own Default-marked runtime, if it declared one (deliberately never a group's own default: see blueprint.Runtime.Default); (3) e.Binary, the CLI's --tofu flag or its own built-in terraform default. A CLI flag can only ever fill a gap nothing else spoke to, never override an explicit choice made in the blueprint.
-func (e *Engine) runtimeFor(name string) resolvedRuntime {
+// runtimeFor resolves which binary a node actually runs against, applying each fallback layer in order until one supplies an answer: (1) the node's own resolved blueprint.Runtime, already following the blueprint.Node.Runtime -> enclosing blueprint.Use.Runtime cascade (see graph.Node.Runtime); (2) the top-level blueprint's own Default-marked runtime, if it declared one (deliberately never a group's own default: see blueprint.Runtime.Default); (3) e.Binary, the CLI's --tofu flag or its own built-in terraform default. A CLI flag can only ever fill a gap nothing else spoke to, never override an explicit choice made in the blueprint.
+//
+// A runtime block's `version` is deliberately not consulted. It once fed the incremental-apply cache key; with that cache gone (nothing is trusted without asking Terraform), it records what a node is expected to run against and has no effect on execution. See docs/blueprint.md.
+func (e *Engine) runtimeFor(name string) exec.Binary {
 	if rt := e.Graph.Nodes[name].Runtime; rt != nil {
-		return resolvedRuntime{Binary: exec.Binary(rt.Binary), Version: rt.Version}
+		return exec.Binary(rt.Binary)
 	}
 	if e.Blueprint != nil {
 		if rt, ok := e.Blueprint.DefaultRuntime(); ok {
-			return resolvedRuntime{Binary: exec.Binary(rt.Binary), Version: rt.Version}
+			return exec.Binary(rt.Binary)
 		}
 	}
-	return resolvedRuntime{Binary: e.Binary}
+	return e.Binary
 }
 
-// cacheIdentity folds a resolvedRuntime into the single opaque string cache.Combine mixes into a node's incremental-apply hash (see apply.go): distinct runtimes must never look "unchanged" to each other. Binary alone would already catch a switch between two commands/paths; Version is folded in too so redeclaring the same binary under a different documented version constraint also counts as a change, even though nothing is actually probed to confirm the binary matches either string.
-func (r resolvedRuntime) cacheIdentity() string {
-	return string(r.Binary) + "\x00" + r.Version
-}
-
-// runtimeConflicts warns about two or more nodes that share a module directory (see Node.BackendConfig, the mechanism for reusing one Source across instances) but resolve to different binaries. They also share that directory's single .terraform.lock.hcl, and Terraform/OpenTofu each rewrite it to their own registry host on every init (registry.terraform.io vs registry.opentofu.org), so whichever node happened to init last wins the file underneath the other, and neither node's incremental-apply cache (which hashes the module directory, lock file included) ever settles on a consistent "unchanged" verdict. Nothing else in the model can trigger this: every node's own .terraform/ metadata is already isolated per node (see dataDir), so this is specific to the shared-Source pattern.
+// runtimeConflicts warns about two or more nodes that share a module directory (see Node.BackendConfig, the mechanism for reusing one Source across instances) but resolve to different binaries. They also share that directory's single .terraform.lock.hcl, and Terraform/OpenTofu each rewrite it to their own registry host on every init (registry.terraform.io vs registry.opentofu.org), so whichever node happened to init last wins the file underneath the other and every run rewrites what the previous one wrote. Nothing else in the model can trigger this: every node's own .terraform/ metadata is already isolated per node (see dataDir), so this is specific to the shared-Source pattern.
 func (e *Engine) runtimeConflicts() []graph.Problem {
 	byDir := map[string][]string{}
 	names := make([]string, 0, len(e.Graph.Nodes))
@@ -169,10 +183,10 @@ func (e *Engine) runtimeConflicts() []graph.Problem {
 		if len(nodesInDir) < 2 {
 			continue
 		}
-		first := e.runtimeFor(nodesInDir[0]).Binary
+		first := e.runtimeFor(nodesInDir[0])
 		mixed := false
 		for _, n := range nodesInDir[1:] {
-			if e.runtimeFor(n).Binary != first {
+			if e.runtimeFor(n) != first {
 				mixed = true
 				break
 			}

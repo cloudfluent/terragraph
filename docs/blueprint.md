@@ -48,7 +48,7 @@ edge {
 
 The block label is the destination input on the `to` node, and `from` is a relative `output.<attr>` on the `from` node: the enclosing edge already names the source, so it is never repeated (an absolute `node.vpc.output.vpc_id` inside the block is rejected rather than accepted-if-it-matches). Duplicate labels on one edge are an error, the same as in an `export` block.
 
-This is shorthand and nothing more. With no `input` blocks the edge is the ordering-only edge above; with one or more, it expands at parse time into exactly that many ordinary data edges (`node.vpc.output.vpc_id` → `node.eks.input.vpc_id`, and so on), and everything downstream — the one-source-per-input rule below, `use` export resolution, cycle detection, the [incremental-apply cache](execution-model.md#incremental-apply) — treats them as if they had been written out one block each. An edge that already names a specific port on either side has exactly one value to carry, so combining that with `input` blocks is rejected.
+This is shorthand and nothing more. With no `input` blocks the edge is the ordering-only edge above; with one or more, it expands at parse time into exactly that many ordinary data edges (`node.vpc.output.vpc_id` → `node.eks.input.vpc_id`, and so on), and everything downstream — the one-source-per-input rule below, `use` export resolution, cycle detection — treats them as if they had been written out one block each. An edge that already names a specific port on either side has exactly one value to carry, so combining that with `input` blocks is rejected.
 
 When you own both modules, the better reduction is still one `object`-typed output wired into one `object`-typed input by one ordinary edge (see [`vars`](#literal-input-values-vars) for the same argument applied to literal values). This shorthand is for the modules you don't get to reshape.
 
@@ -98,7 +98,20 @@ node "legacy_dns" {
 
 A node that names no `runtime` falls back, in order: the blueprint's own `default = true` runtime, if it declared one; otherwise the CLI's `--tofu` flag or its built-in `terraform` default. Since every node has its own isolated state (see [execution-model.md](execution-model.md)), this can be applied node by node: migrate one stack to a new runtime while everything else keeps running exactly as before, with no shared workspace to force an all-or-nothing cutover. There's no way back down, though: Terraform/OpenTofu record the version that last wrote a state file, and an older binary will refuse to read it, so treat this as a one-way door per node, not something to toggle back and forth.
 
-`version` is never checked against the binary's actual reported version; nothing runs `terraform version` to confirm it. Its only effect is on the incremental-apply cache (see [execution-model.md](execution-model.md#incremental-apply)): a node's cache key includes its resolved `binary` and `version` string, so switching `binary` (or redeclaring the same one under a different `version`) is treated as a change. Replacing a binary in place without updating the declaration does not invalidate that local key, but a candidate cache hit is still checked by a refreshed plan using the active binary before apply can be skipped.
+`version` is never checked against the binary's actual reported version; nothing runs `terraform version` to confirm it, and it has no effect on execution. It is there to record what a node is expected to run against, next to the `binary` that actually selects it. (It once fed the incremental-apply cache key. That cache is gone: whether a node needs applying is now decided by asking Terraform for a refreshed plan, every run — see [execution-model.md](execution-model.md#deciding-whether-a-node-needs-applying).)
+
+### How much a node may change without being asked (`approve`)
+
+```hcl
+node "db" {
+  source  = "./stacks/db"
+  approve = "all"
+}
+```
+
+`approve` declares how much of this node's plan may be applied unattended: `none`, `safe` (create/update, the default), or `all` (adds replace and delete). Set it on the specific node whose plan is destructive by design, rather than reaching for `--approve=all`, which grants the same thing to every node in the graph at once and tends to end up pasted into CI.
+
+Like `runtime`, it replaces rather than merges, and a `use` block can set it for every node an instance expands to. Full resolution order and what happens when a plan exceeds its level are in [execution-model.md](execution-model.md#what-a-node-may-do-approve).
 
 A `use` block can also set `runtime`, which becomes the default for every node the group instance expands to (unless one of those nodes names its own): see [groups.md](groups.md#choosing-a-runtime-for-an-instance). A group's own definition has no equivalent: which toolchain deploys a reusable group is a fact about where it's instantiated, not about the group itself.
 
@@ -118,7 +131,7 @@ node "prod_vpc" {
 
 Each entry is added to (and, on a name collision, overrides) the terragraph process's own environment before the node's `terraform`/`tofu` subprocess starts; nothing else about that environment is touched. This is deliberately the *only* mechanism terragraph offers for this: it never generates or edits a `provider` block (see [execution-model.md](execution-model.md#how-values-are-passed) for the same "no generated `.tf`" rule applied to values), so a provider that needs something `env` can't express (a literal value baked into the config, say) should instead read it as a variable and take that through an edge or `vars`, the same as any other input.
 
-Unlike `runtime` (a single choice that replaces whatever it inherits), `env` merges: a `use` block's own `env` (see [groups.md](groups.md#choosing-a-runtime-for-an-instance)) contributes defaults to every node the instance expands to, and a node's own `env` only overrides the specific keys it names, leaving everything else it inherited in place. `env` also counts toward the incremental-apply cache (see [execution-model.md](execution-model.md#incremental-apply)) for the same reason `runtime` does: changing which account/region a node targets is a real change, even when its source and resolved input values are not.
+Unlike `runtime` (a single choice that replaces whatever it inherits), `env` merges: a `use` block's own `env` (see [groups.md](groups.md#choosing-a-runtime-for-an-instance)) contributes defaults to every node the instance expands to, and a node's own `env` only overrides the specific keys it names, leaving everything else it inherited in place. `env` is part of what a node actually runs against, so changing which account or region it targets changes the plan Terraform produces for it — see [execution-model.md](execution-model.md#deciding-whether-a-node-needs-applying).
 
 ## Literal input values (`vars`)
 

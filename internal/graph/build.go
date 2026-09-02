@@ -21,6 +21,8 @@ type Node struct {
 	Runtime *blueprint.Runtime
 	// Env is this node's fully resolved extra environment variables (see blueprint.Node.Env), already merged with whatever an enclosing blueprint.Use.Env cascade contributed (see build). Nil/empty means nothing anywhere in this node's chain ever set one.
 	Env map[string]string
+	// Approve is this node's resolved approve level (see blueprint.Node.Approve), already following the blueprint.Node.Approve -> enclosing blueprint.Use.Approve cascade (see build). "" means neither this node nor anything it is nested under named one; engine.Engine.approveFor applies the remaining blueprint-default/CLI fallback layers, which are not graph concerns.
+	Approve blueprint.Approve
 }
 
 // Graph is the blueprint resolved into a DAG: nodes with schema attached, plus adjacency in both directions. Out[a] contains every node that has an edge from a (i.e. must run after a); In[a] contains every node that has an edge to a (i.e. must run before a).
@@ -74,12 +76,12 @@ func mergeEnv(base, override map[string]string) map[string]string {
 
 // Build resolves a blueprint into a Graph, recursively expanding any group instantiations (`use` blocks). baseDir is the directory the blueprint file lives in and must be absolute: it becomes the root every relative node/group source resolves against, directly or (for a node inside a group) transitively. Build fails fast if a node's source directory cannot be inspected (e.g. it doesn't exist); that is a structural problem, not something validate can usefully report alongside others.
 func Build(bp *blueprint.Blueprint, baseDir string) (*Graph, error) {
-	g, _, err := build(bp, baseDir, "", nil, nil, &resolveContext{})
+	g, _, err := build(bp, baseDir, "", nil, nil, "", &resolveContext{})
 	return g, err
 }
 
 // build resolves bp into a Graph, also returning this scope's own use instances (keyed by their unqualified `as` name), needed by a caller that is itself resolving a group's Export, since an export mapping may reference either a plain internal node or one of this same group's own use instances (see resolveExportEndpoint). ambient is the runtime, if any, this whole scope inherits from the `use` block that instantiated it (nil at the top level, or when that use set none): it becomes a node's Runtime when the node names no blueprint.Node.Runtime of its own, and it cascades unchanged into a nested use's own recursive build unless that nested use sets its own override (see the loop below). ambientEnv is the analogous inherited environment, except it merges rather than replaces at every layer (see mergeEnv).
-func build(bp *blueprint.Blueprint, baseDir, namespace string, ambient *blueprint.Runtime, ambientEnv map[string]string, rc *resolveContext) (*Graph, map[string]useInfo, error) {
+func build(bp *blueprint.Blueprint, baseDir, namespace string, ambient *blueprint.Runtime, ambientEnv map[string]string, ambientApprove blueprint.Approve, rc *resolveContext) (*Graph, map[string]useInfo, error) {
 	g := &Graph{
 		Nodes: make(map[string]*Node),
 		Out:   make(map[string][]string),
@@ -128,7 +130,13 @@ func build(bp *blueprint.Blueprint, baseDir, namespace string, ambient *blueprin
 		}
 		env := mergeEnv(ambientEnv, n.Env)
 
-		g.Nodes[qn.Name] = &Node{Node: qn, Schema: schema, Dir: dir, Runtime: resolved, Env: env}
+		// Approve replaces rather than merges, like Runtime: a level is one choice, and the most specific scope that made it wins.
+		approve := ambientApprove
+		if n.Approve != "" {
+			approve = n.Approve
+		}
+
+		g.Nodes[qn.Name] = &Node{Node: qn, Schema: schema, Dir: dir, Runtime: resolved, Env: env, Approve: approve}
 	}
 
 	uses := map[string]useInfo{}
@@ -139,8 +147,12 @@ func build(bp *blueprint.Blueprint, baseDir, namespace string, ambient *blueprin
 			nextAmbient = &rt
 		}
 		nextAmbientEnv := mergeEnv(ambientEnv, u.Env)
+		nextAmbientApprove := ambientApprove
+		if u.Approve != "" {
+			nextAmbientApprove = u.Approve
+		}
 
-		info, internal, err := resolveUse(u, baseDir, qualify(u.As), nextAmbient, nextAmbientEnv, rc)
+		info, internal, err := resolveUse(u, baseDir, qualify(u.As), nextAmbient, nextAmbientEnv, nextAmbientApprove, rc)
 		if err != nil {
 			return nil, nil, fmt.Errorf("use %q as %q: %w", u.GroupName, u.As, err)
 		}
@@ -172,7 +184,7 @@ func build(bp *blueprint.Blueprint, baseDir, namespace string, ambient *blueprin
 }
 
 // resolveUse loads and builds the group instantiated by u (recursing through the group's own nested `use` blocks, if any), validates it, and returns both its expanded internal graph (nodes already namespaced under instancePrefix, ready to splice into the caller's graph) and a useInfo describing how the caller's edges should resolve references to this instance. ambient is u's own resolved runtime override, if any (already merged with whatever u itself inherited from further out), the new default every node inside this instance inherits unless it names its own; ambientEnv is the analogous already-merged environment.
-func resolveUse(u blueprint.Use, referencingDir, instancePrefix string, ambient *blueprint.Runtime, ambientEnv map[string]string, rc *resolveContext) (useInfo, *Graph, error) {
+func resolveUse(u blueprint.Use, referencingDir, instancePrefix string, ambient *blueprint.Runtime, ambientEnv map[string]string, ambientApprove blueprint.Approve, rc *resolveContext) (useInfo, *Graph, error) {
 	groupDir := filepath.Join(referencingDir, u.Source)
 
 	pop, err := rc.push(groupDir, u.GroupName)
@@ -188,7 +200,7 @@ func resolveUse(u blueprint.Use, referencingDir, instancePrefix string, ambient 
 
 	// def.Nodes/Uses may reference a runtime by name (blueprint.Node.Runtime / blueprint.Use.Runtime); those names resolve against groupRuntimes, the `runtime` blocks declared in this same group source directory, never against whatever the outer scope that wrote u happens to have declared (see blueprint.validateRuntimes, which already enforced this scoping at parse time).
 	innerBP := &blueprint.Blueprint{Nodes: def.Nodes, Edges: def.Edges, Uses: def.Uses, Runtimes: groupRuntimes}
-	internal, innerUses, err := build(innerBP, groupDir, instancePrefix, ambient, ambientEnv, rc)
+	internal, innerUses, err := build(innerBP, groupDir, instancePrefix, ambient, ambientEnv, ambientApprove, rc)
 	if err != nil {
 		return useInfo{}, nil, err
 	}

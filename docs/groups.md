@@ -33,7 +33,7 @@ edge { from = node.vpc.output.vpc_id         to = use.checkout.input.vpc_id }
 edge { from = use.checkout.output.cluster_id to = node.dns.input.cluster_id }
 ```
 
-This expands purely in memory when the graph is built (no files are generated) into real nodes namespaced under the instance name (`checkout.cluster`, `checkout.nodegroup`), which every command (`plan`, `apply`, `--node`, the incremental-apply cache, `graph`) treats exactly like any other node.
+This expands purely in memory when the graph is built (no files are generated) into real nodes namespaced under the instance name (`checkout.cluster`, `checkout.nodegroup`), which every command (`plan`, `apply`, `--node`, `graph`) treats exactly like any other node.
 
 A few rules fall out of that expansion:
 - **Only `export`-declared ports are visible from outside the instance.** `use.checkout.output.cluster_id` works; `use.checkout.cluster.output.cluster_id` doesn't even parse. This is deliberate: a group is only safely reusable if its author can change internals without an unbounded set of external edges depending on them, the same reason Terraform modules, Go's unexported identifiers, and private class members all work this way. If a consumer needs something not currently exported, the fix is adding it to the group's `export` block, not reaching around it. Plain nodes (not inside a group) have no such restriction.
