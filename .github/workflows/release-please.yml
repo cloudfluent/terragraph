@@ -13,48 +13,7 @@ permissions:
 jobs:
   release-please:
     runs-on: ubuntu-latest
-    outputs:
-      release_created: ${{ steps.release.outputs.release_created }}
-      tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
-      # RELEASE_PLEASE_TOKEN (a fine-grained PAT), not the default GITHUB_TOKEN: creating a GitHub Release through this org rejects GITHUB_TOKEN with "Resource not accessible by integration" even with contents: write granted (confirmed by reproducing the exact same API call via curl with GITHUB_TOKEN, which succeeds, while release-please-action's own call to the identical endpoint with the identical token fails), a known class of issue for this action in organization repos, see https://github.com/googleapis/release-please-action/issues/878. A PAT scoped to Contents/Pull requests/Workflows write on just this repo resolves it.
       - uses: googleapis/release-please-action@v4
-        id: release
         with:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
-
-  # Runs only when the release-please job above just merged a release PR and pushed a new tag. It's a second job in this same workflow, not a separate tag-triggered one, because a push made with the default GITHUB_TOKEN (which is what release-please uses to push that tag) never triggers another workflow run on its own: GitHub's anti-recursion protection blocks it. Reacting to the tag within the same run, via this job's `if`, sidesteps that without needing a second token.
-  publish:
-    needs: release-please
-    if: needs.release-please.outputs.release_created == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: ${{ needs.release-please.outputs.tag_name }}
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.27.1"
-          cache: true
-
-      # Ad-hoc signs the darwin binaries so Apple Silicon doesn't SIGKILL them at launch; see the terragraph-darwin build's post-hook comment in .goreleaser.yaml for why this is needed.
-      - run: go install github.com/anchore/quill/cmd/quill@latest
-
-      - uses: goreleaser/goreleaser-action@v6
-        with:
-          distribution: goreleaser
-          version: "~> 2"
-          args: release --clean
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
-
-  publish-vscode:
-    needs: [release-please, publish]
-    if: needs.release-please.outputs.release_created == 'true'
-    uses: ./.github/workflows/publish-vscode.yml
-    with:
-      tag_name: ${{ needs.release-please.outputs.tag_name }}
-    secrets: inherit
