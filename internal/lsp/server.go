@@ -15,6 +15,7 @@ import (
 
 	"go.lsp.dev/jsonrpc2"
 	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 
 	"github.com/cloudfluent/terragraph/internal/language"
 )
@@ -22,7 +23,8 @@ import (
 // Serve runs one LSP connection until the client closes stdin.
 func Serve(ctx context.Context, in io.Reader, out io.Writer) error {
 	server := &server{workspace: language.NewWorkspace(""), documents: map[string][]byte{}}
-	_, conn, _ := protocol.NewServer(ctx, server, jsonrpc2.NewStream(stdio{Reader: in, Writer: out}))
+	_, conn, client := protocol.NewServer(ctx, server, jsonrpc2.NewStream(stdio{Reader: in, Writer: out}))
+	server.client = client
 	<-conn.Done()
 	return conn.Err()
 }
@@ -39,6 +41,7 @@ type server struct {
 	mu        sync.RWMutex
 	workspace *language.Workspace
 	documents map[string][]byte
+	client    protocol.Client
 }
 
 func (s *server) Initialize(_ context.Context, params *protocol.InitializeParams) (*protocol.InitializeResult, error) {
@@ -46,10 +49,11 @@ func (s *server) Initialize(_ context.Context, params *protocol.InitializeParams
 		s.workspace.SetRoot(filePath(string(folders[0].URI)))
 	}
 	full := protocol.TextDocumentSyncKindFull
-	return &protocol.InitializeResult{Capabilities: protocol.ServerCapabilities{TextDocumentSync: full, CompletionProvider: &protocol.CompletionOptions{TriggerCharacters: []string{"."}}, PositionEncoding: protocol.PositionEncodingKindUTF16}, ServerInfo: protocol.ServerInfo{Name: "terragraph"}}, nil
+	return &protocol.InitializeResult{Capabilities: protocol.ServerCapabilities{TextDocumentSync: full, CompletionProvider: &protocol.CompletionOptions{TriggerCharacters: []string{"."}}, DefinitionProvider: protocol.Boolean(true), PositionEncoding: protocol.PositionEncodingKindUTF16}, ServerInfo: protocol.ServerInfo{Name: "terragraph"}}, nil
 }
 func (s *server) DidOpen(_ context.Context, params *protocol.DidOpenTextDocumentParams) error {
 	s.set(string(params.TextDocument.URI), []byte(params.TextDocument.Text))
+	s.publishDiagnostics(context.Background(), params.TextDocument.URI)
 	return nil
 }
 
@@ -61,6 +65,7 @@ func (s *server) DidChange(_ context.Context, params *protocol.DidChangeTextDocu
 			s.set(string(params.TextDocument.URI), []byte(whole.Text))
 		}
 	}
+	s.publishDiagnostics(context.Background(), params.TextDocument.URI)
 	return nil
 }
 func (s *server) DidClose(_ context.Context, params *protocol.DidCloseTextDocumentParams) error {
@@ -69,6 +74,9 @@ func (s *server) DidClose(_ context.Context, params *protocol.DidCloseTextDocume
 	delete(s.documents, path)
 	s.mu.Unlock()
 	s.workspace.CloseDocument(path)
+	if s.client != nil {
+		_ = s.client.PublishDiagnostics(context.Background(), &protocol.PublishDiagnosticsParams{URI: params.TextDocument.URI, Diagnostics: []protocol.Diagnostic{}})
+	}
 	return nil
 }
 
@@ -85,9 +93,29 @@ func (s *server) Completion(ctx context.Context, params *protocol.CompletionPara
 	items := make(protocol.CompletionItemSlice, 0, len(candidates))
 	for _, candidate := range candidates {
 		start, newText := completionEdit(text, candidate)
-		items = append(items, protocol.CompletionItem{Label: candidate.Label, Kind: protocol.CompletionItemKindProperty, TextEdit: &protocol.TextEdit{Range: protocol.Range{Start: offsetPosition(text, start), End: offsetPosition(text, candidate.End)}, NewText: newText}})
+		item := protocol.CompletionItem{Label: candidate.Label, Detail: protocol.NewOptional(candidate.Detail), Kind: protocol.CompletionItemKindProperty, TextEdit: &protocol.TextEdit{Range: protocol.Range{Start: offsetPosition(text, start), End: offsetPosition(text, candidate.End)}, NewText: newText}}
+		if candidate.Documentation != "" {
+			item.Documentation = protocol.String(candidate.Documentation)
+		}
+		items = append(items, item)
 	}
 	return items, nil
+}
+
+func (s *server) Definition(ctx context.Context, params *protocol.DefinitionParams) (protocol.DefinitionResult, error) {
+	path := filePath(string(params.TextDocument.URI))
+	s.mu.RLock()
+	text := append([]byte(nil), s.documents[path]...)
+	s.mu.RUnlock()
+	if len(text) == 0 {
+		text, _ = os.ReadFile(path)
+	}
+	target, ok := s.workspace.Definition(ctx, path, positionOffset(text, params.Position))
+	if !ok {
+		return nil, nil
+	}
+	targetText := s.workspace.Document(target.Path)
+	return &protocol.Location{URI: uri.File(target.Path), Range: protocol.Range{Start: offsetPosition(targetText, target.Start), End: offsetPosition(targetText, target.End)}}, nil
 }
 
 // completionEdit replaces only the segment after the final dot. Editors use
@@ -107,6 +135,25 @@ func (s *server) set(rawURI string, text []byte) {
 	s.documents[path] = append([]byte(nil), text...)
 	s.mu.Unlock()
 	s.workspace.SetDocument(path, text)
+}
+
+func (s *server) publishDiagnostics(ctx context.Context, documentURI uri.URI) {
+	if s.client == nil {
+		return
+	}
+	path := filePath(string(documentURI))
+	text := s.workspace.Document(path)
+	items := s.workspace.Diagnose(ctx, path)
+	diagnostics := make([]protocol.Diagnostic, 0, len(items))
+	for _, item := range items {
+		diagnostics = append(diagnostics, protocol.Diagnostic{
+			Range:    protocol.Range{Start: offsetPosition(text, item.Start), End: offsetPosition(text, item.End)},
+			Severity: protocol.DiagnosticSeverityError,
+			Source:   protocol.NewOptional("terragraph"),
+			Message:  protocol.String(item.Message),
+		})
+	}
+	_ = s.client.PublishDiagnostics(ctx, &protocol.PublishDiagnosticsParams{URI: documentURI, Diagnostics: diagnostics})
 }
 func filePath(raw string) string {
 	parsed, err := url.Parse(raw)

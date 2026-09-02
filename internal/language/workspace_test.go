@@ -10,9 +10,17 @@ import (
 
 func TestWorkspaceCompletePortsAndVarsInIncompleteDocument(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "stacks", "vpc", "main.tf"), `output "vpc_id" { value = "x" }`)
+	writeFile(t, filepath.Join(dir, "stacks", "vpc", "main.tf"), `output "vpc_id" {
+  value = "x"
+  description = "VPC identifier"
+  sensitive = true
+}`)
 	writeFile(t, filepath.Join(dir, "stacks", "eks", "main.tf"), `variable "vpc_id" { type = string }
-variable "cluster_name" { type = string }`)
+variable "cluster_name" {
+  type = string
+  description = "Cluster name"
+  sensitive = true
+}`)
 	path := filepath.Join(dir, "blueprint.hcl")
 	text := `node "vpc" { source = "./stacks/vpc" }
 node "eks" {
@@ -26,10 +34,10 @@ edge {
   to   = node.eks.input.__CURSOR__
 }`
 
-	for _, tc := range []struct{ marker, want string }{
-		{"cl__CURSOR__", "cluster_name"},
-		{"output.__CURSOR__", "vpc_id"},
-		{"input.__CURSOR__", "vpc_id"},
+	for _, tc := range []struct{ marker, want, detail string }{
+		{"cl__CURSOR__", "cluster_name", "string (required, sensitive) — Cluster name"},
+		{"output.__CURSOR__", "vpc_id", "(sensitive) — VPC identifier"},
+		{"input.__CURSOR__", "vpc_id", "string (required)"},
 	} {
 		t.Run(tc.want+tc.marker, func(t *testing.T) {
 			clean, offset := cursor(text, tc.marker)
@@ -40,6 +48,12 @@ edge {
 			items := ws.Complete(context.Background(), path, offset)
 			if !contains(items, tc.want) {
 				t.Fatalf("completion %q missing from %#v", tc.want, items)
+			}
+			if got := detailOf(items, tc.want); got != tc.detail {
+				t.Fatalf("completion %q detail = %q, want %q", tc.want, got, tc.detail)
+			}
+			if tc.want == "cluster_name" && documentationOf(items, tc.want) != "Cluster name" {
+				t.Fatalf("completion documentation missing from %#v", items)
 			}
 		})
 	}
@@ -58,7 +72,7 @@ func TestWorkspaceCompleteGroupExports(t *testing.T) {
   as = "network"
   source = "./groups/network"
 }
-edge {
+	edge {
   from = use.network.output.__CURSOR__
   to = use.network.input.cidr
 }`, "__CURSOR__")
@@ -67,6 +81,108 @@ edge {
 	}
 	if !contains(NewWorkspace(dir).Complete(context.Background(), path, offset), "vpc_id") {
 		t.Fatal("expected exported group output")
+	}
+}
+
+func TestWorkspaceCompletesBlueprintSyntaxByContext(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "blueprint.hcl")
+	for _, tc := range []struct {
+		name, text, want, detail string
+	}{
+		{"top level", "__CURSOR__", "node", "Blueprint block"},
+		{"node attribute", "node \"vpc\" {\n  __CURSOR__\n}", "vars", "object"},
+		{"edge attribute", "edge {\n  __CURSOR__\n}", "from", "required output reference"},
+		{"runtime attribute", "runtime \"tofu\" {\n  __CURSOR__\n}", "binary", "required string"},
+		{"use attribute", "use \"network\" {\n  __CURSOR__\n}", "env", "map(string)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			text, offset := cursor(tc.text, "__CURSOR__")
+			ws := NewWorkspace(dir)
+			ws.SetDocument(path, []byte(text))
+			items := ws.Complete(context.Background(), path, offset)
+			if !contains(items, tc.want) {
+				t.Fatalf("completion %q missing from %#v", tc.want, items)
+			}
+			if got := detailOf(items, tc.want); got != tc.detail {
+				t.Fatalf("completion %q detail = %q, want %q", tc.want, got, tc.detail)
+			}
+		})
+	}
+}
+
+func TestWorkspaceCompletesRuntimeNamesAndFindsDefinitionsAcrossFiles(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "runtimes.hcl"), `runtime "tofu" { binary = "tofu" }`)
+	writeFile(t, filepath.Join(dir, "nodes.hcl"), `node "vpc" { source = "./stacks/vpc" }`)
+	path := filepath.Join(dir, "edges.hcl")
+	text, offset := cursor(`node "app" {
+  runtime = runtime.__CURSOR__
+}
+
+edge { from = node.vpc.output.id to = node.app.input.id }`, "__CURSOR__")
+	writeFile(t, path, text)
+	ws := NewWorkspace(dir)
+	if !contains(ws.Complete(context.Background(), path, offset), "tofu") {
+		t.Fatal("expected declared runtime completion")
+	}
+
+	definitionOffset := strings.Index(text, "vpc.output") + 1
+	target, ok := ws.Definition(context.Background(), path, definitionOffset)
+	if !ok {
+		t.Fatal("expected node definition")
+	}
+	if target.Path != filepath.Join(dir, "nodes.hcl") {
+		t.Fatalf("definition path = %q", target.Path)
+	}
+}
+
+func TestWorkspaceDoesNotOfferNodeAttributesInsideBackendConfigObject(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "blueprint.hcl")
+	text, offset := cursor(`node "vpc" {
+  source = "./stacks/vpc"
+  backend_config = {
+    __CURSOR__
+  }
+}`, "__CURSOR__")
+	ws := NewWorkspace(dir)
+	ws.SetDocument(path, []byte(text))
+	if items := ws.Complete(context.Background(), path, offset); len(items) != 0 {
+		t.Fatalf("backend_config completion = %#v, want no node attribute suggestions", items)
+	}
+}
+
+func TestWorkspaceDiagnosesInvalidNodePortsAndVars(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "stacks", "vpc", "main.tf"), `output "vpc_id" { value = "x" }`)
+	writeFile(t, filepath.Join(dir, "stacks", "app", "main.tf"), `variable "vpc_id" { type = string }`)
+	path := filepath.Join(dir, "blueprint.hcl")
+	text := `node "vpc" { source = "./stacks/vpc" }
+node "app" {
+  source = "./stacks/app"
+  vars = {
+    typo = "x"
+  }
+}
+edge {
+  from = node.typo.output.vpc_id
+  to   = node.app.output.missing
+}`
+	ws := NewWorkspace(dir)
+	ws.SetDocument(path, []byte(text))
+	got := ws.Diagnose(context.Background(), path)
+	for _, want := range []string{"Unknown input typo", "Unknown node typo", "to must reference node input", "Unknown output missing"} {
+		found := false
+		for _, diagnostic := range got {
+			if strings.Contains(diagnostic.Message, want) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("diagnostic %q missing from %#v", want, got)
+		}
 	}
 }
 
@@ -95,4 +211,22 @@ func contains(items []Completion, label string) bool {
 		}
 	}
 	return false
+}
+
+func detailOf(items []Completion, label string) string {
+	for _, item := range items {
+		if item.Label == label {
+			return item.Detail
+		}
+	}
+	return ""
+}
+
+func documentationOf(items []Completion, label string) string {
+	for _, item := range items {
+		if item.Label == label {
+			return item.Documentation
+		}
+	}
+	return ""
 }
