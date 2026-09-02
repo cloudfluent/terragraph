@@ -8,7 +8,7 @@ Bug reports and feature requests go through the templates GitHub shows when you 
 
 External contributors: fork the repo and branch from `main`. Maintainers: branch directly on `origin`. Either way, branch names aren't enforced (a fork's branch lives outside this repo's server-side rules, so a name check would only ever apply unevenly); name it however's useful to you.
 
-Before opening a PR: `make check` (fmt, lint, docs, build, test, the same thing CI runs) should pass locally. If the change touches blueprint semantics, a CLI flag, or an example's expected output, update the relevant `docs/*.md` or example `README.md` in the same PR; see the doc-sync rules in `CLAUDE.md`.
+Before opening a PR: `make check` (fmt, lint, docs, build, test, the same thing CI runs) should pass locally. If the change touches blueprint semantics, a CLI flag, or an example's expected output, update the relevant `docs/*.md` or example `README.md` in the same PR.
 
 ## PR title (this is the part that's enforced)
 
