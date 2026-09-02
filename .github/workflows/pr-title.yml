@@ -1,9 +1,10 @@
 name: PR title
 
 # pull_request_target, not pull_request: a plain pull_request trigger doesn't get a usable GITHUB_TOKEN for a fork-based PR and errors out outright, which is exactly the case this check most needs to cover. The workflow definition used is always the one on main regardless of the PR's own branch, so a fork PR can't tamper with it to bypass the check. No fork code is checked out or run here at all, only the PR title (event metadata) is read, so the extra token this trigger grants is never exercised.
+# synchronize is included even though the title itself never changes on a new commit: this is a required status check, and branch protection needs a passing result tied to the current HEAD SHA specifically, not just "passed once, earlier, for an older commit." Without it, a PR that gets new commits pushed without ever touching the title (release-please's own release PR does exactly this, resetting checks on every push to main) would stay permanently stuck with this required check missing for its current HEAD, i.e. unmergeable forever.
 on:
   pull_request_target:
-    types: [opened, edited, reopened]
+    types: [opened, edited, reopened, synchronize]
 
 permissions:
   pull-requests: read
