@@ -75,8 +75,8 @@ func HashInputs(vars map[string]any) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-// Combine folds a node's source hash and input hash into the single hash that determines whether it needs to be re-applied.
-func Combine(sourceHash, inputHash string) string {
-	sum := sha256.Sum256([]byte(sourceHash + "\x00" + inputHash))
+// Combine folds a node's source hash, input hash, and runtime identity (an opaque string identifying which binary/declared version it runs against; see engine's resolvedRuntime.cacheIdentity, empty if the caller has no notion of one) into the single hash that determines whether it needs to be re-applied.
+func Combine(sourceHash, inputHash, runtimeIdentity string) string {
+	sum := sha256.Sum256([]byte(sourceHash + "\x00" + inputHash + "\x00" + runtimeIdentity))
 	return hex.EncodeToString(sum[:])
 }

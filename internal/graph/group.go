@@ -58,18 +58,18 @@ func (rc *resolveContext) inspect(dir string) (*module.Schema, error) {
 	return s, nil
 }
 
-// loadGroupDef returns the group definition named groupName from dir, a group source directory (see resolveContext.parseGroupDir for how dir's .hcl files are merged and cached).
-func loadGroupDef(rc *resolveContext, dir, groupName string) (*blueprint.Group, error) {
+// loadGroupDef returns the group definition named groupName from dir, a group source directory (see resolveContext.parseGroupDir for how dir's .hcl files are merged and cached), along with every `runtime` block declared alongside it in that same directory: a group's own internal nodes/uses can only reference runtimes declared there (see blueprint.validateRuntimes), never ones declared in whichever outer scope happens to instantiate the group.
+func loadGroupDef(rc *resolveContext, dir, groupName string) (*blueprint.Group, []blueprint.Runtime, error) {
 	bp, err := rc.parseGroupDir(dir)
 	if err != nil {
-		return nil, fmt.Errorf("reading group source directory %s: %w", dir, err)
+		return nil, nil, fmt.Errorf("reading group source directory %s: %w", dir, err)
 	}
 	for i := range bp.Groups {
 		if bp.Groups[i].Name == groupName {
-			return &bp.Groups[i], nil
+			return &bp.Groups[i], bp.Runtimes, nil
 		}
 	}
-	return nil, fmt.Errorf("no group named %q found in %s", groupName, dir)
+	return nil, nil, fmt.Errorf("no group named %q found in %s", groupName, dir)
 }
 
 // synthesizeSchema turns a group's (already namespace-qualified) Export block into a module.Schema (the same shape module.Inspect produces for a real Terraform module) after validating every export mapping against the real schemas of the internal nodes it references. Synthesized Variables carry no Type: a fan-out input may map to internal targets with different declared types, so there is no single type to check at the export boundary. The real per-target type check still happens once an edge is rewritten to its actual leaf target (see engine.checkType), so this loses no safety, only reports a mismatch one step later.

@@ -21,7 +21,7 @@ func (e *Engine) Plan(opts Options) error {
 			return nil, err
 		}
 
-		r := &exec.Runner{Binary: e.Binary, Dir: nodeDir, DataDir: e.dataDir(name), Stdout: out, Stderr: out}
+		r := &exec.Runner{Binary: e.runtimeFor(name).Binary, Dir: nodeDir, DataDir: e.dataDir(name), Stdout: out, Stderr: out}
 		if err := r.Init(e.Graph.Nodes[name].BackendConfig); err != nil {
 			return nil, fmt.Errorf("init: %w", err)
 		}

@@ -26,7 +26,7 @@ func (e *Engine) Destroy(opts Options) error {
 			return nil, err
 		}
 
-		r := &exec.Runner{Binary: e.Binary, Dir: e.nodeDir(name), DataDir: e.dataDir(name), Stdout: out, Stderr: out}
+		r := &exec.Runner{Binary: e.runtimeFor(name).Binary, Dir: e.nodeDir(name), DataDir: e.dataDir(name), Stdout: out, Stderr: out}
 		if err := r.Destroy(opts.AutoApprove, exec.VarFileArgs(varsPath, vars)...); err != nil {
 			return nil, fmt.Errorf("destroy: %w", err)
 		}

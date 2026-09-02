@@ -40,6 +40,39 @@ node "vpc_prod" {
 
 This is passed straight through to `terraform init -backend-config=key=value` (Terraform's own partial backend configuration mechanism, not code generation). It requires the module to declare at least an empty backend block (`terraform { backend "local" {} }`); with no backend block at all there's nothing for `-backend-config` to apply to and it's silently ignored. Every node also gets its own isolated `.terraform/` metadata directory (`TF_DATA_DIR`, managed automatically) regardless of whether its `source` is shared with another node. Otherwise two instances of the same module would also fight over which backend they were last configured with.
 
+Sharing a `source` directory does *not* isolate `.terraform.lock.hcl`, though: unlike `.terraform/`, that file lives in the module directory itself. If those instances also resolve to different runtimes (see below), Terraform and OpenTofu will each keep rewriting it to their own provider registry host on every `init`, and `terragraph validate` warns about exactly this. Give each instance its own `source` copy (or wait until they're all on the same runtime) rather than ignoring that warning.
+
+## Choosing a runtime per node (`runtime`)
+
+Every node runs against whichever binary a plain `--tofu`/no-flag choice on the CLI selects, by default. A node (or a whole blueprint) can override that by declaring one or more named `runtime` blocks and referencing one:
+
+```hcl
+runtime "tofu" {
+  binary  = "tofu"          # a PATH-resolved command, or an absolute path to pin an exact install
+  version = ">= 1.8.0"      # optional, free-form; documentation only, see below
+}
+
+runtime "legacy" {
+  binary  = "/opt/terraform_1.5.7"
+}
+
+node "eks" {
+  source  = "./stacks/eks"
+  runtime = runtime.tofu     # this node always runs on tofu, regardless of --tofu
+}
+
+node "legacy_dns" {
+  source  = "./stacks/dns"
+  runtime = runtime.legacy   # pinned to an exact binary, for a stack that isn't ready to move yet
+}
+```
+
+A node that names no `runtime` falls back, in order: the blueprint's own `default = true` runtime, if it declared one; otherwise the CLI's `--tofu` flag or its built-in `terraform` default. Since every node has its own isolated state (see [execution-model.md](execution-model.md)), this can be applied node by node: migrate one stack to a new runtime while everything else keeps running exactly as before, with no shared workspace to force an all-or-nothing cutover. There's no way back down, though: Terraform/OpenTofu record the version that last wrote a state file, and an older binary will refuse to read it, so treat this as a one-way door per node, not something to toggle back and forth.
+
+`version` is never checked against the binary's actual reported version; nothing runs `terraform version` to confirm it. Its only effect is on the incremental-apply cache (see [execution-model.md](execution-model.md#incremental-apply)): a node's cache key includes its resolved `binary` and `version` string, so switching `binary` (or redeclaring the same one under a different `version`) is treated as a change, while everything else about a runtime's real, installed version drifting outside of what's declared here is invisible to the cache, exactly like a module's own `.tf` files changing outside of `terragraph`'s knowledge would be.
+
+A `use` block can also set `runtime`, which becomes the default for every node the group instance expands to (unless one of those nodes names its own): see [groups.md](groups.md#choosing-a-runtime-for-an-instance). A group's own definition has no equivalent: which toolchain deploys a reusable group is a fact about where it's instantiated, not about the group itself.
+
 ## Literal input values (`vars`)
 
 An edge wires one node's real output into another node's input, but not every input is another node's data. Sometimes a value is just this node's own: "this tenant's CIDR is 10.16.0.0/20." A node can set `vars` to supply such values directly, keyed by variable name:

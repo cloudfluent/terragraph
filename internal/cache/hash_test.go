@@ -156,3 +156,19 @@ func TestHashInputs_ChangesWithValue(t *testing.T) {
 		t.Fatalf("expected different hashes for different values")
 	}
 }
+
+func TestCombine_ChangesWithRuntimeIdentity(t *testing.T) {
+	terraform := Combine("src", "in", "terraform\x00")
+	tofu := Combine("src", "in", "tofu\x00")
+	if terraform == tofu {
+		t.Fatalf("expected switching runtime identity (e.g. terraform -> tofu) to change the combined hash")
+	}
+}
+
+func TestCombine_SameInputsSameHash(t *testing.T) {
+	a := Combine("src", "in", "terraform\x00>= 1.8.0")
+	b := Combine("src", "in", "terraform\x00>= 1.8.0")
+	if a != b {
+		t.Fatalf("expected identical inputs to produce identical hashes")
+	}
+}

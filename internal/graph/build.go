@@ -17,6 +17,8 @@ type Node struct {
 	Schema *module.Schema
 	// Dir is the resolved, absolute directory this node's Terraform files live in. For a node expanded from a group instance, this is relative to the group definition's own directory, not the outer blueprint's, so callers must use Dir directly rather than re-joining Node.Source against the outer blueprint directory.
 	Dir string
+	// Runtime is this node's fully resolved runtime declaration (see blueprint.Runtime), already following the blueprint.Node.Runtime -> enclosing blueprint.Use.Runtime cascade (see build). Nil means neither this node nor anything it's nested under ever named a runtime; engine.Engine.runtimeFor applies the remaining CLI/built-in fallback layers on top of that, which are not graph concerns.
+	Runtime *blueprint.Runtime
 }
 
 // Graph is the blueprint resolved into a DAG: nodes with schema attached, plus adjacency in both directions. Out[a] contains every node that has an edge from a (i.e. must run after a); In[a] contains every node that has an edge to a (i.e. must run before a).
@@ -48,12 +50,12 @@ func cloneNode(n blueprint.Node) blueprint.Node {
 
 // Build resolves a blueprint into a Graph, recursively expanding any group instantiations (`use` blocks). baseDir is the directory the blueprint file lives in and must be absolute: it becomes the root every relative node/group source resolves against, directly or (for a node inside a group) transitively. Build fails fast if a node's source directory cannot be inspected (e.g. it doesn't exist); that is a structural problem, not something validate can usefully report alongside others.
 func Build(bp *blueprint.Blueprint, baseDir string) (*Graph, error) {
-	g, _, err := build(bp, baseDir, "", &resolveContext{})
+	g, _, err := build(bp, baseDir, "", nil, &resolveContext{})
 	return g, err
 }
 
-// build resolves bp into a Graph, also returning this scope's own use instances (keyed by their unqualified `as` name), needed by a caller that is itself resolving a group's Export, since an export mapping may reference either a plain internal node or one of this same group's own use instances (see resolveExportEndpoint).
-func build(bp *blueprint.Blueprint, baseDir, namespace string, rc *resolveContext) (*Graph, map[string]useInfo, error) {
+// build resolves bp into a Graph, also returning this scope's own use instances (keyed by their unqualified `as` name), needed by a caller that is itself resolving a group's Export, since an export mapping may reference either a plain internal node or one of this same group's own use instances (see resolveExportEndpoint). ambient is the runtime, if any, this whole scope inherits from the `use` block that instantiated it (nil at the top level, or when that use set none): it becomes a node's Runtime when the node names no blueprint.Node.Runtime of its own, and it cascades unchanged into a nested use's own recursive build unless that nested use sets its own override (see the loop below).
+func build(bp *blueprint.Blueprint, baseDir, namespace string, ambient *blueprint.Runtime, rc *resolveContext) (*Graph, map[string]useInfo, error) {
 	g := &Graph{
 		Nodes: make(map[string]*Node),
 		Out:   make(map[string][]string),
@@ -65,6 +67,16 @@ func build(bp *blueprint.Blueprint, baseDir, namespace string, rc *resolveContex
 			return name
 		}
 		return namespace + "." + name
+	}
+
+	// bp.Runtimes was already validated (every blueprint.Node.Runtime/blueprint.Use.Runtime in this same parse scope names an entry here) by blueprint.ParseFile/ParseDir before Build ever sees it, so a lookup miss below can't happen; runtimeFor's ok result exists only to satisfy the map-access form.
+	runtimeFor := func(name string) (blueprint.Runtime, bool) {
+		for _, rt := range bp.Runtimes {
+			if rt.Name == name {
+				return rt, true
+			}
+		}
+		return blueprint.Runtime{}, false
 	}
 
 	for _, n := range bp.Nodes {
@@ -84,12 +96,25 @@ func build(bp *blueprint.Blueprint, baseDir, namespace string, rc *resolveContex
 		}
 		qn := cloneNode(n)
 		qn.Name = qualify(n.Name)
-		g.Nodes[qn.Name] = &Node{Node: qn, Schema: schema, Dir: dir}
+
+		resolved := ambient
+		if n.Runtime != "" {
+			rt, _ := runtimeFor(n.Runtime)
+			resolved = &rt
+		}
+
+		g.Nodes[qn.Name] = &Node{Node: qn, Schema: schema, Dir: dir, Runtime: resolved}
 	}
 
 	uses := map[string]useInfo{}
 	for _, u := range bp.Uses {
-		info, internal, err := resolveUse(u, baseDir, qualify(u.As), rc)
+		nextAmbient := ambient
+		if u.Runtime != "" {
+			rt, _ := runtimeFor(u.Runtime)
+			nextAmbient = &rt
+		}
+
+		info, internal, err := resolveUse(u, baseDir, qualify(u.As), nextAmbient, rc)
 		if err != nil {
 			return nil, nil, fmt.Errorf("use %q as %q: %w", u.GroupName, u.As, err)
 		}
@@ -120,8 +145,8 @@ func build(bp *blueprint.Blueprint, baseDir, namespace string, rc *resolveContex
 	return g, uses, nil
 }
 
-// resolveUse loads and builds the group instantiated by u (recursing through the group's own nested `use` blocks, if any), validates it, and returns both its expanded internal graph (nodes already namespaced under instancePrefix, ready to splice into the caller's graph) and a useInfo describing how the caller's edges should resolve references to this instance.
-func resolveUse(u blueprint.Use, referencingDir, instancePrefix string, rc *resolveContext) (useInfo, *Graph, error) {
+// resolveUse loads and builds the group instantiated by u (recursing through the group's own nested `use` blocks, if any), validates it, and returns both its expanded internal graph (nodes already namespaced under instancePrefix, ready to splice into the caller's graph) and a useInfo describing how the caller's edges should resolve references to this instance. ambient is u's own resolved runtime override, if any (already merged with whatever u itself inherited from further out), the new default every node inside this instance inherits unless it names its own.
+func resolveUse(u blueprint.Use, referencingDir, instancePrefix string, ambient *blueprint.Runtime, rc *resolveContext) (useInfo, *Graph, error) {
 	groupDir := filepath.Join(referencingDir, u.Source)
 
 	pop, err := rc.push(groupDir, u.GroupName)
@@ -130,13 +155,14 @@ func resolveUse(u blueprint.Use, referencingDir, instancePrefix string, rc *reso
 	}
 	defer pop()
 
-	def, err := loadGroupDef(rc, groupDir, u.GroupName)
+	def, groupRuntimes, err := loadGroupDef(rc, groupDir, u.GroupName)
 	if err != nil {
 		return useInfo{}, nil, err
 	}
 
-	innerBP := &blueprint.Blueprint{Nodes: def.Nodes, Edges: def.Edges, Uses: def.Uses}
-	internal, innerUses, err := build(innerBP, groupDir, instancePrefix, rc)
+	// def.Nodes/Uses may reference a runtime by name (blueprint.Node.Runtime / blueprint.Use.Runtime); those names resolve against groupRuntimes, the `runtime` blocks declared in this same group source directory, never against whatever the outer scope that wrote u happens to have declared (see blueprint.validateRuntimes, which already enforced this scoping at parse time).
+	innerBP := &blueprint.Blueprint{Nodes: def.Nodes, Edges: def.Edges, Uses: def.Uses, Runtimes: groupRuntimes}
+	internal, innerUses, err := build(innerBP, groupDir, instancePrefix, ambient, rc)
 	if err != nil {
 		return useInfo{}, nil, err
 	}
