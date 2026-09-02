@@ -37,6 +37,13 @@ func TestPositionOffsetUsesUTF16(t *testing.T) {
 	}
 }
 
+func TestFilePathDecodesWindowsDriveLetterURI(t *testing.T) {
+	got := filePathFor("file:///C:/work/blueprint.hcl", uri.PlatformWindows)
+	if want := `c:\work\blueprint.hcl`; got != want {
+		t.Fatalf("file path = %q, want %q", got, want)
+	}
+}
+
 func TestCompletionReplacesOnlyTrailingTraversalSegment(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "stacks", "eks2"), 0o755); err != nil {

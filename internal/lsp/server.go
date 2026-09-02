@@ -5,9 +5,8 @@ package lsp
 import (
 	"context"
 	"io"
-	"net/url"
 	"os"
-	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"unicode/utf16"
@@ -156,9 +155,17 @@ func (s *server) publishDiagnostics(ctx context.Context, documentURI uri.URI) {
 	_ = s.client.PublishDiagnostics(ctx, &protocol.PublishDiagnosticsParams{URI: documentURI, Diagnostics: diagnostics})
 }
 func filePath(raw string) string {
-	parsed, err := url.Parse(raw)
-	if err == nil && parsed.Scheme == "file" {
-		return filepath.FromSlash(parsed.Path)
+	platform := uri.PlatformPOSIX
+	if runtime.GOOS == "windows" {
+		platform = uri.PlatformWindows
+	}
+	return filePathFor(raw, platform)
+}
+
+func filePathFor(raw string, platform uri.Platform) string {
+	parsed, err := uri.Parse(raw)
+	if err == nil && parsed.Scheme() == "file" {
+		return uri.FsPathFor(parsed, platform, false)
 	}
 	return raw
 }
