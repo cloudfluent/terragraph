@@ -1,91 +1,95 @@
 package engine
 
 import (
-	"errors"
 	"fmt"
 	"io"
-	"sync"
+	"os"
+	"path/filepath"
 
-	"github.com/cloudfluent/terragraph/internal/cache"
 	"github.com/cloudfluent/terragraph/internal/exec"
 )
 
-// Apply runs `terraform apply` over the selected nodes in topological order, feeding each node's real outputs into whatever downstream nodes are applied later in the same run. A node whose local cache identity is unchanged is skipped only when a refreshed plan also reports no changes, unless opts.Force is set.
+// Apply runs `terraform apply` over the selected nodes in topological order, feeding each node's real outputs into whatever downstream nodes are applied later in the same run.
+//
+// Whether a node needs applying is Terraform's decision, not terragraph's: every node is planned with -refresh=true and -detailed-exitcode, and a plan reporting no changes skips the apply. Nothing local is consulted first. An earlier version of this kept a content-addressed cache of source files, resolved inputs and execution identity as a prefilter, which was wrong in three separate ways (backend and inherited context missing from the key, drift never refreshed, files read through file()/templatefile() never invalidating) and, once every hit had to be confirmed by a plan anyway, only served to send *misses* straight to apply without one.
+//
+// When the plan does report changes, that plan is what gets applied (see Runner.PlanChanges/ApplyPlan), so a node refreshes once and the change made is the change that was planned.
 func (e *Engine) Apply(opts Options) error {
-	e.logger().Info("apply starting", "node", opts.Node, "parallelism", opts.parallelism(), "force", opts.Force)
-	store, err := cache.Load(e.cachePath())
-	if err != nil {
-		return err
-	}
-	var storeMu sync.Mutex
+	e.logger().Info("apply starting", "node", opts.Node, "parallelism", opts.parallelism(), "autoApprove", opts.AutoApprove)
 
-	runErr := e.runLevels(opts, false, func(name string, applied map[string]map[string]any, out io.Writer) (map[string]any, error) {
+	// Concurrent nodes have their output buffered and flushed a node at a time (see runLevels), so a prompt written mid-level would be invisible until long after the answer was needed. Rather than deadlock on that, say so.
+	if !opts.AutoApprove && opts.parallelism() > 1 {
+		return fmt.Errorf("--parallelism %d needs --auto-approve: output from concurrent nodes is buffered, so there is nowhere to ask for approval", opts.parallelism())
+	}
+
+	return e.runLevels(opts, false, func(name string, applied map[string]map[string]any, out io.Writer) (map[string]any, error) {
 		vars, err := e.resolveInputs(name, applied)
 		if err != nil {
 			return nil, err
 		}
-
-		nodeDir := e.nodeDir(name)
-		rt := e.runtimeFor(name)
-		env := e.envFor(name)
-		executionIdentity := rt.cacheIdentity() + "\x00" + envIdentity(env)
-		sourceHash, err := cache.HashDir(nodeDir)
-		if err != nil {
-			return nil, fmt.Errorf("hashing source: %w", err)
-		}
-		inputHash, err := cache.HashInputs(vars)
-		if err != nil {
-			return nil, fmt.Errorf("hashing inputs: %w", err)
-		}
-		combined := cache.Combine(sourceHash, inputHash, executionIdentity)
-
-		storeMu.Lock()
-		prev, hasPrev := store[name]
-		storeMu.Unlock()
 
 		varsPath := e.tfVarsPath(name)
 		if _, err := exec.WriteTFVars(varsPath, vars); err != nil {
 			return nil, err
 		}
 		varFileArgs := exec.VarFileArgs(varsPath, vars)
-		r := &exec.Runner{Binary: rt.Binary, Dir: nodeDir, DataDir: e.dataDir(name), Env: env, Stdout: out, Stderr: out}
-		initialized := false
 
-		if !opts.Force && hasPrev && prev == combined {
-			e.logger().Debug("local cache hit, verifying with plan", "node", name)
-			if err := r.Init(e.Graph.Nodes[name].BackendConfig); err != nil {
-				return nil, fmt.Errorf("init: %w", err)
-			}
-			initialized = true
-			changes, err := r.PlanChanges(varFileArgs...)
-			if errors.Is(err, exec.ErrUnsafeCachePlan) {
-				e.logger().Debug("cache validation bypassed by TF_CLI_ARGS override", "node", name)
-			} else if err != nil {
-				return nil, fmt.Errorf("checking cached node plan: %w", err)
-			} else if !changes {
-				e.logger().Debug("plan confirmed cache hit, skipping apply", "node", name)
-				_, _ = fmt.Fprintf(out, "node %s: unchanged, skipping apply\n", name)
-				outputs, err := r.Outputs()
-				if err != nil {
-					return nil, fmt.Errorf("plan says unchanged but outputs are unreadable (try --force): %w", err)
-				}
-				finalSourceHash, err := cache.HashDir(nodeDir)
-				if err != nil {
-					return nil, fmt.Errorf("hashing source after plan: %w", err)
-				}
-				storeMu.Lock()
-				store[name] = cache.Combine(finalSourceHash, inputHash, executionIdentity)
-				storeMu.Unlock()
-				return outputs, nil
-			}
+		r := &exec.Runner{Binary: e.runtimeFor(name), Dir: e.nodeDir(name), DataDir: e.dataDir(name), Env: e.envFor(name), Stdout: out, Stderr: out}
+		if err := r.Init(e.Graph.Nodes[name].BackendConfig); err != nil {
+			return nil, fmt.Errorf("init: %w", err)
 		}
 
-		if !initialized {
-			if err := r.Init(e.Graph.Nodes[name].BackendConfig); err != nil {
-				return nil, fmt.Errorf("init: %w", err)
+		// remote/cloud run the plan on HCP and cannot write a local plan file. Applying without one would skip the approve gate, so this path is refused until that backend can be inspected the same way. State-storage backends (s3, gcs, ...) are unaffected.
+		if !r.SupportsSavedPlan() {
+			e.logger().Warn("apply refused: backend cannot produce a local plan", "node", name, "backend", r.BackendType())
+			return nil, savedPlanUnsupportedError(name, r.BackendType())
+		}
+
+		savedPlan := e.planPath(name)
+		if err := os.MkdirAll(filepath.Dir(savedPlan), 0o755); err != nil {
+			return nil, fmt.Errorf("creating plan directory: %w", err)
+		}
+		// Removed however this node exits: the file holds resolved input values in cleartext, and a plan left behind is only ever stale by the next run.
+		defer func() { _ = os.Remove(savedPlan) }()
+
+		changes, err := r.PlanChanges(savedPlan, varFileArgs...)
+		if err != nil {
+			return nil, fmt.Errorf("plan: %w", err)
+		}
+		if !changes {
+			e.logger().Debug("plan reports no changes, skipping apply", "node", name)
+			_, _ = fmt.Fprintf(out, "node %s: unchanged, skipping apply\n", name)
+			outputs, err := r.Outputs()
+			if err != nil {
+				return nil, fmt.Errorf("plan says unchanged but outputs are unreadable: %w", err)
+			}
+			return outputs, nil
+		}
+
+		// What the plan actually does, read back from the file before any of it happens. Local only: no state is refreshed and no provider is called.
+		changeSet, err := r.PlanChangeSet(savedPlan)
+		if err != nil {
+			return nil, fmt.Errorf("reading plan: %w", err)
+		}
+		_, _ = fmt.Fprintf(out, "node %s: %s\n", name, summarizeChanges(changeSet))
+
+		// Levels run in order, so refusing here means nothing downstream runs either: the cascade is cut at the node that caused it rather than audited after the fact.
+		level := e.approveFor(name, opts.Approve)
+		if blocked := notPermitted(changeSet, level); len(blocked) > 0 {
+			return nil, gateError(name, level, blocked)
+		}
+
+		// The plan Terraform just printed is the plan about to be applied, so this asks about something the user has actually seen — which is the whole reason approval belongs here rather than inside a second `apply` that would plan again from scratch.
+		if !opts.AutoApprove {
+			approved, err := e.approve(name, out)
+			if err != nil {
+				return nil, err
+			}
+			if !approved {
+				return nil, fmt.Errorf("apply cancelled: node %s was not approved", name)
 			}
 		}
-		if err := r.Apply(opts.AutoApprove, varFileArgs...); err != nil {
+		if err := r.ApplyPlan(savedPlan); err != nil {
 			return nil, fmt.Errorf("apply: %w", err)
 		}
 
@@ -93,24 +97,10 @@ func (e *Engine) Apply(opts Options) error {
 		if err != nil {
 			return nil, fmt.Errorf("reading outputs after apply: %w", err)
 		}
-
-		// Re-hash the source after init/apply rather than reusing the pre-init `combined` computed above: on a first-ever init, Terraform creates .terraform.lock.hcl, which counts toward the source hash. Storing the pre-init value would permanently mismatch every future run's pre-init hash (which would now see that lock file), defeating the cache forever.
-		finalSourceHash, err := cache.HashDir(nodeDir)
-		if err != nil {
-			return nil, fmt.Errorf("hashing source after apply: %w", err)
-		}
-		finalCombined := cache.Combine(finalSourceHash, inputHash, executionIdentity)
-
-		storeMu.Lock()
-		store[name] = finalCombined
-		storeMu.Unlock()
-
 		return outputs, nil
-	}, func() error {
-		storeMu.Lock()
-		defer storeMu.Unlock()
-		return store.Save(e.cachePath())
-	})
+	}, nil)
+}
 
-	return runErr
+func savedPlanUnsupportedError(name, backend string) error {
+	return fmt.Errorf("node %s uses the %q backend, which cannot produce a local plan; terragraph apply needs one to decide what may be applied. Use a state-storage backend (s3, gcs, azurerm, http, local) instead", name, backend)
 }

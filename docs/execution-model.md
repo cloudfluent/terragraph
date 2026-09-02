@@ -22,7 +22,7 @@ tfvars {
 }
 ```
 
-- **`workdir`** (default): `<blueprint dir>/.terragraph/vars/<node>.tfvars.json`, next to the node's other engine-managed state (`tfdata/`, `cache.json`). Never touches a module's own directory, so nothing needs adding to any module's `.gitignore`, and two nodes sharing a `source` never collide on a filename. This is the right choice for a vendored module (not yours to add a `.gitignore` entry to) or one reused across many near-identical instances.
+- **`workdir`** (default): `<blueprint dir>/.terragraph/vars/<node>.tfvars.json`, next to the node's other engine-managed state (`tfdata/`, `plans/`). Never touches a module's own directory, so nothing needs adding to any module's `.gitignore`, and two nodes sharing a `source` never collide on a filename. This is the right choice for a vendored module (not yours to add a `.gitignore` entry to) or one reused across many near-identical instances.
 - **`module`**: `<node source>/.terragraph.<node>.tfvars.json`, alongside the module's own `.tf` files, for a resolved input value visible next to its source while debugging. Add the pattern below to each module's `.gitignore`:
 
   ```
@@ -35,9 +35,100 @@ tfvars {
 
 Nodes are grouped into levels: every node in level *i* only depends on nodes in levels `< i`, so nodes within one level have no edge between them and are safe to run concurrently. `terragraph graph` prints these levels directly. Execution defaults to sequential (`--parallelism 1`); pass `--parallelism N` to `plan`/`apply`/`destroy` to run up to `N` nodes within a level concurrently. Output from concurrent nodes is buffered and flushed as one `=== node <name> ===` block per node so it never interleaves; with the default `--parallelism 1` it streams live as before.
 
-## Incremental apply
+## Deciding whether a node needs applying
 
-`terragraph apply` uses a content-addressed cache, stored at `<blueprint dir>/.terragraph/cache.json`, to identify a node whose source files, resolved input values, resolved runtime (see [blueprint.md](blueprint.md#choosing-a-runtime-per-node-runtime)), and resolved `env` (see [blueprint.md](blueprint.md#extra-environment-variables-per-node-env)) match its last successful apply. A local cache hit is only a prefilter: terragraph runs a refresh-enabled Terraform/OpenTofu plan before skipping the apply, so remote drift and dependencies read from non-`.tf` files are still detected. If any non-empty `TF_CLI_ARGS*` environment override is active, terragraph conservatively bypasses the cache and runs apply because plan and apply arguments may describe different desired configurations. Pass `--force` to bypass the cache and always re-run apply. `terragraph destroy` drops the cache entries for whatever it actually tore down, so a later `apply` never mistakes now-gone infrastructure for "unchanged."
+Terraform decides, every run. `terragraph apply` plans each node with `-refresh=true -detailed-exitcode`; a plan reporting no changes skips the apply, and nothing local is consulted first.
+
+If the plan reports changes, **that same plan is what gets applied** — it is written with `-out` and handed to `apply` — so the node refreshes once rather than twice, and the change that gets made is provably the change that was planned. An argument injected into apply alone (`TF_CLI_ARGS_apply`) can no longer make apply do something the plan never described: Terraform ignores scope arguments when applying a saved plan and rejects `-var` outright. `-refresh=true` is always passed explicitly, and a command-line flag beats the same flag arriving through `TF_CLI_ARGS_plan`, so an ambient `-refresh=false` cannot turn the check into a stale-state one.
+
+The plan file lives at `<blueprint dir>/.terragraph/plans/<node>.tfplan` and is removed when the run ends. Like the tfvars file, it holds resolved input values in cleartext, so the same "keep `.terragraph/` out of version control" rule applies.
+
+A node on the `remote` or `cloud` backend cannot produce a local plan file: those backends run the plan on HCP rather than locally. `terragraph apply` refuses that node rather than applying without inspecting the plan. Every backend that runs operations locally — `s3`, `gcs`, `azurerm`, `http`, `local`, ... — can write a plan file and is unaffected. (`s3`/`gcs`/`azurerm`/`http` keep state remote; `local` keeps it on disk.) HCP support is left for later; until then, use one of those backends.
+
+## What a node may do: `approve`
+
+Walking the graph and committing changes are two different things. terragraph automates the first — it runs nodes in dependency order and feeds each one's real outputs into the next. The second is a decision, and in a graph it is one nobody can make up front: a downstream node's plan cannot exist until its upstream has actually been applied (see the known limitation below). So it is delegated in advance, per node, in terms of what the plan turns out to contain.
+
+That matters here more than it does for a single `terraform apply`, because a change propagates: node A's output changes, node B's input changes with it, and node B may replace its resources. Nobody saw B's plan before the run started, and nobody could have.
+
+Each node resolves to one of three levels, defined by which of Terraform's planned actions they permit:
+
+| level | permits | |
+| --- | --- | --- |
+| `none` | — | planned, never applied |
+| `safe` | `create`, `update` | **default** |
+| `all` | `create`, `update`, `replace`, `delete` | |
+
+`replace` is gated as tightly as `delete`, because destroy-and-recreate is what an upstream change most often causes downstream and is just as irreversible.
+
+`safe` is a workable default rather than an obstacle. A first-ever bootstrap is all creates; ordinary steady-state work is updates; and **reconciling drift is a create too** — a resource that has vanished remotely is dropped from state by the refresh, so the plan rebuilds it rather than deleting anything. Only a genuinely destructive plan stops.
+
+Say it on the node where a destructive plan is by design:
+
+```hcl
+node "db" {
+  source  = "./stacks/db"
+  approve = "all"   # recreation is normal here
+}
+```
+
+...or for one run:
+
+```
+terragraph apply                    # approve = safe
+terragraph apply --approve=all      # this run, on the operator's judgement
+```
+
+Resolution follows the same layering as [`runtime`](blueprint.md#choosing-a-runtime-per-node-runtime) and [`env`](blueprint.md#extra-environment-variables-per-node-env):
+
+```
+node's own approve  >  enclosing use block  >  --approve  >  safe
+```
+
+...including the rule that a CLI flag only ever fills a gap nothing else spoke to. `--approve=all` does not override a node that declared `approve = "safe"`; a node that declared `approve = "all"` is not reined in by `--approve=none`. The blueprint is where a standing decision lives, and it goes through review.
+
+When a node's plan exceeds its level, the run stops **before that node is applied**. Levels execute in order, so nothing downstream runs either — the cascade is cut at its source rather than audited afterwards:
+
+```
+node vpc: 3 to add, 1 to change, 0 to destroy
+node eks: 0 to add, 2 to change, 0 to destroy
+node api: 0 to add, 1 to change, 2 to destroy
+error: node "api" plans 2 change(s) its approve level (safe) does not permit:
+  aws_instance.web[0]   delete
+  aws_db_instance.main  replace
+
+Stopped before applying, so no later level ran.
+If this is intended, declare approve = "all" on that node, or re-run with --approve=all.
+```
+
+This is checked whether or not anyone is watching. An interactive `yes` answers "apply this plan", not "override the standing policy"; overriding it is `--approve=all`, which is a visible, deliberate act.
+
+The check reads the saved plan file, so it cannot run on the `remote`/`cloud` backends, which have none. Apply stops on those nodes with an error rather than applying uninspected.
+
+## Approval
+
+`approve` decides what *may* happen unattended. This decides *whether someone is asked*; the two are independent.
+
+Without `--auto-approve`, terragraph asks before applying each node that has changes:
+
+```
+Apply these changes to node eks? [y/N]:
+```
+
+It asks about the plan you were just shown, and applies exactly that plan — a downstream node's plan cannot be produced ahead of time (see the known limitation below), so approval necessarily happens node by node, as the run reaches each one.
+
+- Only `y` or `yes` approves. Declining stops the run: every later level consumes this node's outputs, so continuing past it would be applying against values that were never produced.
+- A node with **no** changes is never asked about, so `terragraph apply` with no flags remains a usable "is everything still applied?" check with no terminal attached.
+- Input may be piped (`echo yes | terragraph apply`). If a node needs approving and there is nothing to read — a CI runner, `</dev/null` — the run stops and says to pass `--auto-approve`, rather than reporting a refusal nobody made.
+- `--parallelism N` (N > 1) requires `--auto-approve`: output from concurrent nodes is buffered and flushed a node at a time, so there is nowhere to put a prompt.
+
+### There is no local cache
+
+Earlier versions kept a content-addressed cache at `<blueprint dir>/.terragraph/cache.json`, hashing each node's source files, resolved inputs, runtime and `env` to decide whether it could skip apply. Hashing local files is a proxy for a remote fact, and the gap between the two produced a series of bugs: a backend or inherited `env` change that the key never modelled, remote drift that no local hash could see, and files consumed through `file()`/`templatefile()` that never invalidated anything.
+
+Once every cache *hit* had to be confirmed by a refreshed plan anyway, the only thing the cache still did was send every *miss* straight to apply without one — so a genuinely unchanged node was re-applied on any fresh checkout, any CI runner without a warm `.terragraph/`, and every run after a `destroy`. Removing it puts every node behind the plan, which is both correct and skips more.
+
+`--force` existed to bypass that cache. It is accepted and ignored, and will be removed in a later release. `terragraph destroy` no longer has to invalidate anything either.
 
 ## Known limitation
 
