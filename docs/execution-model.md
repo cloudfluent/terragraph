@@ -3,7 +3,7 @@
 ## Validation
 
 `terragraph validate` (and `graph`/`plan`/`apply`/`destroy`, which run it first) reports two severities:
-- **Error**: blocks the command (a `from`/`to` referencing a port that doesn't exist, a cycle, a value that doesn't fit the target variable's declared type).
+- **Error**: blocks the command (a `from`/`to` referencing a port that doesn't exist, two data edges targeting the same input after group expansion even when they are exact duplicates, a data edge and `vars` both setting the same input, a cycle, a value that doesn't fit the target variable's declared type).
 - **Warning**: printed but never blocks. A required variable with no edge feeding it may legitimately come from that module's own `terraform.tfvars` or the environment, outside the blueprint entirely.
 
 Cycle detection reports every independent cyclic cluster in one pass (Tarjan's SCC algorithm), not just the first one found.

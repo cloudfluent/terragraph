@@ -61,7 +61,7 @@ func Load(blueprintPath string, binary exec.Binary, stdout, stderr io.Writer) (*
 	}, nil
 }
 
-// Validate returns every structural problem found in the graph (missing ports, cycles, unresolved required variables) plus any tfvars orphan warnings (see tfVarsOrphans) and shared-source runtime conflict warnings (see runtimeConflicts). Check each Problem's IsError(): only errors should block graph/plan/apply/destroy, warnings are advisory.
+// Validate returns every structural problem found in the graph (missing ports, two data edges targeting the same input, a data edge and vars both setting the same input, cycles, unresolved required variables) plus any tfvars orphan warnings (see tfVarsOrphans) and shared-source runtime conflict warnings (see runtimeConflicts). Check each Problem's IsError(): only errors should block graph/plan/apply/destroy, warnings are advisory.
 func (e *Engine) Validate() []graph.Problem {
 	problems := graph.Validate(e.Graph)
 	problems = append(problems, e.tfVarsOrphans()...)
