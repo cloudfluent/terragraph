@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.4](https://github.com/cloudfluent/terragraph/compare/v0.1.3...v0.1.4) (2026-09-02)
+
+
+### Bug Fixes
+
+* **release:** prevent duplicate publishing ([#10](https://github.com/cloudfluent/terragraph/issues/10)) ([3fef8cc](https://github.com/cloudfluent/terragraph/commit/3fef8cc7ba0b2e83b0545080feec6e0d169143d8))
+
 ## [0.1.3](https://github.com/cloudfluent/terragraph/compare/v0.1.2...v0.1.3) (2026-09-02)
 
 
