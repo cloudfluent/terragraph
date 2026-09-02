@@ -16,8 +16,18 @@ func (e *Engine) Destroy(opts Options) error {
 	var mu sync.Mutex
 
 	runErr := e.runLevels(opts, true, func(name string, applied map[string]map[string]any, out io.Writer) (map[string]any, error) {
+		// A destroy plan needs the same resolved input values an apply would have used (e.g. a variable feeding a resource's count or for_each), so it's evaluated identically here: every upstream dependency is still standing at this point, since destroy walks the graph in reverse topological order (downstream first).
+		vars, err := e.resolveInputs(name, applied)
+		if err != nil {
+			return nil, err
+		}
+		varsPath := e.tfVarsPath(name)
+		if _, err := exec.WriteTFVars(varsPath, vars); err != nil {
+			return nil, err
+		}
+
 		r := &exec.Runner{Binary: e.Binary, Dir: e.nodeDir(name), DataDir: e.dataDir(name), Stdout: out, Stderr: out}
-		if err := r.Destroy(opts.AutoApprove); err != nil {
+		if err := r.Destroy(opts.AutoApprove, exec.VarFileArgs(varsPath, vars)...); err != nil {
 			return nil, fmt.Errorf("destroy: %w", err)
 		}
 		mu.Lock()

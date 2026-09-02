@@ -125,6 +125,21 @@ type VendorConfig struct {
 	ManifestFile string
 }
 
+// TFVarsLocation selects where the engine writes the ephemeral, per-node variable file it resolves from data edges and vars before every plan/apply/destroy (see exec.WriteTFVars). Neither location relies on Terraform's *.auto.tfvars.json auto-loading; the engine always passes the file explicitly via -var-file, since auto-loading a name that's ever shared by two nodes (e.g. two instances of the same module source) has no way to keep their values apart.
+type TFVarsLocation string
+
+const (
+	// TFVarsLocationWorkdir writes to <blueprint dir>/.terragraph/vars/<node>.tfvars.json, next to the node's other engine-managed state (tfdata, cache.json). Never touches the module's own directory, so nothing needs adding to a module's .gitignore, and a node reused by several instances (backend_config) never collides on a shared filename. This is the default: it keeps every module directory clean, which matters most for a module that's vendored (read-only, not yours to add a .gitignore entry to) or reused across many near-identical instances.
+	TFVarsLocationWorkdir TFVarsLocation = "workdir"
+	// TFVarsLocationModule writes to <node source>/.terragraph.<node>.tfvars.json, alongside the module's own .tf files, for teams that want a node's resolved input values visible next to its source while debugging. Requires the module's .gitignore to exclude the engine-managed pattern (see docs/execution-model.md); terragraph validate warns about a stale file left behind by a since-renamed or since-removed node sharing that directory, but never deletes one on your behalf.
+	TFVarsLocationModule TFVarsLocation = "module"
+)
+
+// TFVarsConfig customizes where the engine writes per-node ephemeral variable files. Project-wide only, like VendorConfig: a single blueprint uses one location for every node, so a node's resolved inputs are always found the same way regardless of which node you're looking at.
+type TFVarsConfig struct {
+	Location TFVarsLocation
+}
+
 // Blueprint is the fully parsed graph topology: nodes and the edges between them, plus any group definitions and instantiations. It carries no resource configuration, only wiring.
 type Blueprint struct {
 	Nodes  []Node
@@ -133,6 +148,8 @@ type Blueprint struct {
 	Uses   []Use
 	// Vendor is nil when the blueprint declares no `vendor` block. Use the VendorDirectory/VendorManifestFile accessors, never this field directly, so callers never need to branch on nil.
 	Vendor *VendorConfig
+	// TFVars is nil when the blueprint declares no `tfvars` block. Use the TFVarsLocation accessor, never this field directly, so callers never need to branch on nil.
+	TFVars *TFVarsConfig
 }
 
 // VendorDirectory returns the effective vendor directory: the blueprint's configured value, or DefaultVendorDirectory.
@@ -149,6 +166,14 @@ func (b *Blueprint) VendorManifestFile() string {
 		return b.Vendor.ManifestFile
 	}
 	return DefaultVendorManifestFile
+}
+
+// TFVarsLocation returns the effective tfvars location: the blueprint's configured value, or TFVarsLocationWorkdir.
+func (b *Blueprint) TFVarsLocation() TFVarsLocation {
+	if b.TFVars != nil && b.TFVars.Location != "" {
+		return b.TFVars.Location
+	}
+	return TFVarsLocationWorkdir
 }
 
 // NodeByName returns the node with the given name, or false if absent.

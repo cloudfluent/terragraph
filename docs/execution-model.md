@@ -12,11 +12,24 @@ Type checking is a runtime check, not static inference: a standard root module's
 
 ## How values are passed
 
-terragraph never writes or modifies `.tf` files. Before running a node, it writes the values resolved from its incoming data edges (and its own `vars`, see [blueprint.md](blueprint.md#literal-input-values-vars)) to `<node source>/.terragraph.auto.tfvars.json`, an ephemeral file Terraform loads automatically. Add this pattern to each module's `.gitignore`:
+terragraph never writes or modifies `.tf` files. Before running a node, it writes the values resolved from its incoming data edges (and its own `vars`, see [blueprint.md](blueprint.md#literal-input-values-vars)) to an ephemeral, engine-managed tfvars file, then passes it to Terraform explicitly via `-var-file`. Terraform's own `*.auto.tfvars.json` auto-loading is never relied on: two nodes can share a module directory (see `backend_config` in [blueprint.md](blueprint.md#reusing-the-same-module-across-instances)), and auto-loading by a fixed filename would let them clobber each other's values.
 
+Where that file is written is controlled by an optional `tfvars` block:
+
+```hcl
+tfvars {
+  location = "workdir"   # default
+}
 ```
-.terragraph.auto.tfvars.json
-```
+
+- **`workdir`** (default): `<blueprint dir>/.terragraph/vars/<node>.tfvars.json`, next to the node's other engine-managed state (`tfdata/`, `cache.json`). Never touches a module's own directory, so nothing needs adding to any module's `.gitignore`, and two nodes sharing a `source` never collide on a filename. This is the right choice for a vendored module (not yours to add a `.gitignore` entry to) or one reused across many near-identical instances.
+- **`module`**: `<node source>/.terragraph.<node>.tfvars.json`, alongside the module's own `.tf` files, for a resolved input value visible next to its source while debugging. Add the pattern below to each module's `.gitignore`:
+
+  ```
+  .terragraph.*.tfvars.json
+  ```
+
+  `terragraph validate` warns (never deletes) about a stale file left behind in a shared module directory by a node that's since been renamed or removed from the blueprint.
 
 ## Execution levels and parallelism
 

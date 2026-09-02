@@ -16,7 +16,8 @@ func (e *Engine) Plan(opts Options) error {
 			return nil, err
 		}
 		nodeDir := e.nodeDir(name)
-		if _, err := exec.WriteTFVars(nodeDir, vars); err != nil {
+		varsPath := e.tfVarsPath(name)
+		if _, err := exec.WriteTFVars(varsPath, vars); err != nil {
 			return nil, err
 		}
 
@@ -24,7 +25,7 @@ func (e *Engine) Plan(opts Options) error {
 		if err := r.Init(e.Graph.Nodes[name].BackendConfig); err != nil {
 			return nil, fmt.Errorf("init: %w", err)
 		}
-		if err := r.Plan(); err != nil {
+		if err := r.Plan(exec.VarFileArgs(varsPath, vars)...); err != nil {
 			return nil, fmt.Errorf("plan: %w", err)
 		}
 		return nil, nil

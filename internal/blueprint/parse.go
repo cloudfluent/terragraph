@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/hashicorp/hcl/v2"
@@ -21,6 +22,7 @@ var topSchema = &hcl.BodySchema{
 		{Type: "group", LabelNames: []string{"name"}},
 		{Type: "use", LabelNames: []string{"name"}},
 		{Type: "vendor"},
+		{Type: "tfvars"},
 	},
 }
 
@@ -28,6 +30,12 @@ var vendorSchema = &hcl.BodySchema{
 	Attributes: []hcl.AttributeSchema{
 		{Name: "directory", Required: false},
 		{Name: "manifest_file", Required: false},
+	},
+}
+
+var tfvarsSchema = &hcl.BodySchema{
+	Attributes: []hcl.AttributeSchema{
+		{Name: "location", Required: false},
 	},
 }
 
@@ -199,6 +207,15 @@ func parseOneFile(path string, bp *Blueprint, seenNodes, seenGroups, seenUses ma
 				return err
 			}
 			bp.Vendor = vc
+		case "tfvars":
+			if bp.TFVars != nil {
+				return fmt.Errorf("%s: duplicate tfvars block", block.DefRange)
+			}
+			tc, err := parseTFVarsBlock(block)
+			if err != nil {
+				return err
+			}
+			bp.TFVars = tc
 		}
 	}
 
@@ -259,10 +276,48 @@ func parseVendorBlock(block *hcl.Block) (*VendorConfig, error) {
 	return vc, nil
 }
 
+// parseTFVarsBlock parses the optional `tfvars { }` block: project-wide selection of where the engine writes each node's resolved input values (see Blueprint.TFVarsLocation). A missing block, or a missing location field within it, means TFVarsLocationWorkdir applies.
+func parseTFVarsBlock(block *hcl.Block) (*TFVarsConfig, error) {
+	content, diags := block.Body.Content(tfvarsSchema)
+	if diags.HasErrors() {
+		return nil, fmt.Errorf("%s: %s", block.DefRange, diags.Error())
+	}
+
+	tc := &TFVarsConfig{}
+
+	if attr, ok := content.Attributes["location"]; ok {
+		val, diags := attr.Expr.Value(nil)
+		if diags.HasErrors() || val.Type() != cty.String {
+			return nil, fmt.Errorf("%s: location must be a literal string", attr.Range)
+		}
+		loc := TFVarsLocation(val.AsString())
+		if loc != TFVarsLocationWorkdir && loc != TFVarsLocationModule {
+			return nil, fmt.Errorf("%s: location must be %q or %q, got %q", attr.Range, TFVarsLocationWorkdir, TFVarsLocationModule, loc)
+		}
+		tc.Location = loc
+	}
+
+	return tc, nil
+}
+
+// nameRegexp constrains node, group, and use-instance names to characters that are always safe as a single path segment on every platform terragraph targets. Both tfvars locations turn a node's name into part of a filename (see Blueprint.TFVarsLocation), and a use instance's "as" name becomes a namespace prefix joined with "." into every node it expands (see graph.Build); an unconstrained name could otherwise inject a path separator or a ".." segment.
+var nameRegexp = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
+// validateName checks a node/group/use name against nameRegexp, labeling the error with what kind of name it is (for a clearer message) and the HCL range that declared it.
+func validateName(kind, name string, rng hcl.Range) error {
+	if !nameRegexp.MatchString(name) {
+		return fmt.Errorf("%s: %s name %q is invalid: must contain only letters, digits, underscores, and hyphens", rng, kind, name)
+	}
+	return nil
+}
+
 func parseNodeBlock(block *hcl.Block) (Node, error) {
 	content, diags := block.Body.Content(nodeSchema)
 	if diags.HasErrors() {
 		return Node{}, fmt.Errorf("%s: %s", block.DefRange, diags.Error())
+	}
+	if err := validateName("node", block.Labels[0], block.DefRange); err != nil {
+		return Node{}, err
 	}
 
 	sourceAttr := content.Attributes["source"]
@@ -493,6 +548,10 @@ func parseGroupBlock(block *hcl.Block) (Group, error) {
 		return Group{}, fmt.Errorf("%s: %s", block.DefRange, diags.Error())
 	}
 
+	if err := validateName("group", block.Labels[0], block.DefRange); err != nil {
+		return Group{}, err
+	}
+
 	g := Group{Name: block.Labels[0]}
 	seenNodes := map[string]bool{}
 	seenUses := map[string]bool{}
@@ -574,6 +633,9 @@ func parseUseBlock(block *hcl.Block) (Use, error) {
 	asVal, diags := asAttr.Expr.Value(nil)
 	if diags.HasErrors() || asVal.Type() != cty.String {
 		return Use{}, fmt.Errorf("%s: as must be a literal string", asAttr.Range)
+	}
+	if err := validateName("use instance", asVal.AsString(), asAttr.Range); err != nil {
+		return Use{}, err
 	}
 
 	sourceAttr := content.Attributes["source"]

@@ -51,13 +51,14 @@ func (e *Engine) Apply(opts Options) error {
 			return outputs, nil
 		}
 
-		if _, err := exec.WriteTFVars(nodeDir, vars); err != nil {
+		varsPath := e.tfVarsPath(name)
+		if _, err := exec.WriteTFVars(varsPath, vars); err != nil {
 			return nil, err
 		}
 		if err := r.Init(e.Graph.Nodes[name].BackendConfig); err != nil {
 			return nil, fmt.Errorf("init: %w", err)
 		}
-		if err := r.Apply(opts.AutoApprove); err != nil {
+		if err := r.Apply(opts.AutoApprove, exec.VarFileArgs(varsPath, vars)...); err != nil {
 			return nil, fmt.Errorf("apply: %w", err)
 		}
 

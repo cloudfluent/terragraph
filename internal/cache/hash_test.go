@@ -64,7 +64,7 @@ func TestHashDir_OnlyTFFilesAndLockFileCount(t *testing.T) {
 	// None of these should affect the hash: state, the engine's own ephemeral tfvars file, downloaded provider binaries, and (the specific bug this test guards against) a file a *resource* writes into its own module directory (e.g. local_file), which otherwise wouldn't exist yet on the run that creates it but would on every run after, permanently defeating the cache.
 	writeFile(t, dir, "terraform.tfstate", "{\"state\":1}")
 	writeFile(t, dir, "terraform.tfstate.backup", "{\"state\":0}")
-	writeFile(t, dir, ".terragraph.auto.tfvars.json", `{"x":1}`)
+	writeFile(t, dir, ".terragraph.vpc.tfvars.json", `{"x":1}`)
 	writeFile(t, dir, "vpc_id.txt", "vpc-123") // a resource's own output artifact
 	if err := os.MkdirAll(filepath.Join(dir, ".terraform", "providers"), 0o755); err != nil {
 		t.Fatalf("mkdir .terraform: %v", err)

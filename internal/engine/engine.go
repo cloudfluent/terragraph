@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 
 	"github.com/cloudfluent/terragraph/internal/blueprint"
 	"github.com/cloudfluent/terragraph/internal/exec"
@@ -58,9 +61,11 @@ func Load(blueprintPath string, binary exec.Binary, stdout, stderr io.Writer) (*
 	}, nil
 }
 
-// Validate returns every structural problem found in the graph (missing ports, cycles, unresolved required variables). Check each Problem's IsError(): only errors should block graph/plan/apply/destroy, warnings are advisory.
+// Validate returns every structural problem found in the graph (missing ports, cycles, unresolved required variables) plus any tfvars orphan warnings (see tfVarsOrphans). Check each Problem's IsError(): only errors should block graph/plan/apply/destroy, warnings are advisory.
 func (e *Engine) Validate() []graph.Problem {
-	return graph.Validate(e.Graph)
+	problems := graph.Validate(e.Graph)
+	problems = append(problems, e.tfVarsOrphans()...)
+	return problems
 }
 
 // TopoOrder returns node names in valid execution order.
@@ -89,4 +94,68 @@ func (e *Engine) dataDir(name string) string {
 // runner builds a Runner for internal, non-buffered use (reading an upstream node's already-applied outputs). The per-node runners used for the actual plan/apply/destroy commands (see plan.go/apply.go/destroy.go) are built separately, against that node's own buffered output writer.
 func (e *Engine) runner(name string) *exec.Runner {
 	return &exec.Runner{Binary: e.Binary, Dir: e.nodeDir(name), DataDir: e.dataDir(name), Stdout: e.Stdout, Stderr: e.Stderr}
+}
+
+// tfVarsFileName is the base filename for a node's ephemeral tfvars file, shared by both TFVarsLocation modes: workdir puts it under its own per-node subdirectory, so this alone is unambiguous there, while module puts every node's file directly in the (possibly shared) module directory, where the leading "." plus this name is what keeps one node's file from colliding with another's (see tfVarsPath).
+func tfVarsFileName(name string) string {
+	return fmt.Sprintf(".terragraph.%s.tfvars.json", name)
+}
+
+// tfVarsPath returns where the engine writes name's resolved input values before every plan/apply/destroy, per the blueprint's configured blueprint.TFVarsLocation.
+func (e *Engine) tfVarsPath(name string) string {
+	if e.Blueprint.TFVarsLocation() == blueprint.TFVarsLocationModule {
+		return filepath.Join(e.nodeDir(name), tfVarsFileName(name))
+	}
+	return filepath.Join(e.BaseDir, ".terragraph", "vars", name+".tfvars.json")
+}
+
+// tfVarsOrphans warns about a stale module-location tfvars file left behind in a node's directory by a node that no longer exists under that name (renamed or removed from the blueprint), so it doesn't sit there indefinitely looking like current state. Only relevant for TFVarsLocationModule: the workdir location namespaces every node into its own subdirectory, so nothing there can ever go stale from another node's rename. Never deletes anything; a module directory (especially a vendored or otherwise not-yours-to-write one) is not terragraph's to clean up unasked.
+func (e *Engine) tfVarsOrphans() []graph.Problem {
+	if e.Blueprint == nil || e.Blueprint.TFVarsLocation() != blueprint.TFVarsLocationModule {
+		return nil
+	}
+
+	currentByDir := map[string]map[string]bool{}
+	for name, n := range e.Graph.Nodes {
+		if currentByDir[n.Dir] == nil {
+			currentByDir[n.Dir] = map[string]bool{}
+		}
+		currentByDir[n.Dir][name] = true
+	}
+
+	var problems []graph.Problem
+	dirs := make([]string, 0, len(currentByDir))
+	for dir := range currentByDir {
+		dirs = append(dirs, dir)
+	}
+	sort.Strings(dirs)
+
+	for _, dir := range dirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue // Build already stat'd this directory successfully; a failure here isn't worth failing validate over.
+		}
+		var stale []string
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			fname := entry.Name()
+			if !strings.HasPrefix(fname, ".terragraph.") || !strings.HasSuffix(fname, ".tfvars.json") {
+				continue
+			}
+			owner := strings.TrimSuffix(strings.TrimPrefix(fname, ".terragraph."), ".tfvars.json")
+			if !currentByDir[dir][owner] {
+				stale = append(stale, fname)
+			}
+		}
+		sort.Strings(stale)
+		for _, fname := range stale {
+			problems = append(problems, graph.Problem{
+				Severity: graph.SeverityWarning,
+				Message:  fmt.Sprintf("%s: belongs to no node in this blueprint; remove it if the node was renamed or deleted", filepath.Join(dir, fname)),
+			})
+		}
+	}
+	return problems
 }

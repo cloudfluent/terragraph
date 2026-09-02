@@ -7,13 +7,8 @@ import (
 	"path/filepath"
 )
 
-// TFVarsFileName is the ephemeral, engine-managed variable file terragraph writes into each node's directory before every plan/apply. Terraform loads *.auto.tfvars.json automatically, so no other configuration is needed to wire it up. It must be added to the node's .gitignore.
-const TFVarsFileName = ".terragraph.auto.tfvars.json"
-
-// WriteTFVars (re)writes the ephemeral tfvars file for a node from the values resolved for its input edges. If vars is empty, any stale file from a previous run is removed instead: a node with no incoming data edges should never load an outdated value.
-func WriteTFVars(nodeDir string, vars map[string]any) (string, error) {
-	path := filepath.Join(nodeDir, TFVarsFileName)
-
+// WriteTFVars (re)writes the ephemeral tfvars file at path from the values resolved for a node's input edges (see engine.Engine.tfVarsPath for where path comes from). If vars is empty, any stale file from a previous run is removed instead: a node with no incoming data edges should never load an outdated value. Terraform never auto-loads this file; callers pass it explicitly via VarFileArgs, since two nodes can share a directory (see Node.BackendConfig) and auto-loading by a fixed name would let them clobber each other.
+func WriteTFVars(path string, vars map[string]any) (string, error) {
 	if len(vars) == 0 {
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			return "", fmt.Errorf("removing stale tfvars file %s: %w", path, err)
@@ -21,12 +16,23 @@ func WriteTFVars(nodeDir string, vars map[string]any) (string, error) {
 		return path, nil
 	}
 
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", fmt.Errorf("creating directory for tfvars file %s: %w", path, err)
+	}
 	data, err := json.MarshalIndent(vars, "", "  ")
 	if err != nil {
-		return "", fmt.Errorf("encoding tfvars for %s: %w", nodeDir, err)
+		return "", fmt.Errorf("encoding tfvars for %s: %w", path, err)
 	}
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		return "", fmt.Errorf("writing tfvars file %s: %w", path, err)
 	}
 	return path, nil
+}
+
+// VarFileArgs returns the -var-file flag pointing at the file WriteTFVars just wrote, or nil if vars was empty (WriteTFVars removed any stale file in that case, so there is nothing to load).
+func VarFileArgs(path string, vars map[string]any) []string {
+	if len(vars) == 0 {
+		return nil
+	}
+	return []string{"-var-file=" + path}
 }
