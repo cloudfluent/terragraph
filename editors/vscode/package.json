@@ -1,0 +1,35 @@
+{
+  "name": "terragraph-vscode",
+  "displayName": "Terragraph Blueprint",
+  "description": "IntelliSense for Terragraph Blueprint HCL files",
+  "version": "0.1.0",
+  "publisher": "cloudfluent",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Programming Languages"],
+  "activationEvents": ["*"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "Terragraph",
+      "properties": {
+        "terragraph.languageServer.path": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the terragraph executable used to start the language server. Defaults to terragraph on PATH; a source checkout automatically uses its locally built binary."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "check": "tsc -p . --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  }
+}

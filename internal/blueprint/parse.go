@@ -633,6 +633,9 @@ func parseNodeOrPortRef(attr *hcl.Attribute) (PortRef, error) {
 	default:
 		return PortRef{}, fmt.Errorf("%s: reference must start with \"node\" or \"use\", got %q", attr.Range, root.Name)
 	}
+	if len(traversal) < 2 {
+		return PortRef{}, fmt.Errorf("%s: expected <keyword>.<name>", attr.Range)
+	}
 
 	name, err := traverseAttrName(traversal[1], attr.Range)
 	if err != nil {

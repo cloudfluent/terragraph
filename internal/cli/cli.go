@@ -12,6 +12,7 @@ import (
 	"github.com/cloudfluent/terragraph/internal/engine"
 	"github.com/cloudfluent/terragraph/internal/exec"
 	"github.com/cloudfluent/terragraph/internal/graph"
+	"github.com/cloudfluent/terragraph/internal/lsp"
 	"github.com/cloudfluent/terragraph/internal/vendor"
 )
 
@@ -58,8 +59,21 @@ func NewRootCmd(version string) *cobra.Command {
 	root.AddCommand(newApplyCmd(&blueprintPath, binaryOf, loggerOf))
 	root.AddCommand(newDestroyCmd(&blueprintPath, binaryOf, loggerOf))
 	root.AddCommand(newVendorCmd(&blueprintPath, loggerOf))
+	root.AddCommand(newLanguageServerCmd())
 
 	return root
+}
+
+func newLanguageServerCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:     "language-server",
+		Aliases: []string{"lsp"},
+		Short:   "Run the Blueprint language server over standard input/output",
+		Args:    cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return lsp.Serve(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout())
+		},
+	}
 }
 
 // loadEngine loads the blueprint into an Engine and wires the CLI's logger into it. Shared by every command that needs a built graph (validate/graph/plan/apply/destroy); vendor parses the blueprint directly instead (see newVendorCmd) since building the graph would fail for any not-yet-vendored remote node.

@@ -9,3 +9,5 @@ terraform.tfstate.backup
 *.tfplan
 .terragraph/
 examples/basic/stacks/*/vpc_id.txt
+node_modules/
+editors/vscode/out/
