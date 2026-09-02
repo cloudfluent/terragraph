@@ -57,10 +57,10 @@ export async function activate(
     await client.start();
     context.subscriptions.push(client);
   } catch (error) {
-    output.appendLine(`언어 서버 시작 실패: ${String(error)}`);
+    output.appendLine(`Language server failed to start: ${String(error)}`);
     client = undefined;
     void vscode.window.showErrorMessage(
-      `Terragraph language server를 시작하지 못했습니다: ${String(error)}`,
+      `Could not start the Terragraph language server: ${String(error)}`,
     );
   }
 }

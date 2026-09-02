@@ -263,6 +263,185 @@ node "a" {
 	}
 }
 
+func TestParseFile_EdgeInputBlocks(t *testing.T) {
+	path := writeTemp(t, `
+node "vpc" { source = "./stacks/vpc" }
+node "eks" { source = "./stacks/eks" }
+
+edge {
+  from = node.vpc
+  to   = node.eks
+
+  input "vpc_id" {
+    from = output.vpc_id
+  }
+
+  input "subnet_ids" {
+    from = output.private_subnet_ids
+  }
+}
+`)
+
+	bp, err := ParseFile(path)
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	if len(bp.Edges) != 2 {
+		t.Fatalf("expected the edge to expand into 2 data edges, got %d: %+v", len(bp.Edges), bp.Edges)
+	}
+	want := []Edge{
+		{
+			From: PortRef{Node: "vpc", Kind: PortOutput, Name: "vpc_id"},
+			To:   PortRef{Node: "eks", Kind: PortInput, Name: "vpc_id"},
+		},
+		{
+			From: PortRef{Node: "vpc", Kind: PortOutput, Name: "private_subnet_ids"},
+			To:   PortRef{Node: "eks", Kind: PortInput, Name: "subnet_ids"},
+		},
+	}
+	for i, w := range want {
+		if bp.Edges[i] != w {
+			t.Fatalf("edge %d: got %+v, want %+v", i, bp.Edges[i], w)
+		}
+		if !bp.Edges[i].IsDataEdge() {
+			t.Fatalf("edge %d: expected a data edge", i)
+		}
+	}
+}
+
+func TestParseFile_EdgeInputBlocksOnUseInstance(t *testing.T) {
+	path := writeTemp(t, `
+node "vpc" { source = "./stacks/vpc" }
+
+use "eks-service" {
+  as     = "checkout"
+  source = "./groups/eks-service"
+}
+
+edge {
+  from = node.vpc
+  to   = use.checkout
+
+  input "vpc_id" {
+    from = output.vpc_id
+  }
+}
+`)
+
+	bp, err := ParseFile(path)
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	if len(bp.Edges) != 1 {
+		t.Fatalf("expected 1 edge, got %d", len(bp.Edges))
+	}
+	e := bp.Edges[0]
+	if e.From.Entity != EntityNode || e.From.Node != "vpc" || e.From.Kind != PortOutput || e.From.Name != "vpc_id" {
+		t.Fatalf("unexpected From: %+v", e.From)
+	}
+	if e.To.Entity != EntityUse || e.To.Node != "checkout" || e.To.Kind != PortInput || e.To.Name != "vpc_id" {
+		t.Fatalf("unexpected To: %+v", e.To)
+	}
+}
+
+func TestParseFile_EdgeInputBlocksInGroup(t *testing.T) {
+	path := writeTemp(t, `
+group "eks-service" {
+  node "cluster"   { source = "./eks" }
+  node "nodegroup" { source = "./eks-nodegroup" }
+
+  edge {
+    from = node.cluster
+    to   = node.nodegroup
+
+    input "cluster_id"   { from = output.cluster_id }
+    input "cluster_name" { from = output.cluster_name }
+  }
+}
+`)
+
+	bp, err := ParseFile(path)
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	if len(bp.Groups) != 1 || len(bp.Groups[0].Edges) != 2 {
+		t.Fatalf("expected the group's edge to expand into 2 edges, got %+v", bp.Groups)
+	}
+}
+
+func TestParseFile_EdgeInputBlocksWithPortEndpointRejected(t *testing.T) {
+	path := writeTemp(t, `
+node "a" { source = "./a" }
+node "b" { source = "./b" }
+
+edge {
+  from = node.a.output.x
+  to   = node.b.input.x
+
+  input "y" { from = output.y }
+}
+`)
+
+	if _, err := ParseFile(path); err == nil {
+		t.Fatalf("expected an error: an edge naming specific ports cannot also carry input blocks")
+	}
+}
+
+func TestParseFile_EdgeDuplicateInputLabelRejected(t *testing.T) {
+	path := writeTemp(t, `
+node "a" { source = "./a" }
+node "b" { source = "./b" }
+
+edge {
+  from = node.a
+  to   = node.b
+
+  input "x" { from = output.one }
+  input "x" { from = output.two }
+}
+`)
+
+	if _, err := ParseFile(path); err == nil {
+		t.Fatalf("expected an error for a duplicate input label on one edge")
+	}
+}
+
+func TestParseFile_EdgeInputRejectsAbsoluteReference(t *testing.T) {
+	path := writeTemp(t, `
+node "a" { source = "./a" }
+node "b" { source = "./b" }
+
+edge {
+  from = node.a
+  to   = node.b
+
+  input "x" { from = node.a.output.x }
+}
+`)
+
+	if _, err := ParseFile(path); err == nil {
+		t.Fatalf("expected an error: an input block's \"from\" must be relative (output.<attr>)")
+	}
+}
+
+func TestParseFile_EdgeInputRejectsInputPortReference(t *testing.T) {
+	path := writeTemp(t, `
+node "a" { source = "./a" }
+node "b" { source = "./b" }
+
+edge {
+  from = node.a
+  to   = node.b
+
+  input "x" { from = input.x }
+}
+`)
+
+	if _, err := ParseFile(path); err == nil {
+		t.Fatalf("expected an error: an input block's \"from\" must reference an output")
+	}
+}
+
 func TestParseFile_FromMustBeOutput(t *testing.T) {
 	path := writeTemp(t, `
 node "a" { source = "./a" }
