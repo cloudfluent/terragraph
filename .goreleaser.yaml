@@ -19,7 +19,7 @@ builds:
     ldflags:
       - -s -w -X main.version={{.Version}}
 
-  # Split out from the build above because only this one needs the quill post-hook. A binary cross-compiled for darwin/arm64 on the Linux runner has no code signature at all, and the kernel SIGKILLs anything unsigned on Apple Silicon before it can even run (this is how the brew cask's postinstall completion generation was failing). quill ad-hoc-signs it (no Apple Developer account needed) purely to satisfy that kernel check; it does not notarize, so a direct (non-brew) download can still trip Gatekeeper's "unidentified developer" prompt. The CI workflows install quill via `go install` before this runs.
+  # Split out from the build above because only this one needs the quill post-hook. A binary cross-compiled for darwin/arm64 on the Linux runner has no code signature at all, and the kernel SIGKILLs anything unsigned on Apple Silicon before it can even run. quill ad-hoc-signs it (no Apple Developer account needed) purely to satisfy that kernel check. That alone isn't enough for the brew cask though: brew cask marks the downloaded binary com.apple.quarantine, and under quarantine even an ad-hoc signature gets Gatekeeper-rejected the same way, so the homebrew_casks preflight below also has to strip that attribute before the binary is ever executed. Without a real Apple Developer ID signature and notarization, a direct (non-brew) download of this binary is still Gatekeeper's problem to solve manually. The CI workflows install quill via `go install` before this runs.
   - id: terragraph-darwin
     main: ./cmd/terragraph
     binary: terragraph
@@ -62,6 +62,13 @@ homebrew_casks:
     license: "Apache-2.0"
     binaries:
       - terragraph
+    # The binary is only ad-hoc signed (see the terragraph-darwin build above), which Gatekeeper treats as untrusted once brew's own download marks it com.apple.quarantine. Stripping the attribute here is what other quill-signed goreleaser casks do for this exact failure, see https://github.com/goreleaser/goreleaser/issues/6633. This has to be a preflight, not a postflight: Homebrew's own cask installer (Library/Homebrew/cask/artifact/abstract_artifact.rb's sort_order) always runs GeneratedCompletion, and Binary before it, ahead of any PostflightBlock regardless of stanza order in this file, so a postflight strip would run only after completion generation had already tried (and failed) to execute the still-quarantined binary. PreflightBlock sorts ahead of both, which is confirmed working locally against a real (non-file://) download.
+    hooks:
+      pre:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", staged_path.to_s]
+          end
     generate_completions_from_executable:
       executable: terragraph
       shell_parameter_format: cobra
