@@ -19,12 +19,7 @@ builds:
     ldflags:
       - -s -w -X main.version={{.Version}}
 
-  # Split out from the build above because only this one needs the quill post-hook. A binary cross-compiled
-  # for darwin/arm64 on the Linux runner has no code signature at all, and the kernel SIGKILLs anything
-  # unsigned on Apple Silicon before it can even run (this is how the brew cask's postinstall completion
-  # generation was failing). quill ad-hoc-signs it (no Apple Developer account needed) purely to satisfy
-  # that kernel check; it does not notarize, so a direct (non-brew) download can still trip Gatekeeper's
-  # "unidentified developer" prompt. The CI workflows install quill via `go install` before this runs.
+  # Split out from the build above because only this one needs the quill post-hook. A binary cross-compiled for darwin/arm64 on the Linux runner has no code signature at all, and the kernel SIGKILLs anything unsigned on Apple Silicon before it can even run (this is how the brew cask's postinstall completion generation was failing). quill ad-hoc-signs it (no Apple Developer account needed) purely to satisfy that kernel check; it does not notarize, so a direct (non-brew) download can still trip Gatekeeper's "unidentified developer" prompt. The CI workflows install quill via `go install` before this runs.
   - id: terragraph-darwin
     main: ./cmd/terragraph
     binary: terragraph
@@ -47,16 +42,14 @@ archives:
     format_overrides:
       - goos: windows
         formats: [zip]
-    # Matches the OS/arch spelling `uname -s`/`uname -m` report, so an install script can build the
-    # download name straight from `uname` output without a lookup table.
+    # Matches the OS/arch spelling `uname -s`/`uname -m` report, so an install script can build the download name straight from `uname` output without a lookup table.
     name_template: >-
       {{ .ProjectName }}_
       {{- title .Os }}_
       {{- if eq .Arch "amd64" }}x86_64
       {{- else }}{{ .Arch }}{{ end }}
 
-# brews (Formula-based) is deprecated by GoReleaser in favor of homebrew_casks; see
-# https://goreleaser.com/deprecations/#brews.
+# brews (Formula-based) is deprecated by GoReleaser in favor of homebrew_casks; see https://goreleaser.com/deprecations/#brews.
 homebrew_casks:
   - name: terragraph
     directory: Casks

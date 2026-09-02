@@ -39,8 +39,7 @@ jobs:
           go-version: "1.27.1"
           cache: true
 
-      # Ad-hoc signs the darwin binaries so Apple Silicon doesn't SIGKILL them at launch; see the
-      # terragraph-darwin build's post-hook comment in .goreleaser.yaml for why this is needed.
+      # Ad-hoc signs the darwin binaries so Apple Silicon doesn't SIGKILL them at launch; see the terragraph-darwin build's post-hook comment in .goreleaser.yaml for why this is needed.
       - run: go install github.com/anchore/quill/cmd/quill@latest
 
       - uses: goreleaser/goreleaser-action@v6

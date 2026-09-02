@@ -36,7 +36,7 @@ docs: ## Regenerate docs/cli/*.md from the live cobra command tree
 .PHONY: docs-check
 docs-check: docs ## Fail if docs/cli/*.md is stale (what CI runs)
 	git diff --exit-code -- docs/cli || \
-	  (echo "docs/cli/*.md is stale — run 'make docs' and commit the result" >&2; exit 1)
+	  (echo "docs/cli/*.md is stale, run 'make docs' and commit the result" >&2; exit 1)
 
 .PHONY: check
 check: fmt-check lint docs-check build test ## Everything CI runs, in the same order
