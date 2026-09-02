@@ -8,6 +8,12 @@ terragraph closes that gap without either tradeoff. Every root module stays comp
 
 ## Install
 
+macOS via Homebrew:
+
+```
+brew install --cask cloudfluent/tap/terragraph
+```
+
 Prebuilt binaries for Linux, macOS, and Windows (amd64/arm64) are attached to each [release](https://github.com/cloudfluent/terragraph/releases). Or build from source:
 
 ```
