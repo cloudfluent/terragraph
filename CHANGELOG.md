@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.2.1](https://github.com/cloudfluent/terragraph/compare/v0.2.0...v0.2.1) (2026-09-03)
+
+
+### Features
+
+* add optional S3 graph remote lock ([#46](https://github.com/cloudfluent/terragraph/issues/46)) ([a235d5b](https://github.com/cloudfluent/terragraph/commit/a235d5b501d4ac30bfd78e4333200c18e7711397))
+* allow literal vars on use to fill group export inputs ([#42](https://github.com/cloudfluent/terragraph/issues/42)) ([8c1b159](https://github.com/cloudfluent/terragraph/commit/8c1b1590933d23f7a32cccfaf0d51dac0ff07118))
+* isolate terraform state for shared module sources ([#43](https://github.com/cloudfluent/terragraph/issues/43)) ([9e39039](https://github.com/cloudfluent/terragraph/commit/9e39039b0432d7120ed9ee703aaf6644394d9f81))
+
+
+### Bug Fixes
+
+* let destroy be approved too, instead of failing at its own prompt ([#32](https://github.com/cloudfluent/terragraph/issues/32)) ([a555a92](https://github.com/cloudfluent/terragraph/commit/a555a928bc167c4425aa3d35bc3d5afd1007e926))
+* offer approve in editor completion, and stop the two schemas drifting ([#41](https://github.com/cloudfluent/terragraph/issues/41)) ([bff0338](https://github.com/cloudfluent/terragraph/commit/bff033814621d27390ad19a9e6bf543db9ac54bc))
+* serialize concurrent terragraph processes with a blueprint lock ([#31](https://github.com/cloudfluent/terragraph/issues/31)) ([f3295e5](https://github.com/cloudfluent/terragraph/commit/f3295e5d2e05303cb107dcbf99c929d97413b9d8))
+
+
+### Documentation
+
+* add agent conventions and PR body requirements ([911bf74](https://github.com/cloudfluent/terragraph/commit/911bf74c8836c890f19adfeb88c21a22d1569b2e))
+* contrast terragraph with terraform_remote_state in the README ([#44](https://github.com/cloudfluent/terragraph/issues/44)) ([42cefce](https://github.com/cloudfluent/terragraph/commit/42cefcefeb2e0f1738b258c9655bed211b9c10b5))
+* drop em-dashes from the README opening ([#45](https://github.com/cloudfluent/terragraph/issues/45)) ([009dc40](https://github.com/cloudfluent/terragraph/commit/009dc401c42ac417bddbecbe439a34394fa519e6))
+
 ## [0.2.0](https://github.com/cloudfluent/terragraph/compare/v0.1.5...v0.2.0) (2026-09-02)
 
 
