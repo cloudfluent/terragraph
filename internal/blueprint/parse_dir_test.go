@@ -85,6 +85,33 @@ func TestParseDir_DuplicateVendorBlockAcrossFiles(t *testing.T) {
 	}
 }
 
+func TestParseDir_DuplicateLockBlockAcrossFiles(t *testing.T) {
+	dir := writeDirTemp(t, map[string]string{
+		"a.hcl": `
+lock {
+  s3 {
+    bucket = "a"
+    key    = "a.lock"
+    region = "ap-northeast-2"
+  }
+}
+`,
+		"b.hcl": `
+lock {
+  s3 {
+    bucket = "b"
+    key    = "b.lock"
+    region = "us-east-1"
+  }
+}
+`,
+	})
+
+	if _, err := ParseDir(dir); err == nil {
+		t.Fatalf("expected an error for a lock block duplicated across files")
+	}
+}
+
 func TestParseDir_IgnoresNonHCLFilesAndSubdirectories(t *testing.T) {
 	dir := writeDirTemp(t, map[string]string{
 		"nodes.hcl":        `node "a" { source = "./a" }`,

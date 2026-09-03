@@ -322,6 +322,7 @@ var completionSchemas = map[string][]attributeSpec{
 		{name: "use", insert: "use \"group\" {\n  as     = \"name\"\n  source = \"\"\n}", detail: "Blueprint block", documentation: "Instantiates a reusable group."},
 		{name: "vendor", insert: "vendor {\n}", detail: "Blueprint block", documentation: "Configures the local vendor directory."},
 		{name: "tfvars", insert: "tfvars {\n}", detail: "Blueprint block", documentation: "Configures where resolved input values are written."},
+		{name: "lock", insert: "lock {\n  s3 {\n    bucket = \"\"\n    key    = \"\"\n    region = \"\"\n  }\n}", detail: "Blueprint block", documentation: "Serializes plan/apply/destroy across machines with a remote lock object."},
 	},
 	"node": {
 		{name: "source", insert: "source = \"\"", detail: "required string", documentation: "Path or remote source of the Terraform or OpenTofu module."},
@@ -359,6 +360,19 @@ var completionSchemas = map[string][]attributeSpec{
 	},
 	"tfvars": {
 		{name: "location", insert: "location = \"workdir\"", detail: "optional string", documentation: "Either workdir (default) or module."},
+	},
+	"lock": {
+		{name: "s3", insert: "s3 {\n  bucket = \"\"\n  key    = \"\"\n  region = \"\"\n}", detail: "Lock block", documentation: "S3 lock object via conditional writes. The only nested lock type in this release."},
+	},
+	"s3": {
+		{name: "bucket", insert: "bucket = \"\"", detail: "required string", documentation: "S3 bucket that holds the graph lock object."},
+		{name: "key", insert: "key = \"\"", detail: "required string", documentation: "Object key for this graph. Must not be a node's state key."},
+		{name: "region", insert: "region = \"\"", detail: "required string", documentation: "AWS region of the bucket."},
+	},
+	"lock.s3": {
+		{name: "bucket", insert: "bucket = \"\"", detail: "required string", documentation: "S3 bucket that holds the graph lock object."},
+		{name: "key", insert: "key = \"\"", detail: "required string", documentation: "Object key for this graph. Must not be a node's state key."},
+		{name: "region", insert: "region = \"\"", detail: "required string", documentation: "AWS region of the bucket."},
 	},
 }
 
@@ -567,7 +581,7 @@ func enclosingNamedBlock(text []byte, offset int, name string) (start, end int, 
 	return brace, len(text), true
 }
 
-var blockHeader = regexp.MustCompile(`(?s)(node|edge|runtime|group|use|vendor|tfvars|export|input|output)\s*(?:"[^\"]*")?\s*$`)
+var blockHeader = regexp.MustCompile(`(?s)(node|edge|runtime|group|use|vendor|tfvars|lock|s3|export|input|output)\s*(?:"[^\"]*")?\s*$`)
 
 // openBlock is one Blueprint block still open at some offset: its keyword (empty
 // for a brace that opens an object rather than a block, e.g. vars or env) and the

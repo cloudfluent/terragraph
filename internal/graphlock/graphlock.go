@@ -1,0 +1,47 @@
+// Package graphlock serializes terragraph plan/apply/destroy across machines
+// with a remote lock object. Same-checkout races stay on internal/runlock.
+package graphlock
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"github.com/cloudfluent/terragraph/internal/blueprint"
+)
+
+// ErrHeld is returned when the graph lock object already exists.
+var ErrHeld = errors.New("another terragraph process holds the graph lock")
+
+// Backend acquires a graph lock for one nested lock type.
+type Backend interface {
+	Matches(lock *blueprint.Lock) bool
+	Acquire(ctx context.Context, lock *blueprint.Lock) (Held, error)
+}
+
+// Held is a held graph lock. Close releases it. Close on a nil or already-released Held is a no-op.
+type Held interface {
+	Close() error
+}
+
+type noopHeld struct{}
+
+func (noopHeld) Close() error { return nil }
+
+var backends = []Backend{
+	s3Backend{},
+	// dynamodb / gcs later; unknown types never reach here (parse Error).
+}
+
+// Acquire takes the graph lock described by lock. A nil lock is a no-op.
+func Acquire(ctx context.Context, lock *blueprint.Lock) (Held, error) {
+	if lock == nil {
+		return noopHeld{}, nil
+	}
+	for _, b := range backends {
+		if b.Matches(lock) {
+			return b.Acquire(ctx, lock)
+		}
+	}
+	return nil, fmt.Errorf("no graph lock backend matches this lock block")
+}

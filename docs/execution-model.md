@@ -41,6 +41,24 @@ Nodes are grouped into levels: every node in level *i* only depends on nodes in 
 
 `plan`, `apply`, `destroy` and `vendor` take an exclusive lock at `<blueprint dir>/.terragraph/lock` before they read or write module files, and hold it until the command exits. A second process targeting the same blueprint prints a one-line wait notice and blocks until the first exits; the lock is released on process exit, so a crash cannot leave it stuck. `validate`, `graph` and `language-server` do not take it, so they stay usable while a long apply is running. One process that already holds the lock can still use `--parallelism` inside the run.
 
+## Graph remote lock
+
+Flock is same-checkout only. Two machines never see `<blueprint dir>/.terragraph/lock`.
+
+An optional top-level `lock` block serializes **the graph run** across machines. Terraform still locks each node's state; this lock is the vpc-then-eks run, because per-node locks do not preserve graph order.
+
+Activation is the block, not a CLI flag. No `lock` block means current behavior (examples, solo local state).
+
+The mechanism is an S3 lock **object** via conditional writes (the same idea as Terraform 1.10+ `use_lockfile`). It is not S3 Object Lock (WORM). terragraph owns the object; it does not borrow a node's Terraform backend. The graph lock `key` must not be a node's state `key` (`backend_config.key` is checked; a key hardcoded only in `.tf` is not inspected).
+
+`plan` / `apply` / `destroy` take the local flock, then the graph remote lock, then per-node terraform. `validate` / `graph` / `language-server` do not take the remote lock; `validate` still rejects `lock` plus a local or missing backend.
+
+If the object already exists, the command **fails immediately** (it does not wait the way flock does).
+
+Ctrl-C / SIGTERM / SIGKILL leave the S3 object (the process exits without running `defer`; flock still drops with the fd). Delete the object to recover. There is no `force-unlock` yet.
+
+Every node must use a remote backend (`s3` / `gcs` / `azurerm` / `http` / `remote` / `cloud`). See [blueprint.md](blueprint.md#graph-remote-lock-lock) for the block.
+
 ## Deciding whether a node needs applying
 
 Terraform decides, every run. `terragraph apply` plans each node with `-refresh=true -detailed-exitcode`; a plan reporting no changes skips the apply, and nothing local is consulted first.

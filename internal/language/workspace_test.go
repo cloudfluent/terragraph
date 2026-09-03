@@ -98,6 +98,8 @@ func TestWorkspaceCompletesBlueprintSyntaxByContext(t *testing.T) {
 		{"runtime attribute", "runtime \"tofu\" {\n  __CURSOR__\n}", "binary", "required string"},
 		{"use attribute", "use \"network\" {\n  __CURSOR__\n}", "env", "map(string)"},
 		{"use vars attribute", "use \"network\" {\n  __CURSOR__\n}", "vars", "object"},
+		{"lock nested type", "lock {\n  __CURSOR__\n}", "s3", "Lock block"},
+		{"lock s3 attribute", "lock {\n  s3 {\n    __CURSOR__\n  }\n}", "bucket", "required string"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			text, offset := cursor(tc.text, "__CURSOR__")
