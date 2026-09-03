@@ -80,6 +80,10 @@ case "$1" in
     ;;
   destroy)
     printf 'destroy\n' >> "$TG_COMMAND_LOG"
+    # Nothing to tear down: terraform reports no changes and never asks.
+    if [ -n "${TG_DESTROY_NOOP:-}" ]; then
+      exit 0
+    fi
     # Mirrors the real CLI: -input=false does not suppress the confirmation, so without -auto-approve an answer has to arrive on stdin.
     case "$*" in
       *-auto-approve*) rm -f managed.out; exit 0 ;;

@@ -37,12 +37,32 @@ func (e *Engine) Destroy(opts Options) error {
 
 		r := &exec.Runner{Binary: e.runtimeFor(name), Dir: e.nodeDir(name), DataDir: e.dataDir(name), Env: e.envFor(name), Stdout: out, Stderr: out}
 		// Unlike apply, there is no saved plan here for terragraph to ask about itself, so terraform's own confirmation is the approval — and it needs somewhere to read the answer from. Left nil when auto-approving, so an unattended run can never block on a question.
-		if !opts.AutoApprove {
-			r.Stdin = e.Stdin
+		var answered *countingReader
+		if !opts.AutoApprove && e.Stdin != nil {
+			answered = &countingReader{r: e.Stdin}
+			r.Stdin = answered
 		}
 		if err := r.Destroy(opts.AutoApprove, exec.VarFileArgs(varsPath, vars)...); err != nil {
+			// Apply knows in advance whether a node has changes, because it plans first, so it can refuse with noApprovalError before running anything. Destroy has no such plan and cannot tell an unattended no-op (which succeeds, and should) from one about to ask a question nobody can answer. So the hint is attached to the failure rather than predicted.
+			//
+			// "Was there an answer to be had?" is not the same question as "is Stdin nil?": a CLI run always has one (cmd.InOrStdin()), and redirecting from /dev/null still produces a perfectly good reader that yields nothing. What separates the two is whether terraform got any bytes out of it, which is why this counts them rather than testing for nil.
+			if !opts.AutoApprove && (answered == nil || answered.n == 0) {
+				return nil, fmt.Errorf("destroy: %w (nothing was available to read approval from; pass --auto-approve to destroy without asking)", err)
+			}
 			return nil, fmt.Errorf("destroy: %w", err)
 		}
 		return nil, nil
 	}, nil)
+}
+
+// countingReader records whether anything was ever read from it, so a failed destroy can tell "nobody answered" from "the answer was rejected". Only ever handed to one subprocess at a time (destroy prompts require --parallelism 1), so it needs no locking.
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err
 }
