@@ -23,7 +23,7 @@ An edge can be:
 
 Mixing the two on the same edge (a port on one side, a bare node on the other) is rejected at parse time.
 
-An input is a single slot: two data edges targeting the same input are a validation Error, whether their `from` sides differ or match (exact duplicates). The same rule covers a data edge colliding with `vars` (see [Literal input values (`vars`)](#literal-input-values-vars)). It is checked after group expansion, so two outer edges, or an outer edge plus an internal one, that only meet on the same leaf once a `use` export has rewritten them are caught too. Ordering-only edges are not this rule; they carry no value.
+An input is a single slot: two data edges targeting the same input are a validation Error, whether their `from` sides differ or match (exact duplicates). The same rule covers a data edge colliding with `vars` (see [Literal input values (`vars`)](#literal-input-values-vars)). It is checked after group expansion, so two outer edges, or an outer edge plus an internal one, that only meet on the same leaf once a `use` export has rewritten them are caught too. A `use.vars` key is rewritten onto those same leaves and collides the same way as `node.vars`; see [groups.md](groups.md#setting-literal-inputs-for-an-instance). Ordering-only edges are not this rule; they carry no value.
 
 Node canvas layout (for the future visual editor) lives in a separate `blueprint.layout.json`, so moving a box never shows up in a `blueprint.hcl` diff.
 

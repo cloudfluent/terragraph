@@ -88,6 +88,7 @@ var useSchema = &hcl.BodySchema{
 		{Name: "source", Required: true},
 		{Name: "runtime", Required: false},
 		{Name: "env", Required: false},
+		{Name: "vars", Required: false},
 		{Name: "approve", Required: false},
 	},
 }
@@ -544,7 +545,7 @@ func parseApproveAttr(attr *hcl.Attribute) (Approve, error) {
 	return a, nil
 }
 
-// parseVarsAttr evaluates the optional vars attribute: literal input values declared directly on a node, keyed by the target variable's name (see Node.Vars). The expression is evaluated with no variables or functions in scope, so a reference to another node's or use instance's output (e.g. node.vpc.output.vpc_id) fails to parse here exactly as intended: that kind of value must come from a real edge, not vars, since only an edge records the dependency the engine needs to sequence execution and wait for the value to actually exist.
+// parseVarsAttr evaluates the optional vars attribute: literal input values declared on a node or a use. On a node the keys are module variable names (see Node.Vars); on a use they are the group's export input names (see Use.Vars). The HCL shape is the same either way. The expression is evaluated with no variables or functions in scope, so a reference to another node's or use instance's output (e.g. node.vpc.output.vpc_id) fails to parse here exactly as intended: that kind of value must come from a real edge, not vars, since only an edge records the dependency the engine needs to sequence execution and wait for the value to actually exist.
 func parseVarsAttr(attr *hcl.Attribute) (map[string]any, error) {
 	val, diags := attr.Expr.Value(nil)
 	if diags.HasErrors() {
@@ -926,6 +927,15 @@ func parseUseBlock(block *hcl.Block) (Use, error) {
 		}
 	}
 
+	var vars map[string]any
+	if attr, ok := content.Attributes["vars"]; ok {
+		var err error
+		vars, err = parseVarsAttr(attr)
+		if err != nil {
+			return Use{}, err
+		}
+	}
+
 	approve, err := parseApproveAttr(content.Attributes["approve"])
 	if err != nil {
 		return Use{}, err
@@ -937,6 +947,7 @@ func parseUseBlock(block *hcl.Block) (Use, error) {
 		Source:    sourceVal.AsString(),
 		Runtime:   runtime,
 		Env:       env,
+		Vars:      vars,
 		Approve:   approve,
 	}, nil
 }

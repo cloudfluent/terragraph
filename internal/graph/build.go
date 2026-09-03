@@ -222,6 +222,10 @@ func resolveUse(u blueprint.Use, referencingDir, instancePrefix string, ambient 
 		return useInfo{}, nil, err
 	}
 
+	if err := applyUseVars(u.Vars, resolvedExport, internal.Nodes, u.As); err != nil {
+		return useInfo{}, nil, err
+	}
+
 	var roots, sinks []string
 	for name := range internal.Nodes {
 		if len(internal.In[name]) == 0 {
