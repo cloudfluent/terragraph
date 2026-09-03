@@ -35,6 +35,12 @@ tfvars {
 
 Nodes are grouped into levels: every node in level *i* only depends on nodes in levels `< i`, so nodes within one level have no edge between them and are safe to run concurrently. `terragraph graph` prints these levels directly. Execution defaults to sequential (`--parallelism 1`); pass `--parallelism N` to `plan`/`apply`/`destroy` to run up to `N` nodes within a level concurrently. Output from concurrent nodes is buffered and flushed as one `=== node <name> ===` block per node so it never interleaves; with the default `--parallelism 1` it streams live as before.
 
+## Concurrent CLI processes
+
+`--parallelism` is in-process. Two separate `terragraph` invocations against the same blueprint are a different boundary: they would otherwise share `.terragraph/` (tfvars, `TF_DATA_DIR`, saved plans) and, for nodes that reuse a module `source`, that directory's `.terraform.lock.hcl`.
+
+`plan`, `apply`, `destroy` and `vendor` take an exclusive lock at `<blueprint dir>/.terragraph/lock` before they read or write module files, and hold it until the command exits. A second process targeting the same blueprint prints a one-line wait notice and blocks until the first exits; the lock is released on process exit, so a crash cannot leave it stuck. `validate`, `graph` and `language-server` do not take it, so they stay usable while a long apply is running. One process that already holds the lock can still use `--parallelism` inside the run.
+
 ## Deciding whether a node needs applying
 
 Terraform decides, every run. `terragraph apply` plans each node with `-refresh=true -detailed-exitcode`; a plan reporting no changes skips the apply, and nothing local is consulted first.

@@ -13,6 +13,7 @@ import (
 	"github.com/cloudfluent/terragraph/internal/exec"
 	"github.com/cloudfluent/terragraph/internal/graph"
 	"github.com/cloudfluent/terragraph/internal/lsp"
+	"github.com/cloudfluent/terragraph/internal/runlock"
 	"github.com/cloudfluent/terragraph/internal/vendor"
 )
 
@@ -82,10 +83,24 @@ func loadEngine(cmd *cobra.Command, blueprintPath *string, binaryOf func() exec.
 	if err != nil {
 		return nil, err
 	}
+	wireEngine(cmd, e, loggerOf, *blueprintPath)
+	return e, nil
+}
+
+// loadLockedEngine is loadEngine after taking the blueprint process lock, so plan/apply/destroy inspect module files only once a concurrent vendor cannot rewrite them. The caller must invoke the returned func when the command ends.
+func loadLockedEngine(cmd *cobra.Command, blueprintPath *string, binaryOf func() exec.Binary, loggerOf func() *slog.Logger) (*engine.Engine, func(), error) {
+	e, unlock, err := engine.LoadLocked(*blueprintPath, binaryOf(), cmd.OutOrStdout(), cmd.ErrOrStderr())
+	if err != nil {
+		return nil, nil, err
+	}
+	wireEngine(cmd, e, loggerOf, *blueprintPath)
+	return e, unlock, nil
+}
+
+func wireEngine(cmd *cobra.Command, e *engine.Engine, loggerOf func() *slog.Logger, blueprintPath string) {
 	e.Stdin = cmd.InOrStdin()
 	e.Logger = loggerOf()
-	e.Logger.Debug("blueprint loaded", "path", *blueprintPath, "nodes", len(e.Graph.Nodes))
-	return e, nil
+	e.Logger.Debug("blueprint loaded", "path", blueprintPath, "nodes", len(e.Graph.Nodes))
 }
 
 // checkValidate prints every problem found in the graph (Errors and Warnings alike, so a user sees the whole picture at once) and returns a non-nil error only if at least one is an Error. Warnings never block graph/plan/apply/destroy.
@@ -215,10 +230,11 @@ func newPlanCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fun
 		Use:   "plan",
 		Short: "Run terraform/tofu plan across the graph in dependency order",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			e, err := loadEngine(cmd, blueprintPath, binaryOf, loggerOf)
+			e, unlock, err := loadLockedEngine(cmd, blueprintPath, binaryOf, loggerOf)
 			if err != nil {
 				return err
 			}
+			defer unlock()
 			if err := checkValidate(cmd, e); err != nil {
 				return err
 			}
@@ -240,10 +256,11 @@ func newApplyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fu
 		Use:   "apply",
 		Short: "Run terraform/tofu apply across the graph in dependency order, wiring outputs to inputs",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			e, err := loadEngine(cmd, blueprintPath, binaryOf, loggerOf)
+			e, unlock, err := loadLockedEngine(cmd, blueprintPath, binaryOf, loggerOf)
 			if err != nil {
 				return err
 			}
+			defer unlock()
 			if err := checkValidate(cmd, e); err != nil {
 				return err
 			}
@@ -272,10 +289,11 @@ func newDestroyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf 
 		Use:   "destroy",
 		Short: "Run terraform/tofu destroy across the graph in reverse dependency order",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			e, err := loadEngine(cmd, blueprintPath, binaryOf, loggerOf)
+			e, unlock, err := loadLockedEngine(cmd, blueprintPath, binaryOf, loggerOf)
 			if err != nil {
 				return err
 			}
+			defer unlock()
 			if err := checkValidate(cmd, e); err != nil {
 				return err
 			}
@@ -310,6 +328,12 @@ func newVendorCmd(blueprintPath *string, loggerOf func() *slog.Logger) *cobra.Co
 			if err != nil {
 				return fmt.Errorf("resolving blueprint directory: %w", err)
 			}
+
+			lock, err := runlock.Acquire(baseDir, cmd.ErrOrStderr())
+			if err != nil {
+				return fmt.Errorf("locking blueprint: %w", err)
+			}
+			defer func() { _ = lock.Close() }()
 
 			nodes := bp.Nodes
 			if node != "" {

@@ -11,6 +11,12 @@ import (
 //
 // Nothing has to be invalidated afterwards. Destroy once had to drop the incremental-apply cache entry for everything it tore down, because a stale "unchanged" hit against infrastructure that no longer exists would have been a correctness bug rather than a missed optimization; a later apply now asks Terraform, which plans against real state and sees the resources are gone.
 func (e *Engine) Destroy(opts Options) error {
+	unlock, err := e.lockRun()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
 	e.logger().Info("destroy starting", "node", opts.Node, "parallelism", opts.parallelism())
 
 	return e.runLevels(opts, true, func(name string, applied map[string]map[string]any, out io.Writer) (map[string]any, error) {
