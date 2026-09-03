@@ -288,6 +288,10 @@ func parseOneFile(path string, bp *Blueprint, seenNodes, seenGroups, seenUses, s
 			seenRuntimes[rt.Name] = true
 			bp.Runtimes = append(bp.Runtimes, rt)
 		case "contracts":
+			// The mode is the strictness dial; two blocks would silently last-win, which is exactly the unreviewed strictness change docs/contracts.md forbids.
+			if bp.ContractMode != "" {
+				return fmt.Errorf("%s: duplicate contracts block", block.DefRange)
+			}
 			mode, err := parseContractsBlock(block)
 			if err != nil {
 				return err

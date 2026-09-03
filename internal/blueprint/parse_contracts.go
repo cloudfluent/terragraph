@@ -91,7 +91,7 @@ func parseContractsFile(parser *hclparse.Parser, file, baseDir string, c *Contra
 	if diags.HasErrors() {
 		return fmt.Errorf("parsing %s: %s", file, diags.Error())
 	}
-	content, _, diags := f.Body.PartialContent(contractsTopSchema)
+	content, diags := f.Body.Content(contractsTopSchema)
 	if diags.HasErrors() {
 		return fmt.Errorf("parsing %s: %s", file, diags.Error())
 	}
@@ -113,7 +113,7 @@ func parseContractsFile(parser *hclparse.Parser, file, baseDir string, c *Contra
 			ports = dc.Consumer
 			portKind = "input"
 		}
-		side, _, diags := block.Body.PartialContent(contractsSideSchema)
+		side, diags := block.Body.Content(contractsSideSchema)
 		if diags.HasErrors() {
 			return fmt.Errorf("parsing %s: %s", file, diags.Error())
 		}
@@ -122,6 +122,13 @@ func parseContractsFile(parser *hclparse.Parser, file, baseDir string, c *Contra
 			kind := "output"
 			if role == "consumer" {
 				kind = "input"
+			}
+			if port.Type != kind {
+				owner := "consumer"
+				if role == "consumer" {
+					owner = "producer"
+				}
+				return fmt.Errorf("contract.%s.%s: %s blocks belong in a %s block; move %q", role, scope, port.Type, owner, name)
 			}
 			pc, err := parsePortContract(port, role, kind, scope, name, file)
 			if err != nil {
@@ -138,7 +145,7 @@ func parseContractsFile(parser *hclparse.Parser, file, baseDir string, c *Contra
 
 func parsePortContract(port *hcl.Block, role, kind, scope, name, file string) (PortContract, error) {
 	pc := PortContract{Name: name, Scope: scope, Stability: "stable"}
-	content, _, diags := port.Body.PartialContent(portContractSchema)
+	content, diags := port.Body.Content(portContractSchema)
 	if diags.HasErrors() {
 		return PortContract{}, fmt.Errorf("parsing %s: %s", file, diags.Error())
 	}
@@ -149,15 +156,26 @@ func parsePortContract(port *hcl.Block, role, kind, scope, name, file string) (P
 		}
 		switch attr.Name {
 		case "type":
+			if val.Type() != cty.String {
+				return PortContract{}, attrTypeError(role, kind, name, "type", val, "a string")
+			}
 			pc.Type = val.AsString()
 			if err := validateTypeConstraint(pc.Type); err != nil {
 				return PortContract{}, fmt.Errorf("contract.%s.%s.%s: %w", role, kind, name, err)
 			}
-		case "nullable":
-			pc.Nullable = new(val.True())
-		case "sensitive":
-			pc.Sensitive = new(val.True())
+		case "nullable", "sensitive":
+			if val.Type() != cty.Bool {
+				return PortContract{}, attrTypeError(role, kind, name, attr.Name, val, "a bool")
+			}
+			if attr.Name == "nullable" {
+				pc.Nullable = new(val.True())
+			} else {
+				pc.Sensitive = new(val.True())
+			}
 		case "stability":
+			if val.Type() != cty.String {
+				return PortContract{}, attrTypeError(role, kind, name, "stability", val, "a string")
+			}
 			pc.Stability = val.AsString()
 			if pc.Stability != "stable" && pc.Stability != "volatile" {
 				return PortContract{}, fmt.Errorf("contract.%s.%s.%s: stability must be \"stable\" or \"volatile\", got %q", role, kind, name, pc.Stability)
@@ -165,7 +183,7 @@ func parsePortContract(port *hcl.Block, role, kind, scope, name, file string) (P
 		}
 	}
 	for _, ab := range content.Blocks {
-		ac, _, diags := ab.Body.PartialContent(assertSchema)
+		ac, diags := ab.Body.Content(assertSchema)
 		if diags.HasErrors() {
 			return PortContract{}, fmt.Errorf("parsing %s: %s", file, diags.Error())
 		}
@@ -176,15 +194,30 @@ func parsePortContract(port *hcl.Block, role, kind, scope, name, file string) (P
 			}
 			switch attr.Name {
 			case "nonempty":
+				if val.Type() != cty.Bool {
+					return PortContract{}, attrTypeError(role, kind, name, "nonempty", val, "a bool")
+				}
 				pc.Assertions = append(pc.Assertions, Assertion{Kind: "nonempty", Value: fmt.Sprintf("%t", val.True())})
 			case "pattern":
+				if val.Type() != cty.String {
+					return PortContract{}, attrTypeError(role, kind, name, "pattern", val, "a string")
+				}
 				pc.Assertions = append(pc.Assertions, Assertion{Kind: "pattern", Value: val.AsString()})
 			case "min_length":
+				if val.Type() != cty.Number {
+					return PortContract{}, attrTypeError(role, kind, name, "min_length", val, "a number")
+				}
 				pc.Assertions = append(pc.Assertions, Assertion{Kind: "min_length", Value: val.AsBigFloat().String()})
 			case "one_of":
+				if !val.Type().IsListType() && !val.Type().IsSetType() && !val.Type().IsTupleType() {
+					return PortContract{}, attrTypeError(role, kind, name, "one_of", val, "a list of strings")
+				}
 				parts := make([]string, 0)
 				for it := val.ElementIterator(); it.Next(); {
 					_, el := it.Element()
+					if el.Type() != cty.String {
+						return PortContract{}, attrTypeError(role, kind, name, "one_of", el, "a list of strings")
+					}
 					parts = append(parts, el.AsString())
 				}
 				sort.Strings(parts) // one_of is a set semantically; sorted spelling keeps the digest independent of listing order
@@ -193,6 +226,11 @@ func parsePortContract(port *hcl.Block, role, kind, scope, name, file string) (P
 		}
 	}
 	return pc, nil
+}
+
+// attrTypeError guards every typed read in parsePortContract: cty's AsString/True/AsBigFloat panic on a wrong-typed value, and a parser panic takes down every command that loads the graph — a wrong-typed literal must die as a parse error at this trust boundary instead.
+func attrTypeError(role, kind, name, attr string, val cty.Value, want string) error {
+	return fmt.Errorf("contract.%s.%s.%s: %s must be %s, got %s", role, kind, name, attr, want, val.Type().FriendlyName())
 }
 
 // validateTypeConstraint fails fast on a type string that Terraform itself would reject, at parse time where the file and port are known — the same reason node variables' type constraints are checked before any graph exists.

@@ -36,3 +36,15 @@ node "a" { source = "./m" }
 		t.Fatalf("got = %q, want legacy default", bp.ContractMode)
 	}
 }
+
+// TestParseFile_DuplicateContractsBlock proves a second contracts block is refused like every other singleton: the mode is the strictness dial, and last-win would be an unreviewed strictness change.
+func TestParseFile_DuplicateContractsBlock(t *testing.T) {
+	path := writeTemp(t, `
+contracts { mode = "warn" }
+contracts { mode = "enforce" }
+node "a" { source = "./m" }
+`)
+	if _, err := ParseFile(path); err == nil || !strings.Contains(err.Error(), "duplicate contracts block") {
+		t.Fatalf("got = %v, want duplicate contracts block error", err)
+	}
+}

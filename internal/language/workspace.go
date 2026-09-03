@@ -912,7 +912,7 @@ func contractsDiagnostics(path string, text []byte) []Diagnostic {
 			portKind = "input"
 		}
 		for _, port := range block.Body.Blocks {
-			if port.Type != "output" && port.Type != "input" {
+			if port.Type != portKind {
 				diagnostics = append(diagnostics, Diagnostic{Start: port.TypeRange.Start.Byte, End: port.TypeRange.End.Byte, Message: "Unsupported block " + port.Type + "; a " + block.Type + " block contains only " + portKind + " port blocks"})
 				continue
 			}

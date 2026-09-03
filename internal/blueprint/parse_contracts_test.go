@@ -172,3 +172,59 @@ producer "./m" {
 		t.Fatal("node a missing from merged blueprint")
 	}
 }
+
+// TestParseContracts_RejectsWronglyTypedAttributes proves wrong-typed literals die as parse errors, not panics: cty accessors panic on mismatch and a parser panic takes down every graph-loading command.
+func TestParseContracts_RejectsWronglyTypedAttributes(t *testing.T) {
+	base := t.TempDir()
+	for name, hcl := range map[string]string{
+		"type":       "producer \"./m\" {\n  output \"id\" {\n    type = 5\n  }\n}\n",
+		"nullable":   "producer \"./m\" {\n  output \"id\" {\n    nullable = \"yes\"\n  }\n}\n",
+		"one_of":     "producer \"./m\" {\n  output \"id\" {\n    assert {\n      one_of = \"nope\"\n    }\n  }\n}\n",
+		"min_length": "producer \"./m\" {\n  output \"id\" {\n    assert {\n      min_length = \"x\"\n    }\n  }\n}\n",
+	} {
+		writeContractsFile(t, filepath.Join(base, "contracts.hcl"), hcl)
+		_, _, err := ParseContracts(filepath.Join(base, "contracts.hcl"))
+		if err == nil || !strings.Contains(err.Error(), "must be") {
+			t.Fatalf("%s: got = %v, want a typed-value parse error", name, err)
+		}
+	}
+}
+
+// TestParseContracts_RejectsUnknownNames proves a typo cannot silently weaken a contract: unknown attributes and blocks are parse errors, matching what the language server underlines.
+func TestParseContracts_RejectsUnknownNames(t *testing.T) {
+	base := t.TempDir()
+	writeContractsFile(t, filepath.Join(base, "contracts.hcl"), `
+producer "./m" {
+  output "id" {
+    nulleable = false
+  }
+}
+`)
+	if _, _, err := ParseContracts(filepath.Join(base, "contracts.hcl")); err == nil || !strings.Contains(err.Error(), "Unsupported argument") {
+		t.Fatalf("got = %v, want unsupported-argument error for nulleable", err)
+	}
+	writeContractsFile(t, filepath.Join(base, "contracts.hcl"), `
+producter "./m" {
+  output "id" { type = "string" }
+}
+`)
+	if _, _, err := ParseContracts(filepath.Join(base, "contracts.hcl")); err == nil || !strings.Contains(err.Error(), "Unsupported block type") {
+		t.Fatalf("got = %v, want unsupported-block error for producter", err)
+	}
+}
+
+// TestParseContracts_RejectsRoleMismatchedPorts proves an input block inside a producer (an easy slip) is refused with the remedy instead of being misfiled as an output guarantee that later surfaces as a misleading C001.
+func TestParseContracts_RejectsRoleMismatchedPorts(t *testing.T) {
+	base := t.TempDir()
+	writeContractsFile(t, filepath.Join(base, "contracts.hcl"), `
+producer "./m" {
+  input "vpc_id" {
+    type = "string"
+  }
+}
+`)
+	_, _, err := ParseContracts(filepath.Join(base, "contracts.hcl"))
+	if err == nil || !strings.Contains(err.Error(), "input blocks belong in a consumer block") {
+		t.Fatalf("got = %v, want role-mismatch error naming the right owner", err)
+	}
+}
