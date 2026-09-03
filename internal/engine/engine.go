@@ -3,6 +3,7 @@ package engine
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"github.com/cloudfluent/terragraph/internal/blueprint"
 	"github.com/cloudfluent/terragraph/internal/exec"
 	"github.com/cloudfluent/terragraph/internal/graph"
+	"github.com/cloudfluent/terragraph/internal/graphlock"
 	"github.com/cloudfluent/terragraph/internal/runlock"
 )
 
@@ -89,6 +91,28 @@ func (e *Engine) lockRun() (func(), error) {
 		return nil, fmt.Errorf("locking blueprint: %w", err)
 	}
 	return func() { _ = lock.Close() }, nil
+}
+
+var acquireRemoteLock = graphlock.Acquire
+
+func (e *Engine) lockGraph() (func(), error) {
+	if e.Blueprint == nil || e.Blueprint.Lock == nil {
+		return func() {}, nil
+	}
+	e.logger().Debug("acquiring graph lock")
+	held, err := acquireRemoteLock(context.Background(), e.Blueprint.Lock)
+	if err != nil {
+		return nil, fmt.Errorf("locking graph: %w", err)
+	}
+	return func() {
+		if err := held.Close(); err != nil {
+			w := e.Stderr
+			if w == nil {
+				w = os.Stderr
+			}
+			_, _ = fmt.Fprintf(w, "releasing graph lock: %v\n", err)
+		}
+	}, nil
 }
 
 // Load parses the blueprint at blueprintPath and builds its graph. blueprintPath may name a single file or a directory (every .hcl file directly inside it is merged, see blueprint.LoadPath); node sources are resolved relative to the resulting base directory. It does not take the process lock; use LoadLocked for plan/apply/destroy so graph.Build cannot inspect module files while vendor rewrites them.

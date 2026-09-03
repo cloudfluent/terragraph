@@ -10,6 +10,7 @@ import (
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclparse"
+	"github.com/hashicorp/hcl/v2/hclsyntax"
 	"github.com/zclconf/go-cty/cty"
 	"github.com/zclconf/go-cty/cty/convert"
 	ctyjson "github.com/zclconf/go-cty/cty/json"
@@ -23,6 +24,7 @@ var topSchema = &hcl.BodySchema{
 		{Type: "use", LabelNames: []string{"name"}},
 		{Type: "vendor"},
 		{Type: "tfvars"},
+		{Type: "lock"},
 		{Type: "runtime", LabelNames: []string{"name"}},
 	},
 }
@@ -37,6 +39,18 @@ var vendorSchema = &hcl.BodySchema{
 var tfvarsSchema = &hcl.BodySchema{
 	Attributes: []hcl.AttributeSchema{
 		{Name: "location", Required: false},
+	},
+}
+
+var lockSchema = &hcl.BodySchema{
+	Blocks: []hcl.BlockHeaderSchema{{Type: "s3"}},
+}
+
+var lockS3Schema = &hcl.BodySchema{
+	Attributes: []hcl.AttributeSchema{
+		{Name: "bucket", Required: true},
+		{Name: "key", Required: true},
+		{Name: "region", Required: true},
 	},
 }
 
@@ -174,7 +188,7 @@ func LoadPath(path string) (*Blueprint, string, error) {
 	return bp, filepath.Dir(path), err
 }
 
-// parseOneFile parses one HCL file and merges its node/edge/group/use/vendor/runtime blocks into bp, checking name and vendor/tfvars-block uniqueness against the caller-supplied seen-sets (shared across every file being merged into the same bp). Edge endpoint and runtime-reference validation deliberately does not happen here: it happens once, in validateEdges/validateRuntimes, after every file that will ever contribute to bp has been merged, so a reference in one file may target a node, use instance, or runtime declared in another.
+// parseOneFile parses one HCL file and merges its node/edge/group/use/vendor/tfvars/lock/runtime blocks into bp, checking name and vendor/tfvars/lock-block uniqueness against the caller-supplied seen-sets (shared across every file being merged into the same bp). Edge endpoint and runtime-reference validation deliberately does not happen here: it happens once, in validateEdges/validateRuntimes, after every file that will ever contribute to bp has been merged, so a reference in one file may target a node, use instance, or runtime declared in another.
 func parseOneFile(path string, bp *Blueprint, seenNodes, seenGroups, seenUses, seenRuntimes map[string]bool) error {
 	src, err := os.ReadFile(path)
 	if err != nil {
@@ -248,6 +262,15 @@ func parseOneFile(path string, bp *Blueprint, seenNodes, seenGroups, seenUses, s
 				return err
 			}
 			bp.TFVars = tc
+		case "lock":
+			if bp.Lock != nil {
+				return fmt.Errorf("%s: duplicate lock block", block.DefRange)
+			}
+			lk, err := parseLockBlock(block)
+			if err != nil {
+				return err
+			}
+			bp.Lock = lk
 		case "runtime":
 			rt, err := parseRuntimeBlock(block)
 			if err != nil {
@@ -387,6 +410,107 @@ func parseTFVarsBlock(block *hcl.Block) (*TFVarsConfig, error) {
 	}
 
 	return tc, nil
+}
+
+// parseLockBlock parses the optional top-level `lock { }` block.
+//
+// PartialContent's remainder still lists matched `s3` blocks (they are only
+// hidden, and hiddenBlocks is unexported), so walking remainder.Blocks would
+// treat a valid `s3` as unknown. Native HCL bodies are *hclsyntax.Body; walk
+// that so `lock { dynamodb {} }` is unknown and `lock { s3 {} dynamodb {} }`
+// is a parse Error. Fallback Content on the remainder respects hiddenBlocks.
+func parseLockBlock(block *hcl.Block) (*Lock, error) {
+	if syn, ok := block.Body.(*hclsyntax.Body); ok {
+		return parseLockSyntaxBody(block, syn)
+	}
+	content, remain, diags := block.Body.PartialContent(lockSchema)
+	if diags.HasErrors() {
+		return nil, fmt.Errorf("%s: %s", block.DefRange, diags.Error())
+	}
+	if remain != nil {
+		_, remainDiags := remain.Content(&hcl.BodySchema{})
+		if remainDiags.HasErrors() {
+			for _, d := range remainDiags {
+				if d.Summary == "Unsupported block type" && d.Subject != nil {
+					return nil, fmt.Errorf("%s: lock: unknown backend type %q", *d.Subject, unsupportedBlockType(d))
+				}
+			}
+			return nil, fmt.Errorf("%s: %s", block.DefRange, remainDiags.Error())
+		}
+	}
+	switch len(content.Blocks) {
+	case 0:
+		return nil, fmt.Errorf("%s: lock block must contain exactly one nested backend", block.DefRange)
+	case 1:
+		s3, err := parseLockS3Block(content.Blocks[0])
+		if err != nil {
+			return nil, err
+		}
+		return &Lock{S3: s3}, nil
+	default:
+		return nil, fmt.Errorf("%s: lock block must contain exactly one nested backend", block.DefRange)
+	}
+}
+
+func parseLockSyntaxBody(block *hcl.Block, syn *hclsyntax.Body) (*Lock, error) {
+	for name, attr := range syn.Attributes {
+		return nil, fmt.Errorf("%s: unexpected attribute %q", attr.SrcRange, name)
+	}
+	var s3Blocks []*hclsyntax.Block
+	for _, b := range syn.Blocks {
+		if b.Type != "s3" {
+			return nil, fmt.Errorf("%s: lock: unknown backend type %q", b.TypeRange, b.Type)
+		}
+		s3Blocks = append(s3Blocks, b)
+	}
+	if len(s3Blocks) != 1 {
+		return nil, fmt.Errorf("%s: lock block must contain exactly one nested backend", block.DefRange)
+	}
+	s3, err := parseLockS3Block(s3Blocks[0].AsHCLBlock())
+	if err != nil {
+		return nil, err
+	}
+	return &Lock{S3: s3}, nil
+}
+
+func unsupportedBlockType(d *hcl.Diagnostic) string {
+	const prefix = `Blocks of type "`
+	if d == nil || !strings.HasPrefix(d.Detail, prefix) {
+		return "unknown"
+	}
+	rest := d.Detail[len(prefix):]
+	if i := strings.IndexByte(rest, '"'); i >= 0 {
+		return rest[:i]
+	}
+	return "unknown"
+}
+
+func parseLockS3Block(block *hcl.Block) (*S3Lock, error) {
+	content, diags := block.Body.Content(lockS3Schema)
+	if diags.HasErrors() {
+		return nil, fmt.Errorf("%s: %s", block.DefRange, diags.Error())
+	}
+
+	s3 := &S3Lock{}
+	for _, name := range []string{"bucket", "key", "region"} {
+		attr := content.Attributes[name]
+		val, diags := attr.Expr.Value(nil)
+		if diags.HasErrors() || val.Type() != cty.String {
+			return nil, fmt.Errorf("%s: %s must be a literal string", attr.Range, name)
+		}
+		if val.AsString() == "" {
+			return nil, fmt.Errorf("%s: %s must not be empty", attr.Range, name)
+		}
+		switch name {
+		case "bucket":
+			s3.Bucket = val.AsString()
+		case "key":
+			s3.Key = val.AsString()
+		case "region":
+			s3.Region = val.AsString()
+		}
+	}
+	return s3, nil
 }
 
 // parseRuntimeBlock parses a `runtime "<name>" { }` block (see Runtime).

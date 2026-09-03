@@ -13,6 +13,8 @@ func BlockAttributes() map[string][]string {
 		"runtime": runtimeSchema,
 		"vendor":  vendorSchema,
 		"tfvars":  tfvarsSchema,
+		"lock":    lockSchema,
+		"s3":      lockS3Schema,
 	}
 
 	out := make(map[string][]string, len(schemas))

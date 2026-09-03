@@ -31,6 +31,8 @@ type Graph struct {
 	Edges []blueprint.Edge
 	Out   map[string][]string
 	In    map[string][]string
+	// Lock is the blueprint's optional graph remote lock, set only in Build (not inner group build). Nil means flock-only.
+	Lock *blueprint.Lock
 }
 
 // cloneNode returns a value copy of n with its BackendConfig/Vars/Env maps deep-copied. n.Nodes for a group instantiation come from a group definition that resolveContext.parseGroupDir may hand back to more than one `use` site (see loadGroupDef); without this, every instance of the same group would share the exact same underlying BackendConfig/Vars/Env map objects, since a plain struct copy only copies the map header, not its contents.
@@ -77,6 +79,9 @@ func mergeEnv(base, override map[string]string) map[string]string {
 // Build resolves a blueprint into a Graph, recursively expanding any group instantiations (`use` blocks). baseDir is the directory the blueprint file lives in and must be absolute: it becomes the root every relative node/group source resolves against, directly or (for a node inside a group) transitively. Build fails fast if a node's source directory cannot be inspected (e.g. it doesn't exist); that is a structural problem, not something validate can usefully report alongside others.
 func Build(bp *blueprint.Blueprint, baseDir string) (*Graph, error) {
 	g, _, err := build(bp, baseDir, "", nil, nil, nil, "", &resolveContext{rootDir: baseDir})
+	if g != nil {
+		g.Lock = bp.Lock
+	}
 	return g, err
 }
 

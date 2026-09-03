@@ -22,6 +22,12 @@ func (e *Engine) Destroy(opts Options) error {
 	}
 	defer unlock()
 
+	unlockGraph, err := e.lockGraph()
+	if err != nil {
+		return err
+	}
+	defer unlockGraph()
+
 	e.logger().Info("destroy starting", "node", opts.Node, "parallelism", opts.parallelism(), "autoApprove", opts.AutoApprove)
 
 	return e.runLevels(opts, true, func(name string, applied map[string]map[string]any, out io.Writer) (map[string]any, error) {

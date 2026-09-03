@@ -169,6 +169,19 @@ type TFVarsConfig struct {
 	Location TFVarsLocation
 }
 
+// Lock is the optional top-level graph remote lock. Nil on Blueprint means
+// current behavior (flock only). Presence is remote-lock mode.
+type Lock struct {
+	S3 *S3Lock
+}
+
+// S3Lock is the s3 nested backend. Bucket, Key, and Region are required non-empty literals.
+type S3Lock struct {
+	Bucket string
+	Key    string
+	Region string
+}
+
 // Blueprint is the fully parsed graph topology: nodes and the edges between them, plus any group definitions and instantiations. It carries no resource configuration, only wiring.
 type Blueprint struct {
 	Nodes  []Node
@@ -179,6 +192,8 @@ type Blueprint struct {
 	Vendor *VendorConfig
 	// TFVars is nil when the blueprint declares no `tfvars` block. Use the TFVarsLocation accessor, never this field directly, so callers never need to branch on nil.
 	TFVars *TFVarsConfig
+	// Lock is nil when the blueprint declares no `lock` block. Presence is remote-lock mode: plan/apply/destroy take a graph lock after the local flock, and every node must use a remote backend.
+	Lock *Lock
 	// Runtimes holds every `runtime` block declared in this parse scope (see Runtime). Parsing guarantees names are unique and at most one sets Default within this same slice; it does not guarantee every Node.Runtime/Use.Runtime reference in this scope resolves to a name here until validateRuntimes has run, which ParseFile/ParseDir always do before returning.
 	Runtimes []Runtime
 }

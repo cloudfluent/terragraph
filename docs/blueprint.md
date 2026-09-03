@@ -27,6 +27,24 @@ An input is a single slot: two data edges targeting the same input are a validat
 
 Node canvas layout (for the future visual editor) lives in a separate `blueprint.layout.json`, so moving a box never shows up in a `blueprint.hcl` diff.
 
+## Graph remote lock (`lock`)
+
+An optional top-level `lock` block serializes `plan` / `apply` / `destroy` across machines (a laptop and CI, or two clones). Terraform still locks each node's state; this lock is the graph run. Activation is the block itself, not a CLI flag. At most one `lock` per blueprint. See [execution-model.md](execution-model.md#graph-remote-lock) for acquire order and crash behavior.
+
+```hcl
+lock {
+  s3 {
+    bucket = "acme-tfstate"
+    key    = "terragraph/prod.lock"
+    region = "ap-northeast-2"
+  }
+}
+```
+
+`s3` is the only nested type in this release (`dynamodb` / `gcs` later). Parse errors: empty `lock {}`; two nested backends; an unknown nested type (including `dynamodb` today); a second `lock` block. `bucket`, `key`, and `region` are required non-empty literal strings.
+
+When `lock` is present, every node must use a remote backend (`s3` / `gcs` / `azurerm` / `http` / `remote` / `cloud`). `backend "local"` or no backend block is a validate **Error**. An S3 graph lock must not share an object with a node (same `key` and same bucket, or same `key` when `backend_config.bucket` is omitted). No `lock` block leaves current behavior (including local state) unchanged.
+
 ## Several values between the same two nodes (`input`)
 
 One `edge` block is one pair, which is faithful to "a flat list of facts" but noisy when two modules that already expose many flat variables need ten of them wired. An edge whose `from` and `to` are bare references may instead carry nested `input` blocks, the same shape as a group's [`export` input](groups.md):

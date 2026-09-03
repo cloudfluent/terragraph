@@ -24,7 +24,7 @@ type Problem struct {
 // IsError reports whether this problem should block graph/plan/apply, as opposed to a Warning, which is only surfaced.
 func (p Problem) IsError() bool { return p.Severity == SeverityError }
 
-// Validate checks a built Graph for issues that Build itself does not catch: edges referencing ports that don't actually exist on the target module (Error), two data edges targeting the same input, whether their from sides differ or match (Error; checked here rather than at parse so group expansion can rewrite a use export onto leaf ports first), a node's own vars targeting a variable the module doesn't declare or one a data edge already targets (Error), cycles in the dependency graph (Error), required variables that neither an edge nor vars ever supplies a value for (Warning: a module may legitimately get such a value from its own terraform.tfvars or the environment, outside the blueprint entirely), a non-empty backend_config on a module with no backend block (Error), and two or more leaves that share a module directory and resolve to identical backend_config maps (Error).
+// Validate checks a built Graph for issues that Build itself does not catch: edges referencing ports that don't actually exist on the target module (Error), two data edges targeting the same input, whether their from sides differ or match (Error; checked here rather than at parse so group expansion can rewrite a use export onto leaf ports first), a node's own vars targeting a variable the module doesn't declare or one a data edge already targets (Error), cycles in the dependency graph (Error), required variables that neither an edge nor vars ever supplies a value for (Warning: a module may legitimately get such a value from its own terraform.tfvars or the environment, outside the blueprint entirely), a non-empty backend_config on a module with no backend block (Error), two or more leaves that share a module directory and resolve to identical backend_config maps (Error), and, when a graph remote lock is set, a node whose backend is not remote or whose state key equals the graph lock key (Error).
 func Validate(g *Graph) []Problem {
 	var problems []Problem
 
@@ -121,7 +121,58 @@ func Validate(g *Graph) []Problem {
 	}
 
 	problems = append(problems, backendProblems(g)...)
+	problems = append(problems, remoteLockProblems(g)...)
 
+	return problems
+}
+
+var remoteLockBackends = map[string]bool{
+	"s3":      true,
+	"gcs":     true,
+	"azurerm": true,
+	"http":    true,
+	"remote":  true,
+	"cloud":   true,
+}
+
+func remoteLockProblems(g *Graph) []Problem {
+	if g == nil || g.Lock == nil {
+		return nil
+	}
+
+	names := make([]string, 0, len(g.Nodes))
+	for name := range g.Nodes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var problems []Problem
+	for _, name := range names {
+		node := g.Nodes[name]
+		backend := ""
+		if node.Schema != nil {
+			backend = node.Schema.Backend
+		}
+		if !remoteLockBackends[backend] {
+			what := "this module has no backend block"
+			if backend != "" {
+				what = fmt.Sprintf("this module has backend %q", backend)
+			}
+			problems = append(problems, Problem{
+				Severity: SeverityError,
+				Message:  fmt.Sprintf("node.%s: remote lock requires a remote backend (s3, gcs, azurerm, http, remote, or cloud); %s", name, what),
+			})
+		}
+		// Same key in another bucket or non-s3 backend is not an overwrite risk; empty bucket still flags because key may live only in .tf.
+		if g.Lock.S3 != nil && g.Lock.S3.Key != "" && backend == "s3" &&
+			node.BackendConfig["key"] == g.Lock.S3.Key &&
+			(node.BackendConfig["bucket"] == "" || node.BackendConfig["bucket"] == g.Lock.S3.Bucket) {
+			problems = append(problems, Problem{
+				Severity: SeverityError,
+				Message:  fmt.Sprintf("node.%s: graph lock key %q must not be a node's state key", name, g.Lock.S3.Key),
+			})
+		}
+	}
 	return problems
 }
 
