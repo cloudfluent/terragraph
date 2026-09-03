@@ -611,7 +611,7 @@ func parseStringMapAttr(attr *hcl.Attribute, attrName string) (map[string]string
 	return result, nil
 }
 
-// parseEdgeBlock parses one `edge { }` block into the edges it declares: exactly one, unless the block carries nested `input` blocks (see parseEdgeInputs), in which case it declares one data edge per nested block. That expansion happens here, at parse time, so nothing downstream ever sees the shorthand: by the time an edge reaches graph.Build it is an ordinary pair of PortRefs, and every later rule (one data edge per input, group export rewriting, cycle detection, the incremental-apply cache) applies to the expanded edges without knowing how they were spelled.
+// parseEdgeBlock parses one `edge { }` block into the edges it declares: exactly one, unless the block carries nested `input` blocks (see parseEdgeInputs), in which case it declares one data edge per nested block. That expansion happens here, at parse time, so nothing downstream ever sees the shorthand: by the time an edge reaches graph.Build it is an ordinary pair of PortRefs, and every later rule (one data edge per input, group export rewriting, cycle detection) applies to the expanded edges without knowing how they were spelled.
 func parseEdgeBlock(block *hcl.Block) ([]Edge, error) {
 	content, diags := block.Body.Content(edgeSchema)
 	if diags.HasErrors() {

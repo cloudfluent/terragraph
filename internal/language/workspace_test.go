@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/cloudfluent/terragraph/internal/blueprint"
 )
 
 func TestWorkspaceCompletePortsAndVarsInIncompleteDocument(t *testing.T) {
@@ -300,4 +302,19 @@ func documentationOf(items []Completion, label string) string {
 		}
 	}
 	return ""
+}
+
+// Editor completion is a second description of the blueprint language, and a second description drifts: `approve` was added to node and use blocks and went unoffered until someone noticed. This ties it back to the schema the parser actually uses, so the next attribute cannot be added in only one of the two places.
+func TestCompletionOffersEveryAttributeTheParserAccepts(t *testing.T) {
+	for block, attrs := range blueprint.BlockAttributes() {
+		offered := map[string]bool{}
+		for _, c := range completionSchemas[block] {
+			offered[c.name] = true
+		}
+		for _, attr := range attrs {
+			if !offered[attr] {
+				t.Errorf("%s block accepts %q but editor completion never offers it", block, attr)
+			}
+		}
+	}
 }

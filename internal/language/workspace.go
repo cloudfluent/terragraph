@@ -328,6 +328,7 @@ var completionSchemas = map[string][]attributeSpec{
 		{name: "env", insert: "env = {\n}", detail: "map(string)", documentation: "Extra environment variables for this module's Terraform or OpenTofu process."},
 		{name: "runtime", insert: "runtime = runtime.", detail: "runtime reference", documentation: "Selects a declared runtime for this node."},
 		{name: "backend_config", insert: "backend_config = {\n}", detail: "map(string)", documentation: "Backend configuration passed to terraform init."},
+		{name: "approve", insert: "approve = \"\"", detail: "optional string", documentation: "How much of this node's plan may be applied: \"none\", \"safe\" (create/update, the default), or \"all\" (adds replace/delete)."},
 	},
 	"edge": {
 		{name: "from", insert: "from = node.", detail: "required output reference", documentation: "Source node output, or a bare node for an ordering-only edge."},
@@ -339,7 +340,7 @@ var completionSchemas = map[string][]attributeSpec{
 	},
 	"runtime": {
 		{name: "binary", insert: "binary = \"\"", detail: "required string", documentation: "Terraform or OpenTofu binary path, or a command resolved from PATH."},
-		{name: "version", insert: "version = \"\"", detail: "optional string", documentation: "Version label included in the incremental-apply cache key."},
+		{name: "version", insert: "version = \"\"", detail: "optional string", documentation: "Records which versions this runtime is meant to represent. Never checked against the binary, and has no effect on execution."},
 		{name: "default", insert: "default = true", detail: "optional bool", documentation: "Makes this runtime the blueprint-wide fallback."},
 	},
 	"use": {
@@ -347,6 +348,7 @@ var completionSchemas = map[string][]attributeSpec{
 		{name: "source", insert: "source = \"\"", detail: "required string", documentation: "Local path or remote source containing the group."},
 		{name: "runtime", insert: "runtime = runtime.", detail: "runtime reference", documentation: "Default runtime for nodes expanded from this group."},
 		{name: "env", insert: "env = {\n}", detail: "map(string)", documentation: "Environment variables inherited by nodes expanded from this group."},
+		{name: "approve", insert: "approve = \"\"", detail: "optional string", documentation: "Default approve level for nodes expanded from this group, unless a node sets its own."},
 	},
 	"vendor": {
 		{name: "directory", insert: "directory = \"vendor\"", detail: "optional string", documentation: "Directory used to store vendored module sources."},

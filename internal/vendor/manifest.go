@@ -22,7 +22,7 @@ type Entry struct {
 // Manifest is the in-memory form of a vendor manifest: node name -> what to vendor for it.
 type Manifest map[string]Entry
 
-// manifestFile is the on-disk shape: a sorted slice, not a bare map, so Marshal produces byte-identical output regardless of Go map iteration order or any internal key-ordering behavior gopkg.in/yaml.v3 does not document. The same reasoning already applied to internal/cache hashing, here in service of keeping vendor.yaml diffs meaningful.
+// manifestFile is the on-disk shape: a sorted slice, not a bare map, so Marshal produces byte-identical output regardless of Go map iteration order or any internal key-ordering behavior gopkg.in/yaml.v3 does not document. Determinism here is in service of keeping vendor.yaml diffs meaningful.
 type manifestFile struct {
 	Modules []manifestFileEntry `yaml:"modules"`
 }
