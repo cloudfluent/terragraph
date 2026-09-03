@@ -60,6 +60,7 @@ func NewRootCmd(version string) *cobra.Command {
 	root.AddCommand(newApplyCmd(&blueprintPath, binaryOf, loggerOf))
 	root.AddCommand(newDestroyCmd(&blueprintPath, binaryOf, loggerOf))
 	root.AddCommand(newObserveCmd(&blueprintPath, binaryOf, loggerOf))
+	root.AddCommand(newProposeCmd(&blueprintPath, binaryOf, loggerOf))
 	root.AddCommand(newVendorCmd(&blueprintPath, loggerOf))
 	root.AddCommand(newLanguageServerCmd())
 
@@ -288,6 +289,25 @@ func newObserveCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf 
 	}
 	cmd.Flags().StringVar(&output, "output", "text", "output format: text or json")
 	return cmd
+}
+
+func newProposeCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf func() *slog.Logger) *cobra.Command {
+	return &cobra.Command{
+		Use:   "propose",
+		Short: "Draft contracts.hcl entries from terragraph.lock (stdout only; never writes files)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			e, err := loadEngine(cmd, blueprintPath, binaryOf, loggerOf)
+			if err != nil {
+				return err
+			}
+			draft, err := e.Propose()
+			if err != nil {
+				return err
+			}
+			_, _ = fmt.Fprint(cmd.OutOrStdout(), draft)
+			return nil
+		},
+	}
 }
 
 func newApplyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf func() *slog.Logger) *cobra.Command {
