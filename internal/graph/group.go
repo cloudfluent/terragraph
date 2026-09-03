@@ -14,6 +14,8 @@ type resolveContext struct {
 	stack     []string
 	groupDirs map[string]*blueprint.Blueprint
 	schemas   map[string]*module.Schema
+	// rootDir is the outer blueprint directory passed to Build, used for the local state default path. It is not the recursive baseDir used to resolve group-relative sources.
+	rootDir string
 }
 
 func (rc *resolveContext) push(dir, name string) (func(), error) {

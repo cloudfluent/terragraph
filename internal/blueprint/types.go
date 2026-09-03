@@ -53,7 +53,7 @@ func (p PortRef) String() string {
 
 // Node is one independent Terraform/OpenTofu root module participating in the graph. Source is a path relative to the blueprint file.
 //
-// BackendConfig is optional and lets the same Source be reused by multiple nodes (e.g. the same module for both "dev" and "prod") without state collisions: its entries are passed to `terraform init -backend-config=k=v`, Terraform's own partial backend configuration mechanism. This requires the module to declare at least an empty backend block (e.g. `backend "local" {}`); with no backend block at all, there's nothing for -backend-config to apply to and it's silently ignored.
+// BackendConfig is optional and lets the same Source be reused by multiple nodes (e.g. the same module for both "dev" and "prod") without state collisions: its entries are passed to `terraform init -backend-config=k=v`, Terraform's own partial backend configuration mechanism. The module must declare a backend block; a non-empty BackendConfig with no backend block (or only a cloud block) is a validation Error. If the module declares backend "local" and this map has no path, graph.Build fills path with an absolute file under <blueprint>/.terragraph/state/<node>.tfstate. An explicit path wins. Two leaves that share a module directory and resolve to identical maps (including both empty) are a validation Error.
 //
 // Vars is optional and supplies literal input values directly, keyed by variable name: for a value that's genuinely this node's own data (e.g. "this tenant's CIDR is 10.16.0.0/20"), not something that comes from another node's real output. It's merged into the same <node source>/.terragraph.auto.tfvars.json a data edge's resolved value would populate (see engine.Engine.resolveInputs), type-checked against the target variable's declared type the same way, and it's an error for a variable to be set by more than one source at once (two data edges, or a data edge and Vars together). Unlike BackendConfig (always strings), a value here can be any JSON-compatible shape a Terraform variable can hold (string, number, bool, list, or a nested object), so a module needing many inputs can still be wired with one Vars entry per node instead of one edge per variable.
 type Node struct {
@@ -100,6 +100,8 @@ type Use struct {
 	Vars map[string]any
 	// Approve, if set, becomes the approve level for every node this instantiation expands to, unless that node sets its own. Like Runtime, only the instantiation site can set this and a group definition has no equivalent: how much of a reusable group may be changed unattended is a fact about where it is deployed, not about the group.
 	Approve Approve
+	// BackendConfig, if set, is merged into every node this instantiation expands to, the same way Env merges: leaf keys win. Instantiation-site fact (bucket, profile, region). Do not invent a remote key from the instance name.
+	BackendConfig map[string]string
 }
 
 // ExportInput is one input port a group exposes to the outside. To may list more than one internal target: a single exposed value sometimes needs to fan out to several internal nodes that each independently need it, and, unlike execution ordering (which is inferable from the internal graph's shape), there is no way to infer that fan-out from structure alone, so the group author must declare it explicitly.

@@ -55,8 +55,8 @@ See [docs/](docs/README.md) for the blueprint model, groups, vendoring, the exec
 Self-contained and cloud-credential-free (`random`/`local` providers only). Clone and run directly, each with its own README:
 
 - [`examples/basic`](examples/basic): one node feeding two independent downstream nodes (wiring, parallel execution, skipping unchanged nodes).
-- [`examples/reuse`](examples/reuse): the same module instantiated twice via distinct `backend_config`, proving state isolation.
-- [`examples/group`](examples/group): a group instantiated via `use`, proving expansion and export wiring.
+- [`examples/reuse`](examples/reuse): the same module instantiated twice, proving the local state default isolates each node.
+- [`examples/group`](examples/group): a group instantiated twice via `use`, proving expansion, export wiring, and per-instance state isolation.
 - [`examples/vendored`](examples/vendored): a node sourced from a remote git address, showing the vendor workflow.
 
 ## Development

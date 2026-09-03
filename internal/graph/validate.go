@@ -2,6 +2,7 @@ package graph
 
 import (
 	"fmt"
+	"maps"
 	"sort"
 	"strings"
 )
@@ -23,7 +24,7 @@ type Problem struct {
 // IsError reports whether this problem should block graph/plan/apply, as opposed to a Warning, which is only surfaced.
 func (p Problem) IsError() bool { return p.Severity == SeverityError }
 
-// Validate checks a built Graph for issues that Build itself does not catch: edges referencing ports that don't actually exist on the target module (Error), two data edges targeting the same input, whether their from sides differ or match (Error; checked here rather than at parse so group expansion can rewrite a use export onto leaf ports first), a node's own vars targeting a variable the module doesn't declare or one a data edge already targets (Error), cycles in the dependency graph (Error), and required variables that neither an edge nor vars ever supplies a value for (Warning: a module may legitimately get such a value from its own terraform.tfvars or the environment, outside the blueprint entirely).
+// Validate checks a built Graph for issues that Build itself does not catch: edges referencing ports that don't actually exist on the target module (Error), two data edges targeting the same input, whether their from sides differ or match (Error; checked here rather than at parse so group expansion can rewrite a use export onto leaf ports first), a node's own vars targeting a variable the module doesn't declare or one a data edge already targets (Error), cycles in the dependency graph (Error), required variables that neither an edge nor vars ever supplies a value for (Warning: a module may legitimately get such a value from its own terraform.tfvars or the environment, outside the blueprint entirely), a non-empty backend_config on a module with no backend block (Error), and two or more leaves that share a module directory and resolve to identical backend_config maps (Error).
 func Validate(g *Graph) []Problem {
 	var problems []Problem
 
@@ -119,6 +120,82 @@ func Validate(g *Graph) []Problem {
 		})
 	}
 
+	problems = append(problems, backendProblems(g)...)
+
+	return problems
+}
+
+func backendProblems(g *Graph) []Problem {
+	names := make([]string, 0, len(g.Nodes))
+	for name := range g.Nodes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var problems []Problem
+	byDir := map[string][]string{}
+	for _, name := range names {
+		node := g.Nodes[name]
+		if len(node.BackendConfig) > 0 {
+			backend := ""
+			if node.Schema != nil {
+				backend = node.Schema.Backend
+			}
+			if backend == "" || backend == "cloud" {
+				problems = append(problems, Problem{
+					Severity: SeverityError,
+					Message:  fmt.Sprintf("node.%s: backend_config is set but the module declares no backend block", name),
+				})
+			}
+		}
+		if node.Dir != "" {
+			byDir[node.Dir] = append(byDir[node.Dir], name)
+		}
+	}
+
+	dirs := make([]string, 0, len(byDir))
+	for dir := range byDir {
+		dirs = append(dirs, dir)
+	}
+	sort.Strings(dirs)
+
+	for _, dir := range dirs {
+		nodesInDir := byDir[dir]
+		if len(nodesInDir) < 2 {
+			continue
+		}
+		type partition struct {
+			cfg   map[string]string
+			names []string
+		}
+		var parts []partition
+		for _, name := range nodesInDir {
+			cfg := g.Nodes[name].BackendConfig
+			found := false
+			for i := range parts {
+				if maps.Equal(parts[i].cfg, cfg) {
+					parts[i].names = append(parts[i].names, name)
+					found = true
+					break
+				}
+			}
+			if !found {
+				parts = append(parts, partition{cfg: cfg, names: []string{name}})
+			}
+		}
+		for _, p := range parts {
+			if len(p.names) < 2 {
+				continue
+			}
+			problems = append(problems, Problem{
+				Severity: SeverityError,
+				Message: fmt.Sprintf(
+					"%s: nodes %s share this module directory but resolve to identical backend_config",
+					dir, strings.Join(p.names, ", "),
+				),
+			})
+		}
+	}
 	return problems
 }
 

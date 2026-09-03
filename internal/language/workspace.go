@@ -347,6 +347,7 @@ var completionSchemas = map[string][]attributeSpec{
 	"use": {
 		{name: "as", insert: "as = \"\"", detail: "required string", documentation: "Namespace used to refer to this group instance."},
 		{name: "source", insert: "source = \"\"", detail: "required string", documentation: "Local path or remote source containing the group."},
+		{name: "backend_config", insert: "backend_config = {\n}", detail: "map(string)", documentation: "Backend configuration merged onto every node this instance expands to. Leaf keys win."},
 		{name: "runtime", insert: "runtime = runtime.", detail: "runtime reference", documentation: "Default runtime for nodes expanded from this group."},
 		{name: "env", insert: "env = {\n}", detail: "map(string)", documentation: "Environment variables inherited by nodes expanded from this group."},
 		{name: "vars", insert: "vars = {\n}", detail: "object", documentation: "Literal values for this instance's export inputs. Use an edge for another node's output."},

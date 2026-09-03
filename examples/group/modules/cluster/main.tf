@@ -5,6 +5,8 @@ terraform {
       version = "~> 3.6"
     }
   }
+
+  backend "local" {}
 }
 
 resource "random_id" "cluster" {

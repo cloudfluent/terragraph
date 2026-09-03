@@ -3,7 +3,12 @@ package module
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 
+	"github.com/hashicorp/hcl/v2"
+	"github.com/hashicorp/hcl/v2/hclparse"
 	"github.com/hashicorp/terraform-config-inspect/tfconfig"
 )
 
@@ -27,11 +32,13 @@ type Output struct {
 	Deprecated  string
 }
 
-// Schema is the subset of a root module's shape that terragraph cares about: its declared input variables (with type/required metadata) and the names of its output values. Standard root module outputs don't declare a type (that's an HCP Terraform Stacks-only feature), so Outputs only tracks presence.
+// Schema is the subset of a root module's shape that terragraph cares about: its declared input variables (with type/required metadata), the names of its output values, and the backend type if any. Standard root module outputs don't declare a type (that's an HCP Terraform Stacks-only feature), so Outputs only tracks presence.
 type Schema struct {
 	Variables     map[string]Variable
 	Outputs       map[string]bool
 	OutputDetails map[string]Output
+	// Backend is the type label of terraform { backend "TYPE" {} }, or "cloud" if the module declared a cloud block and no backend block. Empty means neither was declared (Terraform's implicit local backend). Attributes inside the block are not captured.
+	Backend string
 }
 
 // Inspect statically parses the root module at dir and returns its variable/output schema.
@@ -60,7 +67,78 @@ func Inspect(dir string) (*Schema, error) {
 		schema.Outputs[name] = true
 		schema.OutputDetails[name] = Output{Name: name, Type: output.Type, Description: output.Description, Sensitive: output.Sensitive, Deprecated: output.Deprecated}
 	}
+	schema.Backend = inspectBackend(dir)
 	return schema, nil
+}
+
+var terraformFileSchema = &hcl.BodySchema{
+	Blocks: []hcl.BlockHeaderSchema{{Type: "terraform"}},
+}
+
+var terraformBackendSchema = &hcl.BodySchema{
+	Blocks: []hcl.BlockHeaderSchema{
+		{Type: "backend", LabelNames: []string{"type"}},
+		{Type: "cloud"},
+	},
+}
+
+// inspectBackend returns the module's backend type label, "cloud" if only a cloud block is present, or "" if neither was declared. terraform-config-inspect does not expose this; we scan .tf / .tf.json ourselves and ignore backend attributes.
+func inspectBackend(dir string) string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	parser := hclparse.NewParser()
+	backend := ""
+	cloud := false
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if strings.HasPrefix(name, ".") || strings.HasSuffix(name, "~") {
+			continue
+		}
+		path := filepath.Join(dir, name)
+		src, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var file *hcl.File
+		var diags hcl.Diagnostics
+		switch {
+		case strings.HasSuffix(name, ".tf.json"):
+			file, diags = parser.ParseJSON(src, path)
+		case strings.HasSuffix(name, ".tf"):
+			file, diags = parser.ParseHCL(src, path)
+		default:
+			continue
+		}
+		if diags.HasErrors() || file == nil {
+			continue
+		}
+		content, _, _ := file.Body.PartialContent(terraformFileSchema)
+		for _, block := range content.Blocks {
+			inner, _, _ := block.Body.PartialContent(terraformBackendSchema)
+			for _, b := range inner.Blocks {
+				switch b.Type {
+				case "backend":
+					if len(b.Labels) > 0 && b.Labels[0] != "" {
+						backend = b.Labels[0]
+					}
+				case "cloud":
+					cloud = true
+				}
+			}
+		}
+	}
+	if backend != "" {
+		return backend
+	}
+	if cloud {
+		return "cloud"
+	}
+	return ""
 }
 
 // HasOutput reports whether the module declares an output with this name.

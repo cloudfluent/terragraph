@@ -10,7 +10,20 @@ use "eks-service" {
   }
 }
 
+use "eks-service" {
+  as     = "payments"
+  source = "./groups/eks-service"
+  vars = {
+    cluster_name = "payments"
+  }
+}
+
 edge {
   from = node.vpc.output.vpc_id
   to   = use.checkout.input.vpc_id
+}
+
+edge {
+  from = node.vpc.output.vpc_id
+  to   = use.payments.input.vpc_id
 }

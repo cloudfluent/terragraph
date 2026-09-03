@@ -89,6 +89,9 @@ func setupSameGroupTwiceFixture(t *testing.T) (root, blueprintPath string) {
 	root = t.TempDir()
 
 	writeFixtureFile(t, filepath.Join(root, "modules/a/variables.tf"), `
+terraform {
+  backend "local" {}
+}
 variable "greeting" {
   type    = string
   default = ""
@@ -149,5 +152,18 @@ func TestBuild_SameGroupDirectoryUsedTwice_InstancesDontShareState(t *testing.T)
 	first.Vars["greeting"] = "mutated"
 	if second.Vars["greeting"] != "hi" {
 		t.Fatalf("mutating the first instance's Vars affected the second instance's Vars: %+v", second.Vars)
+	}
+
+	if first.BackendConfig["path"] == "" || first.BackendConfig["path"] == second.BackendConfig["path"] {
+		t.Fatalf("expected distinct filled backend paths, got %+v / %+v", first.BackendConfig, second.BackendConfig)
+	}
+	if first.BackendConfig != nil {
+		first.BackendConfig["path"] = "mutated"
+		if second.BackendConfig["path"] == "mutated" {
+			t.Fatalf("mutating the first instance's BackendConfig affected the second: %+v", second.BackendConfig)
+		}
+	}
+	if problems := Validate(g); len(problems) != 0 {
+		t.Fatalf("expected a valid graph after fill, got problems: %v", problems)
 	}
 }

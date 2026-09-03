@@ -73,7 +73,7 @@ func TestGraph_DefaultText_MatchesExampleOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("graph: %v", err)
 	}
-	want := "level 1: vpc\nlevel 2: checkout.cluster\nlevel 3: checkout.nodegroup\n"
+	want := "level 1: vpc\nlevel 2: checkout.cluster, payments.cluster\nlevel 3: checkout.nodegroup, payments.nodegroup\n"
 	if stdout != want {
 		t.Fatalf("stdout = %q, want %q", stdout, want)
 	}
@@ -88,13 +88,18 @@ func TestGraph_OutputJSON(t *testing.T) {
 	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
 		t.Fatalf("unmarshal %q: %v", stdout, err)
 	}
-	want := [][]string{{"vpc"}, {"checkout.cluster"}, {"checkout.nodegroup"}}
+	want := [][]string{{"vpc"}, {"checkout.cluster", "payments.cluster"}, {"checkout.nodegroup", "payments.nodegroup"}}
 	if len(got.Levels) != len(want) {
 		t.Fatalf("levels = %v, want %v", got.Levels, want)
 	}
 	for i := range want {
-		if len(got.Levels[i]) != 1 || got.Levels[i][0] != want[i][0] {
+		if len(got.Levels[i]) != len(want[i]) {
 			t.Fatalf("levels[%d] = %v, want %v", i, got.Levels[i], want[i])
+		}
+		for j := range want[i] {
+			if got.Levels[i][j] != want[i][j] {
+				t.Fatalf("levels[%d] = %v, want %v", i, got.Levels[i], want[i])
+			}
 		}
 	}
 }

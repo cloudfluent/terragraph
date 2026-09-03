@@ -56,18 +56,19 @@ Either endpoint may be a group instance (`use.<name>`), and each expanded edge t
 
 ## Reusing the same module across instances
 
-A node can optionally set `backend_config` to reuse one module `source` across multiple instances (e.g. the same `./stacks/vpc` for both `dev` and `prod`) without their state colliding:
+A node can reuse one module `source` across multiple instances (e.g. the same `./stacks/vpc` for both `dev` and `prod`) without their state colliding. If the module declares `backend "local"` (an empty block is enough) and the node does not set `path`, terragraph fills `path` to `<blueprint dir>/.terragraph/state/<node>.tfstate` (absolute) and passes it as `terraform init -backend-config=path=...`. An explicit `path` wins.
 
 ```hcl
 node "vpc_prod" {
   source = "./stacks/vpc"
-  backend_config = {
-    path = ".terragraph/state/vpc_prod.tfstate"   # local backend example
-  }
+}
+
+node "vpc_dev" {
+  source = "./stacks/vpc"
 }
 ```
 
-This is passed straight through to `terraform init -backend-config=key=value` (Terraform's own partial backend configuration mechanism, not code generation). It requires the module to declare at least an empty backend block (`terraform { backend "local" {} }`); with no backend block at all there's nothing for `-backend-config` to apply to and it's silently ignored. Every node also gets its own isolated `.terraform/` metadata directory (`TF_DATA_DIR`, managed automatically) regardless of whether its `source` is shared with another node. Otherwise two instances of the same module would also fight over which backend they were last configured with.
+`backend_config` is still available for remote backends (`bucket`, `profile`, `region`, `key`, ...) or an explicit local `path`. It requires a `backend` block in the module; a missing block or a `cloud` block plus a non-empty `backend_config` is a validate **Error**. Two nodes that share a module directory and resolve to the same `backend_config` map (including both empty) are also a validate **Error**. Every node also gets its own isolated `.terraform/` metadata directory (`TF_DATA_DIR`, managed automatically) regardless of whether its `source` is shared with another node. Otherwise two instances of the same module would also fight over which backend they were last configured with.
 
 Sharing a `source` directory does *not* isolate `.terraform.lock.hcl`, though: unlike `.terraform/`, that file lives in the module directory itself. If those instances also resolve to different runtimes (see below), Terraform and OpenTofu will each keep rewriting it to their own provider registry host on every `init`, and `terragraph validate` warns about exactly this. Give each instance its own `source` copy (or wait until they're all on the same runtime) rather than ignoring that warning.
 
