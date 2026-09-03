@@ -12,7 +12,7 @@ import (
 	"github.com/cloudfluent/terragraph/internal/blueprint"
 )
 
-// contractProblems reports every contract violation as a warning carrying a stable [C0xx] code (docs/contracts.md is the table of record). Phase 1 is advisory end to end: nothing here raises SeverityError, because a contract violation must not block a run until blueprint-owned modes say so — never by default.
+// contractProblems reports every contract violation with a stable [C0xx] code (docs/contracts.md is the table of record). Severity is the blueprint's mode dial: legacy/warn keep every code advisory, enforce escalates all of them to errors — the only way strictness can enter is reviewed blueprint configuration, never a default.
 func contractProblems(g *Graph) []Problem {
 	if g.Contracts == nil {
 		return nil
@@ -22,15 +22,21 @@ func contractProblems(g *Graph) []Problem {
 		used[n.Dir] = true
 	}
 
+	// Enforce is the only mode that blocks, and it exists only as reviewed blueprint configuration — never as a default or a CLI flag someone passes once.
+	severity := SeverityWarning
+	if g.ContractMode == "enforce" {
+		severity = SeverityError
+	}
+
 	var problems []Problem
-	warn := func(format string, args ...any) {
-		problems = append(problems, Problem{Severity: SeverityWarning, Message: fmt.Sprintf(format, args...)})
+	report := func(format string, args ...any) {
+		problems = append(problems, Problem{Severity: severity, Message: fmt.Sprintf(format, args...)})
 	}
 
 	// C001/C002/C006: contracts against reality, independent of edges — a promise about a port the module never declared, or a scope nothing instantiates, is wrong whether or not anything consumes it yet.
 	for _, dc := range sortedContracts(g.Contracts) {
 		if !used[dc.Dir] {
-			warn("contract.[C006] %s: no node in this graph uses source %q; update the scope path or remove the contract", dc.Scope, dc.Scope)
+			report("contract.[C006] %s: no node in this graph uses source %q; update the scope path or remove the contract", dc.Scope, dc.Scope)
 			continue
 		}
 		var schemaOwner *Node
@@ -42,12 +48,12 @@ func contractProblems(g *Graph) []Problem {
 		}
 		for _, name := range sortedPorts(dc.Producer) {
 			if !schemaOwner.Schema.HasOutput(name) {
-				warn("contract.[C001] producer %s.output.%s: module declares no such output; remove the promise or add the output", dc.Scope, name)
+				report("contract.[C001] producer %s.output.%s: module declares no such output; remove the promise or add the output", dc.Scope, name)
 			}
 		}
 		for _, name := range sortedPorts(dc.Consumer) {
 			if !schemaOwner.Schema.HasVariable(name) {
-				warn("contract.[C002] consumer %s.input.%s: module declares no such variable; remove the requirement or add the variable", dc.Scope, name)
+				report("contract.[C002] consumer %s.input.%s: module declares no such variable; remove the requirement or add the variable", dc.Scope, name)
 			}
 		}
 	}
@@ -67,24 +73,24 @@ func contractProblems(g *Graph) []Problem {
 		if p.Type != "" && c.Type != "" {
 			pt, err := parseCtyType(p.Type)
 			if err != nil {
-				warn("contract.[C003] producer %s.output.%s: %v", from.Scope, e.From.Name, err)
+				report("contract.[C003] producer %s.output.%s: %v", from.Scope, e.From.Name, err)
 				continue
 			}
 			ct, err := parseCtyType(c.Type)
 			if err != nil {
-				warn("contract.[C003] consumer %s.input.%s: %v", to.Scope, e.To.Name, err)
+				report("contract.[C003] consumer %s.input.%s: %v", to.Scope, e.To.Name, err)
 				continue
 			}
 			if !pt.Equals(ct) && convert.GetConversionUnsafe(pt, ct) == nil {
-				warn("contract.[C003] producer %s.output.%s (%s) -> consumer %s.input.%s (%s): types are not convertible; change one side", from.Scope, e.From.Name, p.Type, to.Scope, e.To.Name, c.Type)
+				report("contract.[C003] producer %s.output.%s (%s) -> consumer %s.input.%s (%s): types are not convertible; change one side", from.Scope, e.From.Name, p.Type, to.Scope, e.To.Name, c.Type)
 			}
 		}
 		// Absent producer nullable means "may be null" (the lenient claim), so an explicit non-null requirement is violated by it; absent consumer nullable accepts null and can never be violated by nullability.
 		if c.Nullable != nil && !*c.Nullable && (p.Nullable == nil || *p.Nullable) {
-			warn("contract.[C004] producer %s.output.%s may be null but consumer %s.input.%s requires non-null; the producer must promise nullable = false", from.Scope, e.From.Name, to.Scope, e.To.Name)
+			report("contract.[C004] producer %s.output.%s may be null but consumer %s.input.%s requires non-null; the producer must promise nullable = false", from.Scope, e.From.Name, to.Scope, e.To.Name)
 		}
 		if p.Sensitive != nil && *p.Sensitive && (c.Sensitive == nil || !*c.Sensitive) {
-			warn("contract.[C005] producer %s.output.%s is sensitive but consumer %s.input.%s does not accept sensitive values; set sensitive = true on the consumer or stop marking the output", from.Scope, e.From.Name, to.Scope, e.To.Name)
+			report("contract.[C005] producer %s.output.%s is sensitive but consumer %s.input.%s does not accept sensitive values; set sensitive = true on the consumer or stop marking the output", from.Scope, e.From.Name, to.Scope, e.To.Name)
 		}
 	}
 	return problems

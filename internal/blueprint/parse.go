@@ -26,6 +26,7 @@ var topSchema = &hcl.BodySchema{
 		{Type: "tfvars"},
 		{Type: "lock"},
 		{Type: "runtime", LabelNames: []string{"name"}},
+		{Type: "contracts"},
 	},
 }
 
@@ -60,6 +61,10 @@ var runtimeSchema = &hcl.BodySchema{
 		{Name: "version", Required: false},
 		{Name: "default", Required: false},
 	},
+}
+
+var contractsModeSchema = &hcl.BodySchema{
+	Attributes: []hcl.AttributeSchema{{Name: "mode", Required: true}},
 }
 
 var nodeSchema = &hcl.BodySchema{
@@ -282,6 +287,12 @@ func parseOneFile(path string, bp *Blueprint, seenNodes, seenGroups, seenUses, s
 			}
 			seenRuntimes[rt.Name] = true
 			bp.Runtimes = append(bp.Runtimes, rt)
+		case "contracts":
+			mode, err := parseContractsBlock(block)
+			if err != nil {
+				return err
+			}
+			bp.ContractMode = mode
 		}
 	}
 
@@ -411,6 +422,25 @@ func parseTFVarsBlock(block *hcl.Block) (*TFVarsConfig, error) {
 	}
 
 	return tc, nil
+}
+
+// parseContractsBlock parses the optional top-level `contracts { }` block: the only severity dial for contract checks (see Blueprint.ContractMode). Mode is a closed vocabulary so strictness can only enter through reviewed blueprint configuration.
+func parseContractsBlock(block *hcl.Block) (string, error) {
+	content, diags := block.Body.Content(contractsModeSchema)
+	if diags.HasErrors() {
+		return "", fmt.Errorf("%s: %s", block.DefRange, diags.Error())
+	}
+
+	attr := content.Attributes["mode"]
+	val, diags := attr.Expr.Value(nil)
+	if diags.HasErrors() || val.Type() != cty.String {
+		return "", fmt.Errorf("%s: mode must be a literal string", attr.Range)
+	}
+	mode := val.AsString()
+	if mode != "legacy" && mode != "warn" && mode != "enforce" {
+		return "", fmt.Errorf("%s: mode must be legacy, warn, or enforce, got %q", attr.Range, mode)
+	}
+	return mode, nil
 }
 
 // parseLockBlock parses the optional top-level `lock { }` block.

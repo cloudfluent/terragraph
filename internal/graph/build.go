@@ -35,6 +35,8 @@ type Graph struct {
 	Lock *blueprint.Lock
 	// Contracts is the blueprint's parsed contract set, attached by engine load after Build: keying is by node source directory (see blueprint.DirContracts), so nothing in Build itself consults it. Nil is the ordinary, uncontracted graph, and every contract-aware consumer must treat nil as "no claims, no checks".
 	Contracts *blueprint.Contracts
+	// ContractMode is the blueprint's `contracts { mode = ... }` value, set by engine load after Build; graph reads it only to pick contract-problem severity (enforce escalates C001-C006 to errors), never to change what is checked.
+	ContractMode string
 }
 
 // cloneNode returns a value copy of n with its BackendConfig/Vars/Env maps deep-copied. n.Nodes for a group instantiation come from a group definition that resolveContext.parseGroupDir may hand back to more than one `use` site (see loadGroupDef); without this, every instance of the same group would share the exact same underlying BackendConfig/Vars/Env map objects, since a plain struct copy only copies the map header, not its contents.

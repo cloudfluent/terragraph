@@ -85,3 +85,31 @@ func TestLoad_NoContractsFileIsLegacy(t *testing.T) {
 		t.Fatalf("got = %v, want zero problems", problems)
 	}
 }
+
+// TestLoad_EnforceModeBlocksValidate proves the mode travels blueprint -> engine -> graph and flips checkValidate's verdict: with enforce, a C003 contract violation fails validation exactly like a structural error would.
+func TestLoad_EnforceModeBlocksValidate(t *testing.T) {
+	root := t.TempDir()
+	for path, data := range map[string][]byte{
+		"modules/vpc/main.tf": []byte(`output "vpc_id" { value = "x" }`),
+		"modules/app/main.tf": []byte("variable \"vpc_id\" {\n  type = string\n}\n"),
+		"blueprint.hcl":       []byte("contracts {\n  mode = \"enforce\"\n}\n\nnode \"vpc\" {\n  source = \"./modules/vpc\"\n}\n\nnode \"app\" {\n  source = \"./modules/app\"\n}\n\nedge {\n  from = node.vpc.output.vpc_id\n  to   = node.app.input.vpc_id\n}\n"),
+		"contracts.hcl":       []byte("producer \"./modules/vpc\" {\n  output \"vpc_id\" {\n    type = \"list(string)\"\n  }\n}\n\nconsumer \"./modules/app\" {\n  input \"vpc_id\" {\n    type = \"string\"\n  }\n}\n"),
+	} {
+		if err := osWriteFile(filepath.Join(root, path), data); err != nil {
+			t.Fatalf("writing %s: %v", path, err)
+		}
+	}
+	e, err := Load(filepath.Join(root, "blueprint.hcl"), exec.Terraform, &bytes.Buffer{}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	blocked := false
+	for _, p := range e.Validate() {
+		if strings.Contains(p.Message, "[C003]") && p.IsError() {
+			blocked = true
+		}
+	}
+	if !blocked {
+		t.Fatal("enforce mode did not escalate C003 to an error")
+	}
+}

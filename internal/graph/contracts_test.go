@@ -209,3 +209,23 @@ consumer "./modules/app" {
 		t.Fatalf("got = %v, want zero problems for compatible contracts", problems)
 	}
 }
+
+// TestValidate_EnforceEscalatesContractWarningsToErrors proves mode is the only severity dial: same graph, same C003, warning under legacy and error under enforce.
+func TestValidate_EnforceEscalatesContractWarningsToErrors(t *testing.T) {
+	g, c, _ := writeContractsFixture(t, `
+producer "./modules/vpc" {
+  output "vpc_id" { type = "list(string)" }
+}
+consumer "./modules/app" {
+  input "vpc_id" { type = "string" }
+}
+`)
+	g.Contracts = c
+	if problems := Validate(g); len(problems) != 1 || problems[0].IsError() {
+		t.Fatalf("legacy must stay advisory: %v", problems)
+	}
+	g.ContractMode = "enforce"
+	if problems := Validate(g); len(problems) != 1 || !problems[0].IsError() {
+		t.Fatalf("enforce must escalate to error: %v", problems)
+	}
+}

@@ -196,6 +196,8 @@ type Blueprint struct {
 	Lock *Lock
 	// Runtimes holds every `runtime` block declared in this parse scope (see Runtime). Parsing guarantees names are unique and at most one sets Default within this same slice; it does not guarantee every Node.Runtime/Use.Runtime reference in this scope resolves to a name here until validateRuntimes has run, which ParseFile/ParseDir always do before returning.
 	Runtimes []Runtime
+	// ContractMode is the `contracts { mode = ... }` block's value: enforce escalates contract warnings to errors; absence is legacy, and an upgrade never picks a stricter mode on its own.
+	ContractMode string
 }
 
 // RuntimeByName returns the runtime declared with this name in this parse scope, or false if none matches.

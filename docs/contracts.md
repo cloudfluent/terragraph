@@ -2,9 +2,10 @@
 
 Contracts turn graph edges into reviewed, two-sided promises: a producer
 declares what one of its outputs guarantees; a consumer declares what one of
-its inputs requires. Contracts are advisory in this phase: violations surface
-as warnings in `terragraph validate`. Enforcement modes arrive later and are
-never enabled silently.
+its inputs requires. Contracts are advisory by default: violations surface as
+warnings in `terragraph validate`, and the blueprint's `contracts { mode =
+"enforce" }` block (see [Modes](#modes)) is the only way to make them block;
+it is never enabled silently.
 
 ## Where contracts live
 
@@ -78,9 +79,16 @@ carry contracts, plus a schema sanity check for every declared contract:
 | C005 | warning | producer is `sensitive = true` but the consumer does not accept sensitive values |
 | C006 | warning | contract scope matches no node in the graph (stale path after a move or rename) |
 
-All contract problems are warnings in this phase. A later phase adds
-blueprint-owned modes (`legacy`/`observe`/`warn`/`enforce`); an upgrade never
-selects a stricter mode on its own.
+All contract problems are warnings in the default modes; the mode block below
+is the only severity dial.
+
+### Modes
+
+`contracts { mode = "..." }` in the blueprint is reviewed configuration and the
+only severity dial: `legacy` and `warn` (default) report every C001–C006 as a
+warning; `enforce` escalates them to errors, which blocks `validate`, `plan`,
+`apply`, and `destroy` the same way structural errors already do. An upgrade
+never selects a stricter mode on its own.
 
 ## Non-goals for this phase
 
