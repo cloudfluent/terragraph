@@ -1,0 +1,76 @@
+name: Label issues from form fields
+
+# The bug report form asks for OS and runtime as dropdowns, so those two labels
+# are a lookup, not a judgment call. Doing them here keeps them off the agent
+# labeler, which then only has to decide the `area:*` label that actually needs
+# reading the issue.
+
+on:
+  issues:
+    types: [opened, edited, reopened]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "Issue to re-label"
+        required: true
+        type: number
+
+permissions:
+  issues: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/github-script@v8
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { owner, repo } = context.repo;
+            const number = context.eventName === 'workflow_dispatch'
+              ? Number(context.payload.inputs.issue_number)
+              : context.payload.issue.number;
+
+            const { data: issue } = await github.rest.issues.get({
+              owner, repo, issue_number: number,
+            });
+            const body = issue.body || '';
+
+            // Issue forms render each answer as "### <label>" followed by the value,
+            // and an unanswered optional field as "_No response_".
+            const answer = (heading) => {
+              const match = body.match(new RegExp(`^### ${heading}\\s*\\n+([^#]*)`, 'm'));
+              return match ? match[1].trim() : '';
+            };
+
+            const OS = { macos: 'os:macos', linux: 'os:linux', windows: 'os:windows', wsl: 'os:wsl' };
+            const RUNTIME = { terraform: 'runtime:terraform', opentofu: 'runtime:tofu' };
+
+            const desired = new Set();
+            for (const choice of answer('Operating system').split(',')) {
+              const label = OS[choice.trim().toLowerCase()];
+              if (label) desired.add(label);
+            }
+            const runtime = answer('Runtime').toLowerCase();
+            if (runtime === 'both') {
+              desired.add(RUNTIME.terraform);
+              desired.add(RUNTIME.opentofu);
+            } else if (RUNTIME[runtime]) {
+              desired.add(RUNTIME[runtime]);
+            }
+
+            // Only ever replace labels this workflow owns. Triage labels applied by
+            // hand or by the agent have to survive an edit to the form.
+            const managed = [...Object.values(OS), ...Object.values(RUNTIME)];
+            const existing = issue.labels.map((l) => (typeof l === 'string' ? l : l.name));
+            const next = [...new Set([...existing.filter((l) => !managed.includes(l)), ...desired])];
+
+            const unchanged = next.length === existing.length && next.every((l) => existing.includes(l));
+            if (unchanged) {
+              core.info(`#${number}: labels already correct`);
+              return;
+            }
+
+            await github.rest.issues.setLabels({ owner, repo, issue_number: number, labels: next });
+            core.info(`#${number}: ${next.join(', ')}`);
