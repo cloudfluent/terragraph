@@ -59,6 +59,7 @@ func NewRootCmd(version string) *cobra.Command {
 	root.AddCommand(newPlanCmd(&blueprintPath, binaryOf, loggerOf))
 	root.AddCommand(newApplyCmd(&blueprintPath, binaryOf, loggerOf))
 	root.AddCommand(newDestroyCmd(&blueprintPath, binaryOf, loggerOf))
+	root.AddCommand(newObserveCmd(&blueprintPath, binaryOf, loggerOf))
 	root.AddCommand(newVendorCmd(&blueprintPath, loggerOf))
 	root.AddCommand(newLanguageServerCmd())
 
@@ -243,6 +244,49 @@ func newPlanCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fun
 	}
 	cmd.Flags().StringVar(&node, "node", "", "restrict to a single node")
 	cmd.Flags().IntVar(&parallelism, "parallelism", 1, "max nodes to run concurrently within one execution level")
+	return cmd
+}
+
+func newObserveCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf func() *slog.Logger) *cobra.Command {
+	var output string
+	cmd := &cobra.Command{
+		Use:   "observe",
+		Short: "Record port evidence (declared/observed/unknown) into the committed terragraph.lock",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if output != "text" && output != "json" {
+				return fmt.Errorf("unknown output %q (want \"text\" or \"json\")", output)
+			}
+			e, err := loadEngine(cmd, blueprintPath, binaryOf, loggerOf)
+			if err != nil {
+				return err
+			}
+			ev, err := e.Observe()
+			if err != nil {
+				return err
+			}
+			lock, err := e.WriteLock(ev)
+			if err != nil {
+				return err
+			}
+			if output == "json" {
+				ports := make([]portEvidenceDTO, len(ev.Ports))
+				for i, p := range ev.Ports {
+					ports[i] = portEvidenceDTO{Scope: p.Scope, Role: p.Role, Port: p.Port, Confidence: p.Confidence, Type: p.Type}
+				}
+				return writeJSON(cmd.OutOrStdout(), observeResult{Lock: lock, Digest: ev.ContractsDigest, Ports: ports})
+			}
+			for _, p := range ev.Ports {
+				line := fmt.Sprintf("%s %s.%s: %s", p.Role, p.Scope, p.Port, p.Confidence)
+				if p.Type != "" {
+					line += " (" + p.Type + ")"
+				}
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), line)
+			}
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "wrote %s\n", lock)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&output, "output", "text", "output format: text or json")
 	return cmd
 }
 
