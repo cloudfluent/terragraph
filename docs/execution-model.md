@@ -49,7 +49,7 @@ An optional top-level `lock` block serializes **the graph run** across machines.
 
 Activation is the block, not a CLI flag. No `lock` block means current behavior (examples, solo local state).
 
-The mechanism is an S3 lock **object** via conditional writes (the same idea as Terraform 1.10+ `use_lockfile`). It is not S3 Object Lock (WORM). terragraph owns the object; it does not borrow a node's Terraform backend. The graph lock `key` must not be a node's state `key` (`backend_config.key` is checked; a key hardcoded only in `.tf` is not inspected).
+The mechanism is an S3 lock **object** via conditional writes (the same idea as Terraform 1.10+ `use_lockfile`). It is not S3 Object Lock (WORM). terragraph owns the object; it does not borrow a node's Terraform backend. The graph lock must not share an S3 object with a node: same `key` on the same bucket (or when `backend_config.bucket` is omitted and may live only in `.tf`). A matching key on another bucket or a non-s3 backend is fine.
 
 `plan` / `apply` / `destroy` take the local flock, then the graph remote lock, then per-node terraform. `validate` / `graph` / `language-server` do not take the remote lock; `validate` still rejects `lock` plus a local or missing backend.
 

@@ -43,7 +43,7 @@ lock {
 
 `s3` is the only nested type in this release (`dynamodb` / `gcs` later). Parse errors: empty `lock {}`; two nested backends; an unknown nested type (including `dynamodb` today); a second `lock` block. `bucket`, `key`, and `region` are required non-empty literal strings.
 
-When `lock` is present, every node must use a remote backend (`s3` / `gcs` / `azurerm` / `http` / `remote` / `cloud`). `backend "local"` or no backend block is a validate **Error**. The graph lock `key` must not equal a node's `backend_config.key`. No `lock` block leaves current behavior (including local state) unchanged.
+When `lock` is present, every node must use a remote backend (`s3` / `gcs` / `azurerm` / `http` / `remote` / `cloud`). `backend "local"` or no backend block is a validate **Error**. An S3 graph lock must not share an object with a node (same `key` and same bucket, or same `key` when `backend_config.bucket` is omitted). No `lock` block leaves current behavior (including local state) unchanged.
 
 ## Several values between the same two nodes (`input`)
 

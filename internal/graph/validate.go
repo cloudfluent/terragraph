@@ -163,7 +163,10 @@ func remoteLockProblems(g *Graph) []Problem {
 				Message:  fmt.Sprintf("node.%s: remote lock requires a remote backend (s3, gcs, azurerm, http, remote, or cloud); %s", name, what),
 			})
 		}
-		if g.Lock.S3 != nil && g.Lock.S3.Key != "" && node.BackendConfig["key"] == g.Lock.S3.Key {
+		// Same key in another bucket or non-s3 backend is not an overwrite risk; empty bucket still flags because key may live only in .tf.
+		if g.Lock.S3 != nil && g.Lock.S3.Key != "" && backend == "s3" &&
+			node.BackendConfig["key"] == g.Lock.S3.Key &&
+			(node.BackendConfig["bucket"] == "" || node.BackendConfig["bucket"] == g.Lock.S3.Bucket) {
 			problems = append(problems, Problem{
 				Severity: SeverityError,
 				Message:  fmt.Sprintf("node.%s: graph lock key %q must not be a node's state key", name, g.Lock.S3.Key),

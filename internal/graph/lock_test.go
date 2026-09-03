@@ -88,13 +88,41 @@ lock {
 }
 node "vpc" {
   source         = "./stacks/vpc"
-  backend_config = { key = "prod/vpc" }
+  backend_config = {
+    bucket = "acme-tfstate"
+    key    = "prod/vpc"
+  }
 }
 `)
 
 	problems := validateLockFixture(t, root)
 	if !hasErrorContaining(problems, "must not be a node's state key") {
 		t.Fatalf("expected key collision error, got %v", problems)
+	}
+}
+
+func TestValidate_LockKeySameStringDifferentBucketOK(t *testing.T) {
+	root := t.TempDir()
+	writeBackendModule(t, filepath.Join(root, "stacks/vpc"), s3Backend)
+	writeFixtureFile(t, filepath.Join(root, "blueprint.hcl"), `
+lock {
+  s3 {
+    bucket = "locks"
+    key    = "prod/vpc"
+    region = "ap-northeast-2"
+  }
+}
+node "vpc" {
+  source         = "./stacks/vpc"
+  backend_config = {
+    bucket = "state"
+    key    = "prod/vpc"
+  }
+}
+`)
+
+	if problems := validateLockFixture(t, root); len(problems) != 0 {
+		t.Fatalf("expected no problems when same key is in a different bucket, got %v", problems)
 	}
 }
 
