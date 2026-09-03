@@ -161,6 +161,15 @@ func load(blueprintPath string, binary exec.Binary, stdout, stderr io.Writer, ta
 		return nil, nil, err
 	}
 
+	// contracts.hcl beside the blueprint is optional and flagless: absence is the legacy case (nil Contracts), presence must never change behavior beyond contract-aware warnings (see docs/contracts.md).
+	if _, err := os.Stat(filepath.Join(dir, "contracts.hcl")); err == nil {
+		contracts, _, err := blueprint.ParseContracts(filepath.Join(dir, "contracts.hcl"))
+		if err != nil {
+			return nil, nil, fmt.Errorf("parsing contracts: %w", err)
+		}
+		g.Contracts = contracts
+	}
+
 	return &Engine{
 		Binary:    binary,
 		BaseDir:   baseDir,
