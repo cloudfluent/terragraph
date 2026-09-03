@@ -102,3 +102,19 @@ never selects a stricter mode on its own.
   `sensitive = true` output flag; the contract is intent, the module is
   declaration, and reconciling them is observe's job.
 - No arbitrary assertion expressions. Predicate set only (see above).
+
+## Observe, propose, and the lock
+
+`terragraph observe` walks every source directory in the graph and writes
+`terragraph.lock` beside the blueprint: a committed, regenerable inventory of
+every port, each with a confidence — `observed` (an applied output carried a
+concrete value), `declared` (the module's own `.tf` states the constraint), or
+`unknown` (nothing has produced a value yet) — bound to the contract set's
+digest. Types in the lock are coarse (string/number/bool/list/object):
+evidence is descriptive, never normative.
+
+`terragraph propose` reads the lock and prints draft `producer`/`consumer`
+entries for ports that have none, annotated with the confidence each type came
+from. It never writes files: observation proposes, review decides. A lock
+generated against a different contract set is refused until `observe` runs
+again — stale evidence must not become a contract.
