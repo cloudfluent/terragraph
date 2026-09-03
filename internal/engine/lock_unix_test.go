@@ -36,6 +36,23 @@ func TestLoad_DoesNotCreateLockFile(t *testing.T) {
 	}
 }
 
+func TestLoadLocked_UnlockClearsRunLock(t *testing.T) {
+	baseDir := t.TempDir()
+	writeModule(t, filepath.Join(baseDir, "module"))
+	path := writeBlueprint(t, baseDir, `node "a" { source = "./module" }`)
+	e, unlock, err := LoadLocked(path, exec.Terraform, &bytes.Buffer{}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("LoadLocked: %v", err)
+	}
+	if e.runLock == nil {
+		t.Fatal("expected LoadLocked to hold the run lock")
+	}
+	unlock()
+	if e.runLock != nil {
+		t.Fatal("expected unlock to drop the run lock so a later Plan/Apply/Destroy re-acquires")
+	}
+}
+
 func TestLoadLocked_CreatesLockFile(t *testing.T) {
 	baseDir := t.TempDir()
 	writeModule(t, filepath.Join(baseDir, "module"))

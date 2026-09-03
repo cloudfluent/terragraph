@@ -32,7 +32,7 @@ type Engine struct {
 	Logger *slog.Logger
 
 	stdin *bufio.Reader
-	// runLock is the lock LoadLocked already holds. lockRun must not Close it: the LoadLocked caller owns the lifetime, and a second flock on the same file from this process would drop the first (flock is per-process, not per fd).
+	// runLock is the lock LoadLocked already holds. lockRun must not Close it; the LoadLocked caller owns the lifetime.
 	runLock *runlock.Lock
 }
 
@@ -103,7 +103,10 @@ func LoadLocked(blueprintPath string, binary exec.Binary, stdout, stderr io.Writ
 	if err != nil {
 		return nil, nil, err
 	}
-	return e, func() { _ = lock.Close() }, nil
+	return e, func() {
+		_ = lock.Close()
+		e.runLock = nil
+	}, nil
 }
 
 func load(blueprintPath string, binary exec.Binary, stdout, stderr io.Writer, takeLock bool) (*Engine, *runlock.Lock, error) {
