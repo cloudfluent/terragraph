@@ -19,7 +19,12 @@ func setupEnvFixture(t *testing.T) (root, blueprintPath string) {
 	t.Helper()
 	root = t.TempDir()
 
-	writeFixtureFile(t, filepath.Join(root, "modules/a/main.tf"), `output "id" { value = "x" }`)
+	writeFixtureFile(t, filepath.Join(root, "modules/a/main.tf"), `
+terraform {
+  backend "local" {}
+}
+output "id" { value = "x" }
+`)
 
 	writeFixtureFile(t, filepath.Join(root, "groups/g/group.hcl"), `
 group "g" {

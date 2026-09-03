@@ -90,6 +90,7 @@ var useSchema = &hcl.BodySchema{
 		{Name: "env", Required: false},
 		{Name: "vars", Required: false},
 		{Name: "approve", Required: false},
+		{Name: "backend_config", Required: false},
 	},
 }
 
@@ -941,14 +942,24 @@ func parseUseBlock(block *hcl.Block) (Use, error) {
 		return Use{}, err
 	}
 
+	var backendConfig map[string]string
+	if attr, ok := content.Attributes["backend_config"]; ok {
+		var err error
+		backendConfig, err = parseBackendConfig(attr)
+		if err != nil {
+			return Use{}, err
+		}
+	}
+
 	return Use{
-		GroupName: block.Labels[0],
-		As:        asVal.AsString(),
-		Source:    sourceVal.AsString(),
-		Runtime:   runtime,
-		Env:       env,
-		Vars:      vars,
-		Approve:   approve,
+		GroupName:     block.Labels[0],
+		As:            asVal.AsString(),
+		Source:        sourceVal.AsString(),
+		Runtime:       runtime,
+		Env:           env,
+		Vars:          vars,
+		Approve:       approve,
+		BackendConfig: backendConfig,
 	}, nil
 }
 

@@ -24,6 +24,9 @@ func setupRuntimeFixture(t *testing.T) (root, blueprintPath string) {
 	root = t.TempDir()
 
 	writeFixtureFile(t, filepath.Join(root, "modules/a/main.tf"), `
+terraform {
+  backend "local" {}
+}
 output "id" { value = "x" }
 `)
 

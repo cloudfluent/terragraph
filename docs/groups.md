@@ -91,4 +91,22 @@ That fills `export { input "cluster_name" { to = node.cluster.input.cluster_name
 
 Unlike `env`, this does not cascade onto every expanded node. Unlike `runtime`, it is not a single replace-on-override choice. It fills the public inputs the group author exported.
 
+## Isolating state for an instance
+
+A `use` block can likewise set `backend_config` (see [blueprint.md](blueprint.md#reusing-the-same-module-across-instances)), which is merged onto every node this instance expands to. A node's own keys win.
+
+```hcl
+use "eks-service" {
+  as     = "checkout"
+  source = "./groups/eks-service"
+  backend_config = {
+    bucket  = "tfstate"
+    profile = "prod"
+    region  = "ap-northeast-2"
+  }
+}
+```
+
+Use this for instance-wide remote fields (`bucket`, `profile`, `region`). Do not invent a per-leaf remote `key` here (`checkout.cluster` vs `checkout.nodegroup` needs string interpolation; that is a follow-up). For local state, put `backend "local" {}` in the group's modules; the engine fills a unique `path` per qualified leaf (`checkout.cluster` vs `payments.cluster`).
+
 See it end to end in [`examples/group`](../examples/group).

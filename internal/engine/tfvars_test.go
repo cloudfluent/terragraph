@@ -16,7 +16,7 @@ func writeModule(t *testing.T, dir string) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir %s: %v", dir, err)
 	}
-	src := "output \"id\" {\n  value = \"x\"\n}\n"
+	src := "terraform {\n  backend \"local\" {}\n}\noutput \"id\" {\n  value = \"x\"\n}\n"
 	if err := os.WriteFile(filepath.Join(dir, "main.tf"), []byte(src), 0o644); err != nil {
 		t.Fatalf("writing fixture module: %v", err)
 	}

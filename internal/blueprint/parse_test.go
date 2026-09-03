@@ -174,6 +174,41 @@ node "a" { source = "./a" }
 	}
 }
 
+func TestParseFile_UseBackendConfig(t *testing.T) {
+	path := writeTemp(t, `
+use "g" {
+  as     = "inst"
+  source = "./groups/g"
+  backend_config = {
+    bucket = "b"
+  }
+}
+`)
+	bp, err := ParseFile(path)
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	if bp.Uses[0].BackendConfig["bucket"] != "b" {
+		t.Fatalf("unexpected use backend_config: %+v", bp.Uses[0].BackendConfig)
+	}
+}
+
+func TestParseFile_UseNoBackendConfigIsNil(t *testing.T) {
+	path := writeTemp(t, `
+use "g" {
+  as     = "inst"
+  source = "./groups/g"
+}
+`)
+	bp, err := ParseFile(path)
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	if len(bp.Uses[0].BackendConfig) != 0 {
+		t.Fatalf("expected no use backend_config, got %+v", bp.Uses[0].BackendConfig)
+	}
+}
+
 func TestParseFile_Vars(t *testing.T) {
 	path := writeTemp(t, `
 node "data-apne2-dev-vpc" {
