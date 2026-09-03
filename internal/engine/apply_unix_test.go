@@ -62,6 +62,8 @@ case "$1" in
     ;;
   apply)
     printf 'apply\n' >> "$TG_COMMAND_LOG"
+    # Real terraform refuses "output" until the node has a state; the marker models that line between applied and never-applied (see the output branch).
+    touch terraform.tfstate
     # A bare non-flag argument is a plan file: apply exactly what it recorded, ignoring any ambient overrides, the way a real saved plan does.
     planfile=''
     for arg in "$@"; do
@@ -100,6 +102,10 @@ case "$1" in
     exit 0
     ;;
   output)
+    if [ ! -f terraform.tfstate ]; then
+      printf 'Error: no state. Terraform has not been applied here.\n' >&2
+      exit 1
+    fi
     printf '{"managed":{"value":"ok"}}'
     exit 0
     ;;
