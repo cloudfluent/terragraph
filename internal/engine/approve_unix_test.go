@@ -151,3 +151,81 @@ func TestApply_PrintsAPerNodeChangeSummary(t *testing.T) {
 		t.Fatalf("expected %q in output, got:\n%s", want, out.String())
 	}
 }
+
+// destroy has no saved plan for terragraph to ask about, so terraform's own confirmation is the approval — which needs a stdin to read from, the same defect apply had.
+func TestDestroy_WithoutAutoApproveReadsApprovalFromStdin(t *testing.T) {
+	e, _, _ := loadApplyTestEngine(t)
+	if err := e.Apply(Options{AutoApprove: true}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	e.Stdin = strings.NewReader("yes\n")
+	if err := e.Destroy(Options{}); err != nil {
+		t.Fatalf("Destroy without auto-approve: %v", err)
+	}
+}
+
+func TestDestroy_ParallelismRequiresAutoApprove(t *testing.T) {
+	e, _, _ := loadApplyTestEngine(t)
+	err := e.Destroy(Options{Parallelism: 2})
+	if err == nil {
+		t.Fatal("expected --parallelism without --auto-approve to be refused")
+	}
+	if !strings.Contains(err.Error(), "--auto-approve") {
+		t.Fatalf("expected the error to name --auto-approve, got: %v", err)
+	}
+}
+
+// Destroy cannot tell in advance whether it is about to ask a question, so a node that fails with no input available says why, rather than leaving terraform's bare "error asking for approval: EOF" as the whole explanation.
+func TestDestroy_WithoutAutoApproveAndNoInputExplainsItself(t *testing.T) {
+	e, _, _ := loadApplyTestEngine(t)
+	if err := e.Apply(Options{AutoApprove: true}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	// A reader that yields nothing, not a nil one: this is what a CLI run redirected from /dev/null actually looks like, and testing for nil would miss it.
+	e.Stdin = strings.NewReader("")
+	err := e.Destroy(Options{})
+	if err == nil {
+		t.Fatal("expected destroy to fail when it cannot read approval")
+	}
+	if !strings.Contains(err.Error(), "--auto-approve") {
+		t.Fatalf("expected the error to name --auto-approve, got: %v", err)
+	}
+}
+
+// A refusal is a decision someone made, so it must not be dressed up as missing input.
+func TestDestroy_DeclinedApprovalIsNotReportedAsMissingInput(t *testing.T) {
+	e, _, _ := loadApplyTestEngine(t)
+	if err := e.Apply(Options{AutoApprove: true}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	e.Stdin = strings.NewReader("no\n")
+	err := e.Destroy(Options{})
+	if err == nil {
+		t.Fatal("expected a declined destroy to fail")
+	}
+	if strings.Contains(err.Error(), "nothing was available") {
+		t.Fatalf("a declined destroy should not be reported as missing input, got: %v", err)
+	}
+}
+
+// An unattended destroy with nothing left to tear down still succeeds: terraform never asks, so there is no approval to be missing.
+func TestDestroy_NoOpNeedsNoApproval(t *testing.T) {
+	e, _, _ := loadApplyTestEngine(t)
+	if err := e.Apply(Options{AutoApprove: true}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	e.Stdin = strings.NewReader("yes\n")
+	if err := e.Destroy(Options{}); err != nil {
+		t.Fatalf("first Destroy: %v", err)
+	}
+
+	// Nothing left; the fake reports no-op without prompting, exactly as terraform does.
+	t.Setenv("TG_DESTROY_NOOP", "1")
+	e.Stdin = nil
+	if err := e.Destroy(Options{}); err != nil {
+		t.Fatalf("expected a no-op destroy to need no approval: %v", err)
+	}
+}
