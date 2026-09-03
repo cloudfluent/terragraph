@@ -127,6 +127,16 @@ func checkValidate(cmd *cobra.Command, e *engine.Engine) error {
 	return nil
 }
 
+// finishRun emits a run's JSON report when requested and returns the run's error. The report is printed even for a failed run — per-node outcomes are exactly what an automation consumer needs when things went wrong — but not when nothing ran at all (the run failed before any node, e.g. a lock error), where there is no run to report.
+func finishRun(cmd *cobra.Command, output string, runs []engine.NodeRun, err error) error {
+	if output == "json" && (len(runs) > 0 || err == nil) {
+		if werr := writeJSON(cmd.OutOrStdout(), runResult{Nodes: nodeRunsToDTO(runs)}); werr != nil {
+			return werr
+		}
+	}
+	return err
+}
+
 func newValidateCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf func() *slog.Logger) *cobra.Command {
 	var output string
 	cmd := &cobra.Command{
@@ -231,10 +241,14 @@ func joinNames(names []string) string {
 func newPlanCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf func() *slog.Logger) *cobra.Command {
 	var node string
 	var parallelism int
+	var output string
 	cmd := &cobra.Command{
 		Use:   "plan",
 		Short: "Run terraform/tofu plan across the graph in dependency order",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if output != "text" && output != "json" {
+				return fmt.Errorf("unknown output %q (want \"text\" or \"json\")", output)
+			}
 			e, unlock, err := loadLockedEngine(cmd, blueprintPath, binaryOf, loggerOf)
 			if err != nil {
 				return err
@@ -243,11 +257,17 @@ func newPlanCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fun
 			if err := checkValidate(cmd, e); err != nil {
 				return err
 			}
-			return e.Plan(engine.Options{Node: node, Parallelism: parallelism})
+			// Under --output json, terraform's own output is diagnostics, not the result: stdout stays a single JSON document.
+			if output == "json" {
+				e.Stdout = cmd.ErrOrStderr()
+			}
+			runs, err := e.Plan(engine.Options{Node: node, Parallelism: parallelism})
+			return finishRun(cmd, output, runs, err)
 		},
 	}
 	cmd.Flags().StringVar(&node, "node", "", "restrict to a single node")
 	cmd.Flags().IntVar(&parallelism, "parallelism", 1, "max nodes to run concurrently within one execution level")
+	cmd.Flags().StringVar(&output, "output", "text", "output format: text or json")
 	return cmd
 }
 
@@ -257,10 +277,14 @@ func newApplyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fu
 	var parallelism int
 	var force bool
 	var approve string
+	var output string
 	cmd := &cobra.Command{
 		Use:   "apply",
 		Short: "Run terraform/tofu apply across the graph in dependency order, wiring outputs to inputs",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if output != "text" && output != "json" {
+				return fmt.Errorf("unknown output %q (want \"text\" or \"json\")", output)
+			}
 			e, unlock, err := loadLockedEngine(cmd, blueprintPath, binaryOf, loggerOf)
 			if err != nil {
 				return err
@@ -273,7 +297,12 @@ func newApplyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fu
 			if err != nil {
 				return err
 			}
-			return e.Apply(engine.Options{Node: node, AutoApprove: autoApprove, Approve: level, Parallelism: parallelism})
+			// Under --output json, terraform's own output is diagnostics, not the result: stdout stays a single JSON document.
+			if output == "json" {
+				e.Stdout = cmd.ErrOrStderr()
+			}
+			runs, err := e.Apply(engine.Options{Node: node, AutoApprove: autoApprove, Approve: level, Parallelism: parallelism})
+			return finishRun(cmd, output, runs, err)
 		},
 	}
 	cmd.Flags().StringVar(&node, "node", "", "restrict to a single node")
@@ -283,6 +312,7 @@ func newApplyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fu
 	// Accepted and ignored for one release so existing scripts keep running. There is no longer a local cache to bypass: apply asks Terraform whether each node needs applying, every run.
 	cmd.Flags().BoolVar(&force, "force", false, "no longer has any effect")
 	_ = cmd.Flags().MarkDeprecated("force", "there is no local cache to bypass; apply now plans every node")
+	cmd.Flags().StringVar(&output, "output", "text", "output format: text or json")
 	return cmd
 }
 
@@ -290,10 +320,14 @@ func newDestroyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf 
 	var node string
 	var autoApprove bool
 	var parallelism int
+	var output string
 	cmd := &cobra.Command{
 		Use:   "destroy",
 		Short: "Run terraform/tofu destroy across the graph in reverse dependency order",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if output != "text" && output != "json" {
+				return fmt.Errorf("unknown output %q (want \"text\" or \"json\")", output)
+			}
 			e, unlock, err := loadLockedEngine(cmd, blueprintPath, binaryOf, loggerOf)
 			if err != nil {
 				return err
@@ -302,12 +336,18 @@ func newDestroyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf 
 			if err := checkValidate(cmd, e); err != nil {
 				return err
 			}
-			return e.Destroy(engine.Options{Node: node, AutoApprove: autoApprove, Parallelism: parallelism})
+			// Under --output json, terraform's own output is diagnostics, not the result: stdout stays a single JSON document.
+			if output == "json" {
+				e.Stdout = cmd.ErrOrStderr()
+			}
+			runs, err := e.Destroy(engine.Options{Node: node, AutoApprove: autoApprove, Parallelism: parallelism})
+			return finishRun(cmd, output, runs, err)
 		},
 	}
 	cmd.Flags().StringVar(&node, "node", "", "restrict to a single node")
 	cmd.Flags().BoolVar(&autoApprove, "auto-approve", false, "skip interactive approval")
 	cmd.Flags().IntVar(&parallelism, "parallelism", 1, "max nodes to run concurrently within one execution level")
+	cmd.Flags().StringVar(&output, "output", "text", "output format: text or json")
 	// No --approve here, unlike apply: destroy's gate reads what a node declared, and the layering rule is that a CLI flag only fills a gap nothing else spoke to — so a flag could never permit a teardown the blueprint refused, and offering one would only suggest otherwise.
 	return cmd
 }

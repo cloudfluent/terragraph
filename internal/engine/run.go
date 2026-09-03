@@ -49,22 +49,41 @@ func (e *Engine) executionLevels(opts Options, reverse bool) ([][]string, error)
 	return levels, nil
 }
 
-// nodeAction runs one node's step of a plan/apply/destroy: given the outputs applied so far this run and a writer for this node's terraform output, it returns the outputs to feed downstream (nil if the node produced none worth propagating, e.g. Destroy).
-type nodeAction func(name string, applied map[string]map[string]any, out io.Writer) (outputs map[string]any, err error)
+// Statuses a NodeRun can carry. The per-command success values (planned, applied, unchanged, destroyed) are chosen by the run that produced them; failed and not run are runLevels' own verdicts.
+const (
+	StatusPlanned   = "planned"   // plan ran to completion
+	StatusApplied   = "applied"   // apply made changes
+	StatusUnchanged = "unchanged" // apply skipped the node: its plan reported no changes
+	StatusDestroyed = "destroyed" // destroy ran to completion
+	StatusFailed    = "failed"    // the node's own step returned an error
+	StatusNotRun    = "not run"   // an earlier level failed, so the run never reached this node
+)
 
-// runLevels is the shared execution loop behind Plan/Apply/Destroy: it walks the graph (or a single node) level by level, running up to opts.Parallelism nodes within a level concurrently. Nodes in the same level are guaranteed to have no edge between them, so a read-only snapshot of outputs applied so far is safe to share across the level's goroutines, and results are merged back only once the whole level completes (no data races). If any node in a level errors, already-started siblings finish but the next level never starts. afterLevel, if non-nil, runs once each level completes successfully; an error from it aborts the run.
-func (e *Engine) runLevels(opts Options, reverse bool, action nodeAction, afterLevel func() error) error {
+// NodeRun records one node's outcome in a plan/apply/destroy run. Level is 1-based in execution order (reversed for destroy), so a caller can present results in run order without re-deriving the graph; Err is the node's own error, without the node %q prefix runLevels adds when failing the run.
+type NodeRun struct {
+	Node   string
+	Level  int
+	Status string
+	Err    error
+}
+
+// nodeAction runs one node's step of a plan/apply/destroy: given the outputs applied so far this run and a writer for this node's terraform output, it returns the outputs to feed downstream (nil if the node produced none worth propagating, e.g. Destroy), the success status to record for the node, and an error.
+type nodeAction func(name string, applied map[string]map[string]any, out io.Writer) (outputs map[string]any, status string, err error)
+
+// runLevels is the shared execution loop behind Plan/Apply/Destroy: it walks the graph (or a single node) level by level, running up to opts.Parallelism nodes within a level concurrently. Nodes in the same level are guaranteed to have no edge between them, so a read-only snapshot of outputs applied so far is safe to share across the level's goroutines, and results are merged back only once the whole level completes (no data races). If any node in a level errors, already-started siblings finish but the next level never starts; the returned runs record those unreached nodes as StatusNotRun so a report covers the whole selection rather than stopping where execution did. afterLevel, if non-nil, runs once each level completes successfully; an error from it aborts the run the same way.
+func (e *Engine) runLevels(opts Options, reverse bool, action nodeAction, afterLevel func() error) ([]NodeRun, error) {
 	levels, err := e.executionLevels(opts, reverse)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	applied := map[string]map[string]any{}
 	var mu sync.Mutex
 	var outMu sync.Mutex
 	buffered := opts.parallelism() > 1
+	runs := make([]NodeRun, 0)
 
-	for _, level := range levels {
+	for li, level := range levels {
 		mu.Lock()
 		snapshot := make(map[string]map[string]any, len(applied))
 		for k, v := range applied {
@@ -91,7 +110,7 @@ func (e *Engine) runLevels(opts Options, reverse bool, action nodeAction, afterL
 				}
 
 				e.logger().Debug("running node", "node", name)
-				outputs, err := action(name, snapshot, out)
+				outputs, status, err := action(name, snapshot, out)
 
 				if buf != nil {
 					outMu.Lock()
@@ -100,14 +119,20 @@ func (e *Engine) runLevels(opts Options, reverse bool, action nodeAction, afterL
 					outMu.Unlock()
 				}
 
+				mu.Lock()
+				if err != nil {
+					runs = append(runs, NodeRun{Node: name, Level: li + 1, Status: StatusFailed, Err: err})
+				} else {
+					runs = append(runs, NodeRun{Node: name, Level: li + 1, Status: status})
+					if outputs != nil {
+						applied[name] = outputs
+					}
+				}
+				mu.Unlock()
+
 				if err != nil {
 					errs[i] = fmt.Errorf("node %q: %w", name, err)
 					return
-				}
-				if outputs != nil {
-					mu.Lock()
-					applied[name] = outputs
-					mu.Unlock()
 				}
 			}(i, name)
 		}
@@ -115,15 +140,25 @@ func (e *Engine) runLevels(opts Options, reverse bool, action nodeAction, afterL
 
 		for _, err := range errs {
 			if err != nil {
-				return err
+				return markNotRun(runs, levels, li+1), err
 			}
 		}
 
 		if afterLevel != nil {
 			if err := afterLevel(); err != nil {
-				return err
+				return markNotRun(runs, levels, li+1), err
 			}
 		}
 	}
-	return nil
+	return runs, nil
+}
+
+// markNotRun appends a StatusNotRun entry for every node in the levels an aborted run never reached, keeping each entry's Level aligned with the numbering the completed levels already used.
+func markNotRun(runs []NodeRun, levels [][]string, from int) []NodeRun {
+	for i := from; i < len(levels); i++ {
+		for _, name := range levels[i] {
+			runs = append(runs, NodeRun{Node: name, Level: i + 1, Status: StatusNotRun})
+		}
+	}
+	return runs
 }

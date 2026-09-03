@@ -156,6 +156,16 @@ func TestRootCmd_LogLevel_RejectsUnknownValue(t *testing.T) {
 	}
 }
 
+// TestRunCommands_OutputFlagRejectsUnknownValue proves plan/apply/destroy reject an unknown --output value up front, before any engine is loaded, matching validate/graph/vendor.
+func TestRunCommands_OutputFlagRejectsUnknownValue(t *testing.T) {
+	for _, cmd := range []string{"plan", "apply", "destroy"} {
+		_, _, err := runCmd(t, cmd, "--output", "bogus")
+		if err == nil || !strings.Contains(err.Error(), `unknown output "bogus"`) {
+			t.Fatalf("%s --output bogus: got = %v, want unknown-output error", cmd, err)
+		}
+	}
+}
+
 func TestRootCmd_LogLevel_DebugSurfacesInternalTracing(t *testing.T) {
 	_, stderr, err := runCmd(t, "--log-level", "debug", "graph")
 	if err != nil {
