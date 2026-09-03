@@ -8,10 +8,10 @@ never enabled silently.
 
 ## Where contracts live
 
-`contracts.hcl` sits next to the blueprint file (same directory-merge rule as
-blueprints: if `--blueprint` names a directory, every `contracts*.hcl` file
-directly inside it is merged). Graphs without a `contracts.hcl` behave exactly
-as before.
+`contracts.hcl` is a single file sitting next to the blueprint (or directly
+inside the directory `--blueprint` names); the engine looks for that one file,
+and its absence is the legacy case. Graphs without a `contracts.hcl` behave
+exactly as before.
 
 Contracts are **keyed by module source directory**, not by node name. Every
 node that shares a source directory shares its contract — so a group
