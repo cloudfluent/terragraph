@@ -199,15 +199,6 @@ func (r *Runner) SupportsSavedPlan() bool {
 	}
 }
 
-func (r *Runner) Apply(autoApprove bool, extraArgs ...string) error {
-	args := []string{"apply", "-input=false"}
-	if autoApprove {
-		args = append(args, "-auto-approve")
-	}
-	args = append(args, extraArgs...)
-	return r.run(args...)
-}
-
 func (r *Runner) Destroy(autoApprove bool, extraArgs ...string) error {
 	args := []string{"destroy", "-input=false"}
 	if autoApprove {
