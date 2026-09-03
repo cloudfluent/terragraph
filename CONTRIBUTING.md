@@ -4,6 +4,8 @@
 
 Bug reports and feature requests go through the templates GitHub shows when you click "New issue" (free-form issues are disabled, so there's always one of these). Fill in what's asked, especially `terragraph --version` and a minimal `blueprint.hcl` for bug reports: without a repro, a bug report usually just sits until someone can construct one.
 
+If an issue picks up the `needs-repro` label, that is the ball being handed back to you: nobody could reproduce the problem from what is there yet. Reply with the missing blueprint or command and it goes back into the queue.
+
 ## Making a change
 
 External contributors: fork the repo and branch from `main`. Maintainers: branch directly on `origin`. Either way, branch names aren't enforced (a fork's branch lives outside this repo's server-side rules, so a name check would only ever apply unevenly); name it however's useful to you.

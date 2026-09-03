@@ -35,6 +35,18 @@ body:
     validations:
       required: true
 
+  - type: dropdown
+    id: runtime
+    attributes:
+      label: Runtime
+      description: Which binary terragraph shelled out to. Pick "Both" only if you reproduced it on each.
+      options:
+        - Terraform
+        - OpenTofu
+        - Both
+    validations:
+      required: true
+
   - type: input
     id: tf-version
     attributes:
@@ -43,10 +55,25 @@ body:
     validations:
       required: true
 
-  - type: input
+  - type: dropdown
     id: os
     attributes:
-      label: OS / architecture
-      placeholder: "macOS 15 arm64, Ubuntu 24.04 amd64, ..."
+      label: Operating system
+      description: Pick every one you actually reproduced this on. Choose WSL on its own rather than also picking Linux or Windows, unless you confirmed those separately.
+      multiple: true
+      options:
+        - macOS
+        - Linux
+        - Windows
+        - WSL
+        - Other
     validations:
       required: true
+
+  - type: input
+    id: os-detail
+    attributes:
+      label: OS version and architecture
+      placeholder: "macOS 15.2 arm64, Ubuntu 24.04 amd64, ..."
+    validations:
+      required: false
