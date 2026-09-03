@@ -9,6 +9,12 @@ import (
 
 // Plan runs `terraform plan` over the selected nodes in topological order. A node downstream of one that has never been applied will fail to resolve its inputs. See the "known limitation" in the project plan: planning a value that doesn't exist yet is inherently impossible when every node is an independent root module.
 func (e *Engine) Plan(opts Options) error {
+	unlock, err := e.lockRun()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
 	e.logger().Info("plan starting", "node", opts.Node, "parallelism", opts.parallelism())
 	return e.runLevels(opts, false, func(name string, applied map[string]map[string]any, out io.Writer) (map[string]any, error) {
 		vars, err := e.resolveInputs(name, applied)

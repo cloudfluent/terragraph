@@ -15,6 +15,7 @@ import (
 	"github.com/cloudfluent/terragraph/internal/blueprint"
 	"github.com/cloudfluent/terragraph/internal/exec"
 	"github.com/cloudfluent/terragraph/internal/graph"
+	"github.com/cloudfluent/terragraph/internal/runlock"
 )
 
 // Engine holds a loaded blueprint's graph and the I/O streams terraform/tofu subprocess output is forwarded to.
@@ -31,6 +32,8 @@ type Engine struct {
 	Logger *slog.Logger
 
 	stdin *bufio.Reader
+	// runLock is the lock LoadLocked already holds. lockRun must not Close it; the LoadLocked caller owns the lifetime.
+	runLock *runlock.Lock
 }
 
 // approvals is the single reader every prompt shares. A fresh bufio.Reader per question would buffer past the newline it needed and swallow the next question's answer.
@@ -72,21 +75,66 @@ func (e *Engine) logger() *slog.Logger {
 	return slog.New(slog.DiscardHandler)
 }
 
-// Load parses the blueprint at blueprintPath and builds its graph. blueprintPath may name a single file or a directory (every .hcl file directly inside it is merged, see blueprint.LoadPath); node sources are resolved relative to the resulting base directory.
+// lockRun serializes this process against any other terragraph plan/apply/destroy/vendor
+// targeting the same blueprint. In-process --parallelism is unaffected: it shares this
+// one lock. See internal/runlock. The returned func releases a lock this call acquired;
+// it is a no-op when LoadLocked already holds one.
+func (e *Engine) lockRun() (func(), error) {
+	if e.runLock != nil {
+		return func() {}, nil
+	}
+	e.logger().Debug("acquiring blueprint lock", "dir", e.BaseDir)
+	lock, err := runlock.Acquire(e.BaseDir, e.Stderr)
+	if err != nil {
+		return nil, fmt.Errorf("locking blueprint: %w", err)
+	}
+	return func() { _ = lock.Close() }, nil
+}
+
+// Load parses the blueprint at blueprintPath and builds its graph. blueprintPath may name a single file or a directory (every .hcl file directly inside it is merged, see blueprint.LoadPath); node sources are resolved relative to the resulting base directory. It does not take the process lock; use LoadLocked for plan/apply/destroy so graph.Build cannot inspect module files while vendor rewrites them.
 func Load(blueprintPath string, binary exec.Binary, stdout, stderr io.Writer) (*Engine, error) {
+	e, _, err := load(blueprintPath, binary, stdout, stderr, false)
+	return e, err
+}
+
+// LoadLocked is Load after taking the blueprint process lock, and holds it across graph.Build so a concurrent vendor cannot rewrite module sources underneath Inspect. The caller must invoke the returned func when the run ends.
+func LoadLocked(blueprintPath string, binary exec.Binary, stdout, stderr io.Writer) (*Engine, func(), error) {
+	e, lock, err := load(blueprintPath, binary, stdout, stderr, true)
+	if err != nil {
+		return nil, nil, err
+	}
+	return e, func() {
+		_ = lock.Close()
+		e.runLock = nil
+	}, nil
+}
+
+func load(blueprintPath string, binary exec.Binary, stdout, stderr io.Writer, takeLock bool) (*Engine, *runlock.Lock, error) {
 	bp, dir, err := blueprint.LoadPath(blueprintPath)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// Absolute, so paths derived from it (DataDir in particular) are unambiguous no matter what working directory a terraform/tofu subprocess runs with. A relative TF_DATA_DIR would otherwise be resolved relative to the subprocess's own cwd (the node's source dir), not this process's, producing a nested, wrong path.
 	baseDir, err := filepath.Abs(dir)
 	if err != nil {
-		return nil, fmt.Errorf("resolving blueprint directory: %w", err)
+		return nil, nil, fmt.Errorf("resolving blueprint directory: %w", err)
 	}
+
+	var lock *runlock.Lock
+	if takeLock {
+		lock, err = runlock.Acquire(baseDir, stderr)
+		if err != nil {
+			return nil, nil, fmt.Errorf("locking blueprint: %w", err)
+		}
+	}
+
 	g, err := graph.Build(bp, baseDir)
 	if err != nil {
-		return nil, err
+		if lock != nil {
+			_ = lock.Close()
+		}
+		return nil, nil, err
 	}
 
 	return &Engine{
@@ -96,7 +144,8 @@ func Load(blueprintPath string, binary exec.Binary, stdout, stderr io.Writer) (*
 		Graph:     g,
 		Stdout:    stdout,
 		Stderr:    stderr,
-	}, nil
+		runLock:   lock,
+	}, lock, nil
 }
 
 // Validate returns every structural problem found in the graph (missing ports, two data edges targeting the same input, a data edge and vars both setting the same input, cycles, unresolved required variables) plus any tfvars orphan warnings (see tfVarsOrphans) and shared-source runtime conflict warnings (see runtimeConflicts). Check each Problem's IsError(): only errors should block graph/plan/apply/destroy, warnings are advisory.
