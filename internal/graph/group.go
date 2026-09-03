@@ -2,6 +2,7 @@ package graph
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/cloudfluent/terragraph/internal/blueprint"
@@ -241,4 +242,44 @@ func rewriteEndpoint(ref blueprint.PortRef, uses map[string]useInfo, qualify fun
 		}
 	}
 	return nil, fmt.Errorf("use.%s.input.%s is not exported by this group", ref.Node, ref.Name)
+}
+
+// applyUseVars rewrites a use block's literal vars through the instance's already-resolved export onto the leaf nodes' Vars maps. Keys are export input names; each value is written onto every leaf the export names (fan-out included). Unknown export names are an Error rather than skipped, because Validate only sees leaf variable names and would otherwise accept a key that never landed. A leaf that already has that Vars key (group-body node.vars, a nested use.vars, or two export inputs targeting the same leaf) is also an Error: an input is a single slot. Does not mutate vars itself.
+func applyUseVars(vars map[string]any, export blueprint.Export, nodes map[string]*Node, instanceAs string) error {
+	if len(vars) == 0 {
+		return nil
+	}
+
+	byName := make(map[string][]blueprint.PortRef, len(export.Inputs))
+	for _, in := range export.Inputs {
+		byName[in.Name] = in.To
+	}
+
+	keys := make([]string, 0, len(vars))
+	for key := range vars {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	for _, key := range keys {
+		targets, ok := byName[key]
+		if !ok {
+			return fmt.Errorf("use.%s.vars.%s is not an export input of this group", instanceAs, key)
+		}
+		val := vars[key]
+		for _, ref := range targets {
+			node, ok := nodes[ref.Node]
+			if !ok {
+				return fmt.Errorf("use.%s.vars.%s: export input maps to unknown node %q", instanceAs, key, ref.Node)
+			}
+			if node.Vars == nil {
+				node.Vars = map[string]any{}
+			}
+			if _, exists := node.Vars[ref.Name]; exists {
+				return fmt.Errorf("node.%s.input.%s: set by more than one vars source; remove extras", ref.Node, ref.Name)
+			}
+			node.Vars[ref.Name] = val
+		}
+	}
+	return nil
 }

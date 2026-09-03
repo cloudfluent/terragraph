@@ -9,11 +9,11 @@ The extension bundles a compatible language server, so nothing here requires ins
 Open the completion list with `Ctrl+Space` (`Control+Space` on macOS).
 
 - Top-level blueprint blocks: `node`, `edge`, `runtime`, `group`, `use`, `vendor`, `tfvars`
-- The attributes each block accepts: a node's `source`, `vars`, `env`, `runtime`, `backend_config`, and so on
+- The attributes each block accepts: a node's `source`, `vars`, `env`, `runtime`, `backend_config`; a `use` block's `as`, `source`, `vars`, `env`, `runtime`, `approve`; and so on
 - A Terraform/OpenTofu module's own input variables and outputs
 - Declared runtime names
 
-Inside `vars = {}` only the input variables the node's own module declares are suggested. To pass another node's result, use an `edge` rather than `vars`.
+Inside a node's `vars = {}` only the input variables that module declares are suggested. Inside a `use` block's `vars = {}` only that instance's export input names are suggested. To pass another node's result, use an `edge` rather than `vars`.
 
 ```hcl
 edge {
@@ -48,7 +48,7 @@ Mistakes that can be found without evaluating anything are underlined as you typ
 - A node name that isn't declared
 - A module input or output name that doesn't exist
 - A `from` referencing an input, or a `to` referencing an output
-- A `vars` entry the module has no such input variable for
+- A `vars` entry the module has no such input variable for, or a `use.vars` key that is not an export input
 - An edge `input` block whose label isn't an input of the `to` node, or whose `from = output.<attr>` isn't an output of the `from` node
 
 Hovering an error lists the input or output names that are available.

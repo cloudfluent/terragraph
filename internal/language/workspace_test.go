@@ -97,6 +97,7 @@ func TestWorkspaceCompletesBlueprintSyntaxByContext(t *testing.T) {
 		{"edge attribute", "edge {\n  __CURSOR__\n}", "from", "required output reference"},
 		{"runtime attribute", "runtime \"tofu\" {\n  __CURSOR__\n}", "binary", "required string"},
 		{"use attribute", "use \"network\" {\n  __CURSOR__\n}", "env", "map(string)"},
+		{"use vars attribute", "use \"network\" {\n  __CURSOR__\n}", "vars", "object"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			text, offset := cursor(tc.text, "__CURSOR__")
@@ -152,6 +153,69 @@ func TestWorkspaceDoesNotOfferNodeAttributesInsideBackendConfigObject(t *testing
 	ws.SetDocument(path, []byte(text))
 	if items := ws.Complete(context.Background(), path, offset); len(items) != 0 {
 		t.Fatalf("backend_config completion = %#v, want no node attribute suggestions", items)
+	}
+}
+
+func TestWorkspaceCompletesUseVarsAgainstExportInputs(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "groups", "network", "group.hcl"), `group "network" {
+  export {
+    input "cidr" { to = node.vpc.input.cidr }
+    input "vpc_id" { to = node.vpc.input.vpc_id }
+  }
+}`)
+	writeFile(t, filepath.Join(dir, "stacks", "app", "main.tf"), `variable "cluster_name" { type = string }`)
+	path := filepath.Join(dir, "blueprint.hcl")
+	text, offset := cursor(`node "app" { source = "./stacks/app" }
+use "network" {
+  as     = "network"
+  source = "./groups/network"
+  vars = {
+    __CURSOR__
+  }
+}`, "__CURSOR__")
+	if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	items := NewWorkspace(dir).Complete(context.Background(), path, offset)
+	if !contains(items, "cidr") || !contains(items, "vpc_id") {
+		t.Fatalf("expected export input completions, got %#v", items)
+	}
+	if contains(items, "cluster_name") {
+		t.Fatalf("use.vars must not suggest a sibling node's module variables, got %#v", items)
+	}
+}
+
+func TestWorkspaceDiagnosesInvalidUseVars(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "groups", "network", "group.hcl"), `group "network" {
+  export {
+    input "cidr" { to = node.vpc.input.cidr }
+  }
+}`)
+	path := filepath.Join(dir, "blueprint.hcl")
+	text := `use "network" {
+  as     = "network"
+  source = "./groups/network"
+  vars = {
+    typo = "x"
+  }
+}`
+	ws := NewWorkspace(dir)
+	ws.SetDocument(path, []byte(text))
+	got := ws.Diagnose(context.Background(), path)
+	found := false
+	for _, diagnostic := range got {
+		if strings.Contains(diagnostic.Message, "Unknown input typo") {
+			found = true
+			if !strings.Contains(diagnostic.Message, "cidr") {
+				t.Fatalf("expected available export inputs in diagnostic, got %#v", diagnostic)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("diagnostic %q missing from %#v", "Unknown input typo", got)
 	}
 }
 

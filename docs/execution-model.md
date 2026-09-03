@@ -12,7 +12,7 @@ Type checking is a runtime check, not static inference: a standard root module's
 
 ## How values are passed
 
-terragraph never writes or modifies `.tf` files. Before running a node, it writes the values resolved from its incoming data edges (and its own `vars`, see [blueprint.md](blueprint.md#literal-input-values-vars)) to an ephemeral, engine-managed tfvars file, then passes it to Terraform explicitly via `-var-file`. Terraform's own `*.auto.tfvars.json` auto-loading is never relied on: two nodes can share a module directory (see `backend_config` in [blueprint.md](blueprint.md#reusing-the-same-module-across-instances)), and auto-loading by a fixed filename would let them clobber each other's values.
+terragraph never writes or modifies `.tf` files. Before running a node, it writes the values resolved from its incoming data edges (and its own `vars`, including literals a `use.vars` rewrote onto that node; see [blueprint.md](blueprint.md#literal-input-values-vars)) to an ephemeral, engine-managed tfvars file, then passes it to Terraform explicitly via `-var-file`. Terraform's own `*.auto.tfvars.json` auto-loading is never relied on: two nodes can share a module directory (see `backend_config` in [blueprint.md](blueprint.md#reusing-the-same-module-across-instances)), and auto-loading by a fixed filename would let them clobber each other's values.
 
 Where that file is written is controlled by an optional `tfvars` block:
 

@@ -38,7 +38,7 @@ This expands purely in memory when the graph is built (no files are generated) i
 A few rules fall out of that expansion:
 - **Only `export`-declared ports are visible from outside the instance.** `use.checkout.output.cluster_id` works; `use.checkout.cluster.output.cluster_id` doesn't even parse. This is deliberate: a group is only safely reusable if its author can change internals without an unbounded set of external edges depending on them, the same reason Terraform modules, Go's unexported identifiers, and private class members all work this way. If a consumer needs something not currently exported, the fix is adding it to the group's `export` block, not reaching around it. Plain nodes (not inside a group) have no such restriction.
 - **A data edge into a group's exposed input can fan out** (`to = [node.a.input.x, node.b.input.x]`) because "which internal nodes need this value" is a fact about the group's own design that its author must state; it isn't inferable from graph structure. An exposed output is always a 1:1 passthrough, so it never needs this.
-- **A leaf input still takes at most one data edge after expansion.** Fan-out to distinct internal ports is not a collision. Two outer edges (or an outer edge plus an internal one) that rewrite onto the same leaf are a validation Error, including exact duplicates. This is the same one-source-per-input rule as a plain blueprint; see [blueprint.md](blueprint.md#literal-input-values-vars).
+- **A leaf input still takes at most one source after expansion** (a data edge or `vars`). Fan-out to distinct internal ports is not a collision. Two outer edges, an outer edge plus an internal one, or a `use.vars` key plus a data edge, that rewrite onto the same leaf are a validation Error, including exact duplicates. This is the same one-source-per-input rule as a plain blueprint; see [blueprint.md](blueprint.md#literal-input-values-vars).
 - **A bare, ordering-only edge into or out of a group needs no such declaration**: `edge { from = node.x, to = use.checkout }` (no port) expands automatically to every node inside the group with no internal predecessor (its "roots"); the symmetric case on the `from` side expands to every node with no internal successor (its "sinks"). Unlike fan-out, this is inferable directly from the group's internal graph shape.
 - **An edge into or out of an instance can carry nested `input` blocks** (see [blueprint.md](blueprint.md#several-values-between-the-same-two-nodes-input)), wiring several of the instance's exposed inputs in one block: `edge { from = node.vpc, to = use.checkout, input "vpc_id" { from = output.vpc_id } ... }`. Each block expands into an ordinary data edge before any of the above applies, so an expanded edge fans out through `export` and collides on a leaf exactly as a separately written one would.
 - **`node`↔`group` and `group`↔`group` edges use identical syntax** to `node`↔`node`. A group instance is indistinguishable from a node both in edge references and in schema: internal nodes are inspected exactly as today (`module.Inspect` against their real `.tf` files), the `export` block is validated against those real schemas, and once valid it's synthesized into the same schema shape a real module has. Groups can nest (a group's own `use` blocks resolve recursively), and a group that directly or transitively uses itself is a validation error.
@@ -72,5 +72,23 @@ use "eks-service" {
 ```
 
 Unlike `runtime`, this merges rather than replaces: an internal node that sets its own `env` only overrides the specific keys it names, still inheriting anything else the instance's `env` contributed. Nesting works the same way `runtime` does, layer by layer: an inner `use` block's own `env` merges over whatever it inherited from an outer one before passing the result down further.
+
+## Setting literal inputs for an instance
+
+A `use` block can set `vars` (see [blueprint.md](blueprint.md#literal-input-values-vars)) to fill this instance's public inputs with literal values. Keys are **export input names**, not internal `node.input` paths: the group author still decides what is public.
+
+```hcl
+use "eks-service" {
+  as     = "checkout"
+  source = "./groups/eks-service"
+  vars = {
+    cluster_name = "checkout"
+  }
+}
+```
+
+That fills `export { input "cluster_name" { to = node.cluster.input.cluster_name } }`. The same no-references, no-functions rule as `node.vars` applies: another node's output still needs an `edge`. After expansion the literal is rewritten onto every leaf the export names, including fan-out, and then the one-source-per-input rule applies: a key that is not an export input is an Error; `use.vars` plus a data edge on the same leaf is an Error; two vars sources on the same leaf (group-body `node.vars` and `use.vars`, or two export inputs targeting the same leaf) is an Error.
+
+Unlike `env`, this does not cascade onto every expanded node. Unlike `runtime`, it is not a single replace-on-override choice. It fills the public inputs the group author exported.
 
 See it end to end in [`examples/group`](../examples/group).

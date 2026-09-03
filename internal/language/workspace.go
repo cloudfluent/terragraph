@@ -85,7 +85,8 @@ func (w *Workspace) Complete(_ context.Context, path string, offset int) []Compl
 	fragment := string(text[start:offset])
 	objectAttribute := objectAttributeAt(text, offset)
 	if objectAttribute == "vars" && !strings.Contains(fragment, ".") {
-		return propertyCompletions(model.nodes[nodeAt(text, offset)], fragment, start, offset)
+		p, _ := varsPortsAt(model, text, offset)
+		return propertyCompletions(p, fragment, start, offset)
 	}
 	if objectAttribute != "" {
 		return nil
@@ -348,6 +349,7 @@ var completionSchemas = map[string][]attributeSpec{
 		{name: "source", insert: "source = \"\"", detail: "required string", documentation: "Local path or remote source containing the group."},
 		{name: "runtime", insert: "runtime = runtime.", detail: "runtime reference", documentation: "Default runtime for nodes expanded from this group."},
 		{name: "env", insert: "env = {\n}", detail: "map(string)", documentation: "Environment variables inherited by nodes expanded from this group."},
+		{name: "vars", insert: "vars = {\n}", detail: "object", documentation: "Literal values for this instance's export inputs. Use an edge for another node's output."},
 		{name: "approve", insert: "approve = \"\"", detail: "optional string", documentation: "Default approve level for nodes expanded from this group, unless a node sets its own."},
 	},
 	"vendor": {
@@ -503,6 +505,65 @@ func nodeAt(text []byte, offset int) string {
 		return ""
 	}
 	return matches[len(matches)-1][1]
+}
+
+var useAsLiteral = regexp.MustCompile(`as\s*=\s*"([^"]+)"`)
+
+// varsPortsAt returns the ports whose names are valid keys inside the vars object containing offset: a node's module inputs, or a use instance's export inputs.
+func varsPortsAt(m workspaceModel, text []byte, offset int) (ports, bool) {
+	path := blockPathAt(text, offset)
+	if len(path) == 0 {
+		return ports{}, false
+	}
+	switch path[len(path)-1] {
+	case "use":
+		p, ok := m.uses[useAsAt(text, offset)]
+		return p, ok
+	case "node":
+		p, ok := m.nodes[nodeAt(text, offset)]
+		return p, ok
+	default:
+		return ports{}, false
+	}
+}
+
+func useAsAt(text []byte, offset int) string {
+	start, end, ok := enclosingNamedBlock(text, offset, "use")
+	if !ok {
+		return ""
+	}
+	match := useAsLiteral.FindSubmatch(text[start:end])
+	if len(match) != 2 {
+		return ""
+	}
+	return string(match[1])
+}
+
+func enclosingNamedBlock(text []byte, offset int, name string) (start, end int, ok bool) {
+	var brace int
+	found := false
+	for _, b := range openBlocksAt(text, offset) {
+		if b.name == name {
+			brace = b.at
+			found = true
+		}
+	}
+	if !found {
+		return 0, 0, false
+	}
+	depth := 0
+	for i := brace; i < len(text); i++ {
+		switch text[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return brace, i, true
+			}
+		}
+	}
+	return brace, len(text), true
 }
 
 var blockHeader = regexp.MustCompile(`(?s)(node|edge|runtime|group|use|vendor|tfvars|export|input|output)\s*(?:"[^\"]*")?\s*$`)
@@ -734,7 +795,7 @@ func (w *Workspace) Diagnose(_ context.Context, path string) []Diagnostic {
 		if objectAttributeAt(text, start) != "vars" {
 			continue
 		}
-		ports, ok := model.nodes[nodeAt(text, start)]
+		ports, ok := varsPortsAt(model, text, start)
 		if !ok || containsString(ports.inputs, string(text[start:end])) {
 			continue
 		}

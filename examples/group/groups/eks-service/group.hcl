@@ -15,6 +15,9 @@ group "eks-service" {
     input "vpc_id" {
       to = node.cluster.input.vpc_id
     }
+    input "cluster_name" {
+      to = node.cluster.input.cluster_name
+    }
     output "cluster_id" {
       from = node.cluster.output.cluster_id
     }

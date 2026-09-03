@@ -10,6 +10,7 @@ terraform {
 resource "random_id" "cluster" {
   byte_length = 4
   keepers = {
-    vpc_id = var.vpc_id
+    vpc_id       = var.vpc_id
+    cluster_name = var.cluster_name
   }
 }

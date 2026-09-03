@@ -149,6 +149,9 @@ edge {
 	if u.GroupName != "eks-service" || u.As != "checkout" || u.Source != "../groups/eks-service" {
 		t.Fatalf("unexpected use block: %+v", u)
 	}
+	if len(u.Vars) != 0 {
+		t.Fatalf("expected no vars, got %+v", u.Vars)
+	}
 
 	if len(bp.Edges) != 1 {
 		t.Fatalf("expected 1 edge, got %d", len(bp.Edges))
@@ -156,6 +159,63 @@ edge {
 	to := bp.Edges[0].To
 	if to.Entity != EntityUse || to.Node != "checkout" || to.Kind != PortInput || to.Name != "vpc_id" {
 		t.Fatalf("unexpected edge target: %+v", to)
+	}
+}
+
+func TestParseFile_UseVars(t *testing.T) {
+	path := writeTemp(t, `
+use "eks-service" {
+  as     = "checkout"
+  source = "./groups/eks-service"
+  vars = {
+    cluster_name = "checkout"
+    az_count     = 3
+  }
+}
+`)
+
+	bp, err := ParseFile(path)
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	if len(bp.Uses) != 1 {
+		t.Fatalf("expected 1 use instantiation, got %d", len(bp.Uses))
+	}
+	u := bp.Uses[0]
+	if u.Vars["cluster_name"] != "checkout" {
+		t.Fatalf("unexpected cluster_name: %+v", u.Vars["cluster_name"])
+	}
+	if u.Vars["az_count"] != float64(3) {
+		t.Fatalf("unexpected az_count: %+v", u.Vars["az_count"])
+	}
+}
+
+func TestParseFile_UseVarsRejectsOutputReference(t *testing.T) {
+	path := writeTemp(t, `
+node "a" { source = "./a" }
+use "g" {
+  as     = "inst"
+  source = "./g"
+  vars = {
+    x = node.a.output.id
+  }
+}
+`)
+	if _, err := ParseFile(path); err == nil {
+		t.Fatalf("expected an error: use vars must not reference another node's output; use an edge for that")
+	}
+}
+
+func TestParseFile_UseVarsRejectsNonObject(t *testing.T) {
+	path := writeTemp(t, `
+use "g" {
+  as     = "inst"
+  source = "./g"
+  vars = ["not", "an", "object"]
+}
+`)
+	if _, err := ParseFile(path); err == nil {
+		t.Fatalf("expected an error: use vars must be an object/map, not a list")
 	}
 }
 
@@ -178,6 +238,9 @@ group "outer" {
   use "inner-group" {
     as     = "inner"
     source = "../inner"
+    vars = {
+      name = "from-outer"
+    }
   }
   node "a" { source = "./a" }
 
@@ -194,6 +257,9 @@ group "outer" {
 	g := bp.Groups[0]
 	if len(g.Uses) != 1 || g.Uses[0].As != "inner" {
 		t.Fatalf("unexpected nested use: %+v", g.Uses)
+	}
+	if g.Uses[0].Vars["name"] != "from-outer" {
+		t.Fatalf("unexpected nested use vars: %+v", g.Uses[0].Vars)
 	}
 	if g.Export.Outputs[0].From.Entity != EntityUse {
 		t.Fatalf("expected export output to reference the nested use instance, got %+v", g.Export.Outputs[0].From)
