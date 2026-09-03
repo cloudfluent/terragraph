@@ -10,6 +10,20 @@ External contributors: fork the repo and branch from `main`. Maintainers: branch
 
 Before opening a PR: `make check` (fmt, lint, docs, build, test, the same thing CI runs) should pass locally. If the change touches blueprint semantics, a CLI flag, or an example's expected output, update the relevant `docs/*.md` or example `README.md` in the same PR.
 
+## What the PR body needs
+
+Two things, and neither one is long.
+
+**One sentence in your own words.** Somewhere in the body, in plain language, say what changed and why. A generated summary, a pasted agent transcript, or a filled-in checklist on its own doesn't count. One honest line does:
+
+> I reviewed the full diff; this makes `vendor` skip a node whose source is already local, which is why a second run was re-fetching everything.
+
+This isn't a rule about writing well. It's the only signal a reviewer has that the person opening the PR understands the change well enough to maintain it, and it costs nothing to produce if you do.
+
+**What you actually ran.** `make check` passing is necessary, but it isn't evidence that the behavior works. Paste the commands you ran and what they printed: for a bug fix, the reproduction failing before the change and passing after it. Prefer a fenced code block to a screenshot of a terminal, since text can be searched, diffed, and quoted back to you in review. If you do need to attach an image, drag and drop it into the PR body rather than committing the file into the repo.
+
+Using an AI agent to write the change is fine. Letting one open the PR without doing those two things is not, because you're the one who answers the review and maintains what lands.
+
 ## PR title (this is the part that's enforced)
 
 **The PR title becomes the commit message on `main`.** This repo merges everything via squash-merge, and GitHub uses the PR title as the squash commit's subject line, so the PR title is the one thing that's actually checked in CI for every contributor, fork or not:
