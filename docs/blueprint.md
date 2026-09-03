@@ -27,6 +27,8 @@ An input is a single slot: two data edges targeting the same input are a validat
 
 Node canvas layout (for the future visual editor) lives in a separate `blueprint.layout.json`, so moving a box never shows up in a `blueprint.hcl` diff.
 
+Edges wire values; contracts review them. See [`docs/contracts.md`](contracts.md) for producer guarantees and consumer requirements keyed by module source.
+
 ## Graph remote lock (`lock`)
 
 An optional top-level `lock` block serializes `plan` / `apply` / `destroy` across machines (a laptop and CI, or two clones). Terraform still locks each node's state; this lock is the graph run. Activation is the block itself, not a CLI flag. At most one `lock` per blueprint. See [execution-model.md](execution-model.md#graph-remote-lock) for acquire order and crash behavior.
