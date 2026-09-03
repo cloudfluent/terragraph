@@ -55,7 +55,9 @@ The mechanism is an S3 lock **object** via conditional writes (the same idea as 
 
 If the object already exists, the command **fails immediately** (it does not wait the way flock does).
 
-Ctrl-C / SIGTERM / SIGKILL leave the S3 object (the process exits without running `defer`; flock still drops with the fd). Delete the object to recover. There is no `force-unlock` yet.
+Ctrl-C / SIGTERM / SIGKILL leave the S3 object (the process exits without running `defer`; flock still drops with the fd). A failed `DeleteObject` after a successful run does the same: the command prints the error to stderr and still reports success. Delete the object to recover. There is no `force-unlock` yet.
+
+IAM on the lock key needs `s3:GetObject`, `s3:PutObject`, and `s3:DeleteObject`. Conditional delete uses `If-Match`, which AWS evaluates as a Get; `s3:DeleteObject` alone is not enough.
 
 Every node must use a remote backend (`s3` / `gcs` / `azurerm` / `http` / `remote` / `cloud`). See [blueprint.md](blueprint.md#graph-remote-lock-lock) for the block.
 

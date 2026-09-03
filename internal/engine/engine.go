@@ -104,7 +104,15 @@ func (e *Engine) lockGraph() (func(), error) {
 	if err != nil {
 		return nil, fmt.Errorf("locking graph: %w", err)
 	}
-	return func() { _ = held.Close() }, nil
+	return func() {
+		if err := held.Close(); err != nil {
+			w := e.Stderr
+			if w == nil {
+				w = os.Stderr
+			}
+			_, _ = fmt.Fprintf(w, "releasing graph lock: %v\n", err)
+		}
+	}, nil
 }
 
 // Load parses the blueprint at blueprintPath and builds its graph. blueprintPath may name a single file or a directory (every .hcl file directly inside it is merged, see blueprint.LoadPath); node sources are resolved relative to the resulting base directory. It does not take the process lock; use LoadLocked for plan/apply/destroy so graph.Build cannot inspect module files while vendor rewrites them.

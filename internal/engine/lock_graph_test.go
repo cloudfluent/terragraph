@@ -1,8 +1,10 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/cloudfluent/terragraph/internal/blueprint"
@@ -104,5 +106,40 @@ lock {
 	_, err = (&Engine{Blueprint: bp}).lockGraph()
 	if !errors.Is(err, graphlock.ErrHeld) {
 		t.Fatalf("lockGraph: err = %v, want ErrHeld", err)
+	}
+}
+
+type failHeld struct{ err error }
+
+func (f failHeld) Close() error { return f.err }
+
+func TestLockGraph_CloseErrorWrittenToStderr(t *testing.T) {
+	orig := acquireRemoteLock
+	t.Cleanup(func() { acquireRemoteLock = orig })
+	acquireRemoteLock = func(ctx context.Context, lock *blueprint.Lock) (graphlock.Held, error) {
+		return failHeld{err: errors.New("delete denied")}, nil
+	}
+
+	path := writeBlueprint(t, t.TempDir(), `
+lock {
+  s3 {
+    bucket = "acme-tfstate"
+    key    = "terragraph/prod.lock"
+    region = "ap-northeast-2"
+  }
+}
+`)
+	bp, err := blueprint.ParseFile(path)
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	var stderr bytes.Buffer
+	unlock, err := (&Engine{Blueprint: bp, Stderr: &stderr}).lockGraph()
+	if err != nil {
+		t.Fatalf("lockGraph: %v", err)
+	}
+	unlock()
+	if !strings.Contains(stderr.String(), "delete denied") {
+		t.Fatalf("stderr = %q, want Close error", stderr.String())
 	}
 }
