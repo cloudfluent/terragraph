@@ -261,6 +261,9 @@ func newObserveCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf 
 			if err != nil {
 				return err
 			}
+			if err := checkValidate(cmd, e); err != nil {
+				return err
+			}
 			ev, err := e.Observe()
 			if err != nil {
 				return err
@@ -298,6 +301,9 @@ func newProposeCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf 
 		RunE: func(cmd *cobra.Command, args []string) error {
 			e, err := loadEngine(cmd, blueprintPath, binaryOf, loggerOf)
 			if err != nil {
+				return err
+			}
+			if err := checkValidate(cmd, e); err != nil {
 				return err
 			}
 			draft, err := e.Propose()

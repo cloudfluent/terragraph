@@ -3,6 +3,7 @@ package engine
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -66,7 +67,10 @@ func (e *Engine) Observe() (*Evidence, error) {
 		scope := scopeFor(e, dir)
 
 		outputs, applied := map[string]any{}, false
-		if out, err := e.runner(names[0]).Outputs(); err == nil {
+		// The read's streams are discarded because its failure is an expected outcome, not a diagnosis: every never-applied node makes terraform print a full backend/refresh error block, and "unknown" already says everything observe wants to say about it. Real problems surface at plan/apply, where they block.
+		r := e.runner(names[0])
+		r.Stdout, r.Stderr = io.Discard, io.Discard
+		if out, err := r.Outputs(); err == nil {
 			outputs, applied = out, true
 		}
 

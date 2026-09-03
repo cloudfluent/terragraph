@@ -97,3 +97,19 @@ func TestObserve_TextWritesLockToo(t *testing.T) {
 		t.Fatalf("lock not written: %v", serr)
 	}
 }
+
+// TestObserve_CmdRefusesInvalidGraph proves observe refuses a structurally invalid graph like every other graph command: evidence from a broken graph would read as fact.
+func TestObserve_CmdRefusesInvalidGraph(t *testing.T) {
+	baseDir := t.TempDir()
+	fake := writeObserveFakeTerraform(t, baseDir)
+	writeFixtureFile(t, filepath.Join(baseDir, "module", "main.tf"),
+		"terraform {\n  backend \"local\" {}\n}\noutput \"id\" {\n  value = \"x\"\n}\n")
+	writeFixtureFile(t, filepath.Join(baseDir, "blueprint.hcl"), "node \"a\" {\n  source = \"./module\"\n  runtime = runtime.fake\n}\n\nedge {\n  from = node.a.output.id\n  to   = node.a.input.missing\n}\n\nruntime \"fake\" {\n  binary = "+strconv.Quote(fake)+"\n}\n")
+	_, _, err := runCmdAt(t, filepath.Join(baseDir, "blueprint.hcl"), "observe")
+	if err == nil {
+		t.Fatal("expected observe to refuse an invalid graph")
+	}
+	if _, serr := os.Stat(filepath.Join(baseDir, "terragraph.lock")); serr == nil {
+		t.Fatal("observe wrote a lock for an invalid graph")
+	}
+}
