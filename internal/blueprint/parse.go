@@ -157,7 +157,8 @@ func ParseDir(dir string) (*Blueprint, error) {
 	seenRuntimes := map[string]bool{}
 
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".hcl") {
+		// contracts.hcl is a reserved sibling, not blueprint content (see ParseContracts): a directory blueprint would otherwise try to merge it and die on its producer/consumer blocks.
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".hcl") || e.Name() == "contracts.hcl" {
 			continue
 		}
 		if err := parseOneFile(filepath.Join(dir, e.Name()), bp, seenNodes, seenGroups, seenUses, seenRuntimes); err != nil {

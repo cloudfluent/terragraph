@@ -154,3 +154,21 @@ producer "./modules/vpc" {
 		t.Fatalf("block order changed the digest: %s vs %s", first.Digest(), second.Digest())
 	}
 }
+
+// TestParseDir_SkipsContractsFile proves a directory blueprint and its sibling contracts.hcl coexist: the reserved filename is not blueprint content, so the merge must skip it instead of dying on its producer/consumer blocks.
+func TestParseDir_SkipsContractsFile(t *testing.T) {
+	dir := t.TempDir()
+	writeContractsFile(t, filepath.Join(dir, "nodes.hcl"), `node "a" { source = "./m" }`)
+	writeContractsFile(t, filepath.Join(dir, "contracts.hcl"), `
+producer "./m" {
+  output "id" { type = "string" }
+}
+`)
+	bp, err := ParseDir(dir)
+	if err != nil {
+		t.Fatalf("ParseDir: %v", err)
+	}
+	if _, ok := bp.NodeByName("a"); !ok {
+		t.Fatal("node a missing from merged blueprint")
+	}
+}
