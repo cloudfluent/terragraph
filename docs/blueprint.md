@@ -157,4 +157,20 @@ This is the same mechanism an edge uses to feed a value in: both end up merged i
 
 `vars` is for literal data, not another node's output: the attribute is evaluated with no variables or functions in scope, so writing `node.other.output.x` inside it fails to parse. That value needs a real edge, which is what actually records the dependency and makes the engine wait for it to exist.
 
+## Graph remote lock (`lock`)
+
+Optional top-level `lock` serializes `plan` / `apply` / `destroy` across machines. The local flock only covers one checkout; this lease covers graph order when two runners would otherwise both walk vpc then eks. See [execution-model.md](execution-model.md#collaborative-apply-and-the-graph-remote-lock).
+
+```hcl
+lock {
+  s3 {
+    bucket = "acme-tfstate"
+    key    = "terragraph/prod.lock"
+    region = "ap-northeast-2"
+  }
+}
+```
+
+When `lock` is set, every node must use a remote Terraform backend. Omit the block for solo / local state.
+
 See also: [groups.md](groups.md) for bundling several nodes into one reusable unit, [vendoring.md](vendoring.md) for pointing `node.source` at a remote module, and [execution-model.md](execution-model.md#how-values-are-passed) for the optional `tfvars` block controlling where a node's resolved values are written.

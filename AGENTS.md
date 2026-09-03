@@ -31,9 +31,10 @@ Go version is pinned to the `go.mod` value and matched in CI. Don't bump it as a
 | `cli` | Cobra commands, flag wiring, output formatting |
 | `language`, `lsp` | Editor intelligence |
 | `runlock` | Cross-process advisory lock on a blueprint directory |
+| `graphlock` | Optional cross-machine graph-run lease (blueprint `lock` block; s3 today) |
 | `module` | Terraform module introspection |
 
-Dependencies flow one way: `cli` → `engine` → `graph` → `blueprint`, and `lsp` → `language` → `blueprint`. `blueprint`, `exec`, `module`, and `runlock` are leaves: they import nothing else under `internal/`, and keeping them that way is what makes them testable in isolation. Don't add an import that reverses the direction or gives a leaf a dependency, and don't reach into another package to do work it should expose.
+Dependencies flow one way: `cli` → `engine` → `graph` → `blueprint`, and `lsp` → `language` → `blueprint`. `blueprint`, `exec`, `module`, `runlock`, and `graphlock` are leaves (`graphlock` may import `blueprint` for config types only): they import nothing else under `internal/` that would reverse the flow, and keeping them that way is what makes them testable in isolation. Don't add an import that reverses the direction or gives a leaf a dependency, and don't reach into another package to do work it should expose.
 
 Before adding a package, function, or type, check whether an existing one already covers it. Extend the existing implementation rather than building a parallel one.
 
@@ -45,6 +46,7 @@ These are the ones that fail silently, so they are worth stating even though the
 - **terragraph writes exactly two kinds of file:** the gitignored ephemeral tfvars (`internal/exec`) and the vendor manifest (`internal/vendor`). It never generates or edits a `.tf` file, and it never writes into a module's own directory. A new write path outside those two is a design change, not an implementation detail.
 - **`--parallelism > 1` requires `--auto-approve`.** Output from concurrent nodes is buffered, so there is nowhere to ask for approval. Any new concurrent path must not be able to reach an interactive prompt.
 - **`runlock` serializes processes, not nodes.** It is one advisory lock per blueprint directory, held for the whole run. In-process `--parallelism` runs under that single lock and is unaffected by it. Don't acquire it per node or conflate the two.
+- **`graphlock` is cross-machine, optional, and separate from flock.** Activated only by a top-level `lock` block. Acquire order for plan/apply/destroy is local flock then graph remote lock then per-node Terraform. `validate` / `graph` / `language-server` / `vendor` never take it. When `lock` is set, every node backend must be remote.
 - **`validate`, `graph`, `plan`, `apply`, and `destroy` never import `internal/vendor`.** They only ever see the local directories vendoring already produced.
 
 # Comments

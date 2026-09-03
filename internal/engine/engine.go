@@ -15,6 +15,7 @@ import (
 	"github.com/cloudfluent/terragraph/internal/blueprint"
 	"github.com/cloudfluent/terragraph/internal/exec"
 	"github.com/cloudfluent/terragraph/internal/graph"
+	"github.com/cloudfluent/terragraph/internal/graphlock"
 	"github.com/cloudfluent/terragraph/internal/runlock"
 )
 
@@ -34,6 +35,8 @@ type Engine struct {
 	stdin *bufio.Reader
 	// runLock is the lock LoadLocked already holds. lockRun must not Close it; the LoadLocked caller owns the lifetime.
 	runLock *runlock.Lock
+	// graphLock is the remote graph lease LoadLocked already holds when the blueprint declares lock {}. lockRun must not Close it either.
+	graphLock *graphlock.Lock
 }
 
 // approvals is the single reader every prompt shares. A fresh bufio.Reader per question would buffer past the newline it needed and swallow the next question's answer.
@@ -76,11 +79,13 @@ func (e *Engine) logger() *slog.Logger {
 }
 
 // lockRun serializes this process against any other terragraph plan/apply/destroy/vendor
-// targeting the same blueprint. In-process --parallelism is unaffected: it shares this
-// one lock. See internal/runlock. The returned func releases a lock this call acquired;
-// it is a no-op when LoadLocked already holds one.
+// targeting the same blueprint (local flock), then against cross-machine runners when the
+// blueprint declares lock {} (remote graph lease). In-process --parallelism is unaffected:
+// it shares these locks. See internal/runlock and internal/graphlock. The returned func
+// releases locks this call acquired; it is a no-op when LoadLocked already holds them.
 func (e *Engine) lockRun() (func(), error) {
 	if e.runLock != nil {
+		// LoadLocked already took flock + optional graph lock; do not double-acquire or release.
 		return func() {}, nil
 	}
 	e.logger().Debug("acquiring blueprint lock", "dir", e.BaseDir)
@@ -88,44 +93,67 @@ func (e *Engine) lockRun() (func(), error) {
 	if err != nil {
 		return nil, fmt.Errorf("locking blueprint: %w", err)
 	}
-	return func() { _ = lock.Close() }, nil
+	graphL, err := e.acquireGraphLock()
+	if err != nil {
+		_ = lock.Close()
+		return nil, err
+	}
+	return func() {
+		_ = graphL.Close()
+		_ = lock.Close()
+	}, nil
+}
+
+// acquireGraphLock takes the remote graph lease when the blueprint declares lock {}. Nil lock config is a no-op (solo / examples).
+func (e *Engine) acquireGraphLock() (*graphlock.Lock, error) {
+	if e.Blueprint == nil || e.Blueprint.Lock == nil {
+		return nil, nil
+	}
+	e.logger().Debug("acquiring graph remote lock")
+	lock, err := graphlock.Acquire(e.Blueprint.Lock, e.Stderr)
+	if err != nil {
+		return nil, fmt.Errorf("locking graph: %w", err)
+	}
+	return lock, nil
 }
 
 // Load parses the blueprint at blueprintPath and builds its graph. blueprintPath may name a single file or a directory (every .hcl file directly inside it is merged, see blueprint.LoadPath); node sources are resolved relative to the resulting base directory. It does not take the process lock; use LoadLocked for plan/apply/destroy so graph.Build cannot inspect module files while vendor rewrites them.
 func Load(blueprintPath string, binary exec.Binary, stdout, stderr io.Writer) (*Engine, error) {
-	e, _, err := load(blueprintPath, binary, stdout, stderr, false)
+	e, _, _, err := load(blueprintPath, binary, stdout, stderr, false)
 	return e, err
 }
 
-// LoadLocked is Load after taking the blueprint process lock, and holds it across graph.Build so a concurrent vendor cannot rewrite module sources underneath Inspect. The caller must invoke the returned func when the run ends.
+// LoadLocked is Load after taking the blueprint process lock, and holds it across graph.Build so a concurrent vendor cannot rewrite module sources underneath Inspect. When the blueprint declares lock {}, it also takes the remote graph lease after Build. The caller must invoke the returned func when the run ends.
 func LoadLocked(blueprintPath string, binary exec.Binary, stdout, stderr io.Writer) (*Engine, func(), error) {
-	e, lock, err := load(blueprintPath, binary, stdout, stderr, true)
+	e, lock, graphL, err := load(blueprintPath, binary, stdout, stderr, true)
 	if err != nil {
 		return nil, nil, err
 	}
 	return e, func() {
+		_ = graphL.Close()
+		e.graphLock = nil
 		_ = lock.Close()
 		e.runLock = nil
 	}, nil
 }
 
-func load(blueprintPath string, binary exec.Binary, stdout, stderr io.Writer, takeLock bool) (*Engine, *runlock.Lock, error) {
+func load(blueprintPath string, binary exec.Binary, stdout, stderr io.Writer, takeLock bool) (*Engine, *runlock.Lock, *graphlock.Lock, error) {
 	bp, dir, err := blueprint.LoadPath(blueprintPath)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	// Absolute, so paths derived from it (DataDir in particular) are unambiguous no matter what working directory a terraform/tofu subprocess runs with. A relative TF_DATA_DIR would otherwise be resolved relative to the subprocess's own cwd (the node's source dir), not this process's, producing a nested, wrong path.
 	baseDir, err := filepath.Abs(dir)
 	if err != nil {
-		return nil, nil, fmt.Errorf("resolving blueprint directory: %w", err)
+		return nil, nil, nil, fmt.Errorf("resolving blueprint directory: %w", err)
 	}
 
 	var lock *runlock.Lock
 	if takeLock {
 		lock, err = runlock.Acquire(baseDir, stderr)
 		if err != nil {
-			return nil, nil, fmt.Errorf("locking blueprint: %w", err)
+			return nil, nil, nil, fmt.Errorf("locking blueprint: %w", err)
 		}
 	}
 
@@ -134,10 +162,10 @@ func load(blueprintPath string, binary exec.Binary, stdout, stderr io.Writer, ta
 		if lock != nil {
 			_ = lock.Close()
 		}
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
-	return &Engine{
+	e := &Engine{
 		Binary:    binary,
 		BaseDir:   baseDir,
 		Blueprint: bp,
@@ -145,14 +173,73 @@ func load(blueprintPath string, binary exec.Binary, stdout, stderr io.Writer, ta
 		Stdout:    stdout,
 		Stderr:    stderr,
 		runLock:   lock,
-	}, lock, nil
+	}
+
+	var graphL *graphlock.Lock
+	if takeLock {
+		// Refuse remote acquire when lock {} is paired with local state: the lease would not fix that shape.
+		for _, p := range e.lockBackendProblems() {
+			if p.IsError() {
+				_ = lock.Close()
+				return nil, nil, nil, fmt.Errorf("%s", p.Message)
+			}
+		}
+		graphL, err = e.acquireGraphLock()
+		if err != nil {
+			_ = lock.Close()
+			return nil, nil, nil, err
+		}
+		e.graphLock = graphL
+	}
+
+	return e, lock, graphL, nil
 }
 
-// Validate returns every structural problem found in the graph (missing ports, two data edges targeting the same input, a data edge and vars both setting the same input, cycles, unresolved required variables, backend_config without a backend block, identical backend_config maps on a shared module directory) plus any tfvars orphan warnings (see tfVarsOrphans) and shared-source runtime conflict warnings (see runtimeConflicts). Check each Problem's IsError(): only errors should block graph/plan/apply/destroy, warnings are advisory.
+// Validate returns every structural problem found in the graph (missing ports, two data edges targeting the same input, a data edge and vars both setting the same input, cycles, unresolved required variables, backend_config without a backend block, identical backend_config maps on a shared module directory) plus any tfvars orphan warnings (see tfVarsOrphans), shared-source runtime conflict warnings (see runtimeConflicts), and lock-requires-remote-backend errors (see lockBackendProblems). Check each Problem's IsError(): only errors should block graph/plan/apply/destroy, warnings are advisory.
 func (e *Engine) Validate() []graph.Problem {
 	problems := graph.Validate(e.Graph)
 	problems = append(problems, e.tfVarsOrphans()...)
 	problems = append(problems, e.runtimeConflicts()...)
+	problems = append(problems, e.lockBackendProblems()...)
+	return problems
+}
+
+// remoteBackends are Terraform backend types that store state off this machine. lock {} requires every node to use one of these so the graph lease is not paired with a single-operator local state file.
+var remoteBackends = map[string]bool{
+	"s3": true, "gcs": true, "azurerm": true, "http": true, "remote": true, "cloud": true,
+}
+
+// lockBackendProblems errors when lock {} is set but a node still uses local (or implicit local) state: the remote graph lease would serialize runs while state itself stayed per-checkout.
+func (e *Engine) lockBackendProblems() []graph.Problem {
+	if e.Blueprint == nil || e.Blueprint.Lock == nil {
+		return nil
+	}
+	names := make([]string, 0, len(e.Graph.Nodes))
+	for name := range e.Graph.Nodes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var problems []graph.Problem
+	for _, name := range names {
+		n := e.Graph.Nodes[name]
+		backend := ""
+		if n.Schema != nil {
+			backend = n.Schema.Backend
+		}
+		if backend == "" {
+			backend = "local"
+		}
+		if remoteBackends[backend] {
+			continue
+		}
+		problems = append(problems, graph.Problem{
+			Severity: graph.SeverityError,
+			Message: fmt.Sprintf(
+				"lock: node %q uses backend %q; lock requires every node backend to be remote (s3, gcs, azurerm, http, remote, or cloud). remove lock {} for solo/local state, or give this node a remote backend",
+				name, backend,
+			),
+		})
+	}
 	return problems
 }
 

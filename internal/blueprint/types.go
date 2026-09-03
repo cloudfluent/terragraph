@@ -169,6 +169,18 @@ type TFVarsConfig struct {
 	Location TFVarsLocation
 }
 
+// LockS3 is the nested s3 backend inside a top-level lock block: a conditional-write lock object (not S3 Object Lock / WORM) whose key identifies this graph across machines, never a worktree path.
+type LockS3 struct {
+	Bucket string
+	Key    string
+	Region string
+}
+
+// LockConfig is the optional top-level lock block. Presence alone enables remote graph-run locking; there is no CLI flag for it. Exactly one nested backend type is set (s3 today; dynamodb/gcs later).
+type LockConfig struct {
+	S3 *LockS3
+}
+
 // Blueprint is the fully parsed graph topology: nodes and the edges between them, plus any group definitions and instantiations. It carries no resource configuration, only wiring.
 type Blueprint struct {
 	Nodes  []Node
@@ -179,6 +191,8 @@ type Blueprint struct {
 	Vendor *VendorConfig
 	// TFVars is nil when the blueprint declares no `tfvars` block. Use the TFVarsLocation accessor, never this field directly, so callers never need to branch on nil.
 	TFVars *TFVarsConfig
+	// Lock is nil when the blueprint declares no `lock` block. When set, plan/apply/destroy take a graph-level remote lease after the local flock; every node backend must be remote (see engine lock-backend validation).
+	Lock *LockConfig
 	// Runtimes holds every `runtime` block declared in this parse scope (see Runtime). Parsing guarantees names are unique and at most one sets Default within this same slice; it does not guarantee every Node.Runtime/Use.Runtime reference in this scope resolves to a name here until validateRuntimes has run, which ParseFile/ParseDir always do before returning.
 	Runtimes []Runtime
 }

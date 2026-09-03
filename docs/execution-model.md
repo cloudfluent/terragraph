@@ -41,6 +41,33 @@ Nodes are grouped into levels: every node in level *i* only depends on nodes in 
 
 `plan`, `apply`, `destroy` and `vendor` take an exclusive lock at `<blueprint dir>/.terragraph/lock` before they read or write module files, and hold it until the command exits. A second process targeting the same blueprint prints a one-line wait notice and blocks until the first exits; the lock is released on process exit, so a crash cannot leave it stuck. `validate`, `graph` and `language-server` do not take it, so they stay usable while a long apply is running. One process that already holds the lock can still use `--parallelism` inside the run.
 
+## Collaborative apply and the graph remote lock
+
+The local flock is **same-checkout only**. Two machines never see it: Alice's laptop, Bob's laptop, and a CI runner each have their own working tree, their own `.terragraph/`, and their own flock. Per-node Terraform state locks still serialize writes to **that node's** remote state; they do not preserve graph order across machines (vpc must finish before eks when both runners start at once).
+
+Optional top-level `lock` activates a **graph-level remote lease** for `plan` / `apply` / `destroy` (not `validate` / `graph` / `language-server` / `vendor`). Presence of the block is the switch; there is no CLI flag. Acquire order is local flock, then the remote lease, then per-node Terraform init/lock. Release is on process exit, same as the flock.
+
+```hcl
+lock {
+  s3 {
+    bucket = "acme-tfstate"
+    key    = "terragraph/prod.lock"   # identity of this graph, not a worktree path
+    region = "ap-northeast-2"
+  }
+}
+```
+
+Rules:
+
+- Exactly one nested backend type. Empty `lock {}` is a parse error. `s3` is implemented; `dynamodb` is reserved and rejected until implemented.
+- When `lock` is set, every node backend must be remote (`s3` / `gcs` / `azurerm` / `http` / `remote` / `cloud`). `backend "local"` or no backend block is a validate **Error**: the lease would serialize runs while state stayed per-checkout.
+- terragraph owns the lock object (AWS SDK conditional `PutObject` with `If-None-Match: *`, the same idea as Terraform 1.10+ `use_lockfile`). It is **not** S3 Object Lock (WORM), and the graph lock `key` must not be a node's state `key`.
+- No `lock` block keeps today's behavior: examples and solo local state need nothing new.
+
+Desired config for a team is still a git commit (CI on a SHA, or a clean ref). A dirty working-tree apply is a solo special case; this lock does not refuse dirty trees. Do not treat blueprint HCL as a mutex: HCL is topology. There is no graph-wide terragraph state file; each node keeps its own Terraform state on purpose.
+
+Without `lock`, two clean checkouts of different commits can both apply. Restricting apply to CI is a team policy, not a terragraph mode.
+
 ## Deciding whether a node needs applying
 
 Terraform decides, every run. `terragraph apply` plans each node with `-refresh=true -detailed-exitcode`; a plan reporting no changes skips the apply, and nothing local is consulted first.

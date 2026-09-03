@@ -8,7 +8,7 @@ The extension bundles a compatible language server, so nothing here requires ins
 
 Open the completion list with `Ctrl+Space` (`Control+Space` on macOS).
 
-- Top-level blueprint blocks: `node`, `edge`, `runtime`, `group`, `use`, `vendor`, `tfvars`
+- Top-level blueprint blocks: `node`, `edge`, `runtime`, `group`, `use`, `vendor`, `tfvars`, `lock`
 - The attributes each block accepts: a node's `source`, `vars`, `env`, `runtime`, `backend_config`; a `use` block's `as`, `source`, `vars`, `env`, `runtime`, `backend_config`, `approve`; and so on
 - A Terraform/OpenTofu module's own input variables and outputs
 - Declared runtime names

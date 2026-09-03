@@ -322,6 +322,15 @@ var completionSchemas = map[string][]attributeSpec{
 		{name: "use", insert: "use \"group\" {\n  as     = \"name\"\n  source = \"\"\n}", detail: "Blueprint block", documentation: "Instantiates a reusable group."},
 		{name: "vendor", insert: "vendor {\n}", detail: "Blueprint block", documentation: "Configures the local vendor directory."},
 		{name: "tfvars", insert: "tfvars {\n}", detail: "Blueprint block", documentation: "Configures where resolved input values are written."},
+		{name: "lock", insert: "lock {\n  s3 {\n    bucket = \"\"\n    key    = \"\"\n    region = \"\"\n  }\n}", detail: "Blueprint block", documentation: "Optional graph-level remote lock for plan/apply/destroy across machines."},
+	},
+	"lock": {
+		{name: "s3", insert: "s3 {\n  bucket = \"\"\n  key    = \"\"\n  region = \"\"\n}", detail: "Lock backend", documentation: "S3 conditional-write lock object (not Object Lock / WORM)."},
+	},
+	"lock.s3": {
+		{name: "bucket", insert: "bucket = \"\"", detail: "required string", documentation: "S3 bucket holding the graph lock object."},
+		{name: "key", insert: "key = \"\"", detail: "required string", documentation: "Object key identifying this graph; must not be a node state key."},
+		{name: "region", insert: "region = \"\"", detail: "required string", documentation: "AWS region of the lock bucket."},
 	},
 	"node": {
 		{name: "source", insert: "source = \"\"", detail: "required string", documentation: "Path or remote source of the Terraform or OpenTofu module."},

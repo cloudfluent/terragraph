@@ -23,7 +23,24 @@ var topSchema = &hcl.BodySchema{
 		{Type: "use", LabelNames: []string{"name"}},
 		{Type: "vendor"},
 		{Type: "tfvars"},
+		{Type: "lock"},
 		{Type: "runtime", LabelNames: []string{"name"}},
+	},
+}
+
+// lock outer body only allows nested backend type blocks; attributes would be a second activation path beside the nested block.
+var lockSchema = &hcl.BodySchema{
+	Blocks: []hcl.BlockHeaderSchema{
+		{Type: "s3"},
+		{Type: "dynamodb"},
+	},
+}
+
+var lockS3Schema = &hcl.BodySchema{
+	Attributes: []hcl.AttributeSchema{
+		{Name: "bucket", Required: true},
+		{Name: "key", Required: true},
+		{Name: "region", Required: true},
 	},
 }
 
@@ -248,6 +265,15 @@ func parseOneFile(path string, bp *Blueprint, seenNodes, seenGroups, seenUses, s
 				return err
 			}
 			bp.TFVars = tc
+		case "lock":
+			if bp.Lock != nil {
+				return fmt.Errorf("%s: duplicate lock block", block.DefRange)
+			}
+			lc, err := parseLockBlock(block)
+			if err != nil {
+				return err
+			}
+			bp.Lock = lc
 		case "runtime":
 			rt, err := parseRuntimeBlock(block)
 			if err != nil {
@@ -363,6 +389,57 @@ func parseVendorBlock(block *hcl.Block) (*VendorConfig, error) {
 	}
 
 	return vc, nil
+}
+
+// parseLockBlock parses the optional top-level `lock { }` block. Exactly one nested backend type is required; empty lock {} and multiple nested types are parse errors. dynamodb is recognized so the error names the missing implementation rather than an unknown type.
+func parseLockBlock(block *hcl.Block) (*LockConfig, error) {
+	content, diags := block.Body.Content(lockSchema)
+	if diags.HasErrors() {
+		return nil, fmt.Errorf("%s: %s", block.DefRange, diags.Error())
+	}
+	if len(content.Blocks) == 0 {
+		return nil, fmt.Errorf("%s: lock requires exactly one nested backend block (s3); empty lock {} does nothing", block.DefRange)
+	}
+	if len(content.Blocks) > 1 {
+		return nil, fmt.Errorf("%s: lock accepts exactly one nested backend block, got %d; remove the extras", block.DefRange, len(content.Blocks))
+	}
+	nested := content.Blocks[0]
+	switch nested.Type {
+	case "s3":
+		s3, err := parseLockS3Block(nested)
+		if err != nil {
+			return nil, err
+		}
+		return &LockConfig{S3: s3}, nil
+	case "dynamodb":
+		return nil, fmt.Errorf("%s: lock.dynamodb is not implemented yet; use lock.s3", nested.DefRange)
+	default:
+		return nil, fmt.Errorf("%s: unknown lock backend %q (want s3)", nested.DefRange, nested.Type)
+	}
+}
+
+func parseLockS3Block(block *hcl.Block) (*LockS3, error) {
+	content, diags := block.Body.Content(lockS3Schema)
+	if diags.HasErrors() {
+		return nil, fmt.Errorf("%s: %s", block.DefRange, diags.Error())
+	}
+	s3 := &LockS3{}
+	for _, name := range []string{"bucket", "key", "region"} {
+		attr := content.Attributes[name]
+		val, diags := attr.Expr.Value(nil)
+		if diags.HasErrors() || val.Type() != cty.String || val.AsString() == "" {
+			return nil, fmt.Errorf("%s: %s must be a non-empty literal string", attr.Range, name)
+		}
+		switch name {
+		case "bucket":
+			s3.Bucket = val.AsString()
+		case "key":
+			s3.Key = val.AsString()
+		case "region":
+			s3.Region = val.AsString()
+		}
+	}
+	return s3, nil
 }
 
 // parseTFVarsBlock parses the optional `tfvars { }` block: project-wide selection of where the engine writes each node's resolved input values (see Blueprint.TFVarsLocation). A missing block, or a missing location field within it, means TFVarsLocationWorkdir applies.
