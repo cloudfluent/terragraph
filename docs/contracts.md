@@ -71,6 +71,20 @@ carry contracts, plus a schema sanity check for every declared contract:
 | C004 | warning | consumer requires non-null (`nullable = false`) but the producer allows null |
 | C005 | warning | producer is `sensitive = true` but the consumer does not accept sensitive values |
 | C006 | warning | contract scope matches no node in the graph (stale path after a move or rename) |
+| C007 | warning | consumer's claimed `type` contradicts the module's declared variable type constraint |
+| C008 | warning | consumer's explicit `sensitive` claim contradicts the module's declared variable sensitivity |
+| C009 | warning | producer's explicit `sensitive` claim contradicts the module's declared output sensitivity |
+
+Contract errors come in two classes. C003–C005 mean the two *sides* are
+incompatible: producer and consumer each keep their word and still cannot be
+wired together. C007–C009 mean a contract contradicts *its own module*: the
+module's `variable` and `output` blocks are the declaration of record, and a
+contract claiming a different type or sensitivity is simply wrong about the
+module it describes — fix the contract, not the wiring. Reconciliation fires
+only on explicit claims (an absent attribute is no claim, and a variable with
+no type constraint has nothing to contradict), in both directions. Producer
+`type` is never reconciled: root-module outputs cannot declare a type, so the
+producer's type promise is exactly the fact the contract exists to carry.
 
 All contract problems are warnings in the default mode; the mode block below
 is the only severity dial.
@@ -79,7 +93,7 @@ is the only severity dial.
 
 `contracts { mode = "..." }` in the blueprint is reviewed configuration and
 the only severity dial: `warn` (the default when the block is absent) reports
-every C001–C006 as a warning; `enforce` escalates them to errors, which
+every C001–C009 as a warning; `enforce` escalates them to errors, which
 blocks `validate`, `plan`, `apply`, and `destroy` the same way structural
 errors already do. An upgrade never selects a stricter mode on its own.
 
@@ -87,6 +101,3 @@ errors already do. An upgrade never selects a stricter mode on its own.
 
 - No group-local `contracts.hcl` inside group source directories; the root
   file can already reach group-internal modules by relative path.
-- No cross-check of contract `sensitive` against the module's own
-  `sensitive = true` output flag; the contract is intent, the module is
-  the declaration of record.

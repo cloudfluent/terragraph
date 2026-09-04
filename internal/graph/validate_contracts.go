@@ -49,11 +49,39 @@ func contractProblems(g *Graph) []Problem {
 		for _, name := range sortedPorts(dc.Producer) {
 			if !schemaOwner.Schema.HasOutput(name) {
 				report("contract.[C001] producer %s.output.%s: module declares no such output; remove the promise or add the output", dc.Scope, name)
+				continue
+			}
+			// C009: the module's own sensitive flag is a fact Terraform already declares; a producer claiming the opposite is wrong about its own module. Only an explicit claim can contradict (absent stays no-claim).
+			if p := dc.Producer[name]; p.Sensitive != nil && *p.Sensitive != schemaOwner.Schema.OutputDetails[name].Sensitive {
+				report("contract.[C009] producer %s.output.%s claims sensitive = %t but the module declares sensitive = %t; fix the contract — the module is the declaration of record", dc.Scope, name, *p.Sensitive, schemaOwner.Schema.OutputDetails[name].Sensitive)
 			}
 		}
 		for _, name := range sortedPorts(dc.Consumer) {
 			if !schemaOwner.Schema.HasVariable(name) {
 				report("contract.[C002] consumer %s.input.%s: module declares no such variable; remove the requirement or add the variable", dc.Scope, name)
+				continue
+			}
+			v := schemaOwner.Schema.Variables[name]
+			c := dc.Consumer[name]
+			// C007: a variable's declared type constraint is the record; a consumer claiming a different type contradicts its own module. Both sides parsed (not string-compared) so spellings that normalize to one cty type agree; a variable with no constraint has nothing to contradict.
+			if c.Type != "" && v.Type != "" {
+				ct, err := parseCtyType(c.Type)
+				if err != nil {
+					report("contract.[C007] consumer %s.input.%s: %v", dc.Scope, name, err)
+					continue
+				}
+				mt, err := parseCtyType(v.Type)
+				if err != nil {
+					report("contract.[C007] consumer %s.input.%s: module type %v", dc.Scope, name, err)
+					continue
+				}
+				if !ct.Equals(mt) {
+					report("contract.[C007] consumer %s.input.%s claims type %s but the module declares %s; fix the contract — the module is the declaration of record", dc.Scope, name, c.Type, v.Type)
+				}
+			}
+			// C008: the input-side twin of C009 — explicit sensitive claim, either direction, against the variable's declared flag.
+			if c.Sensitive != nil && *c.Sensitive != v.Sensitive {
+				report("contract.[C008] consumer %s.input.%s claims sensitive = %t but the module declares sensitive = %t; fix the contract — the module is the declaration of record", dc.Scope, name, *c.Sensitive, v.Sensitive)
 			}
 		}
 	}

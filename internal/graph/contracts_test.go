@@ -164,9 +164,18 @@ producer "./modules/moved-away" {
 	}
 }
 
-// TestValidate_CompatibleContractsAreSilent proves the negative: exact-match types, nullable=false on both sides, sensitive accepted — zero problems, so adoption cannot punish correct contracts with noise.
+// TestValidate_CompatibleContractsAreSilent proves the negative: exact-match types, nullable=false on both sides, sensitive accepted — with modules that actually declare sensitive = true, so the claims are true and C008/C009 stay silent too — zero problems, so adoption cannot punish correct contracts with noise.
 func TestValidate_CompatibleContractsAreSilent(t *testing.T) {
-	g, _ := writeContractsFixture(t, `
+	g := writeReconcileFixture(t,
+		`output "vpc_id" {
+  value     = "x"
+  sensitive = true
+}`,
+		`variable "vpc_id" {
+  type      = string
+  sensitive = true
+}`,
+		`
 producer "./modules/vpc" {
   output "vpc_id" {
     type      = "string"
@@ -367,5 +376,148 @@ producer "./modules/net/vpc" {
 	_, err = Build(bp, root)
 	if err == nil || !strings.Contains(err.Error(), "declared both in the blueprint and in a group") {
 		t.Fatalf("got = %v, want conflicting-claims Build error", err)
+	}
+}
+
+// writeReconcileFixture is writeContractsFixture with the two module declarations as parameters — the reconciliation checks (C007–C009) compare contract claims against exactly this module reality, so each case must state its own.
+func writeReconcileFixture(t *testing.T, vpcOutput, appVariable, contractsHCL string) *Graph {
+	t.Helper()
+	root := t.TempDir()
+	writeFixtureFile(t, filepath.Join(root, "modules/vpc/main.tf"), vpcOutput)
+	writeFixtureFile(t, filepath.Join(root, "modules/app/main.tf"), appVariable+`
+output "ok" { value = var.vpc_id }
+`)
+	writeFixtureFile(t, filepath.Join(root, "blueprint.hcl"), `
+node "vpc" { source = "./modules/vpc" }
+node "app" { source = "./modules/app" }
+edge {
+  from = node.vpc.output.vpc_id
+  to   = node.app.input.vpc_id
+}
+`+contractsHCL)
+	bp, err := blueprint.ParseFile(filepath.Join(root, "blueprint.hcl"))
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	g, err := Build(bp, root)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	return g
+}
+
+// TestValidate_ContractTypeLieAgainstModuleFiresC007 is the review's Repro A: the consumer contract claims string and the producer contract agrees (so C003 stays silent — the two sides are compatible), but the module itself declares number. The contract is wrong, not the wiring: C007 fires as a warning and escalates to an error under enforce, on the same dial as every other code.
+func TestValidate_ContractTypeLieAgainstModuleFiresC007(t *testing.T) {
+	g := writeReconcileFixture(t,
+		`output "vpc_id" { value = "x" }`,
+		`variable "vpc_id" { type = number }`,
+		`
+producer "./modules/vpc" {
+  output "vpc_id" { type = "string" }
+}
+consumer "./modules/app" {
+  input "vpc_id" { type = "string" }
+}
+`)
+	problems := Validate(g)
+	if len(problems) != 1 {
+		t.Fatalf("got = %v, want exactly one problem", problems)
+	}
+	p := problems[0]
+	if !strings.Contains(p.Message, "[C007]") || !strings.Contains(p.Message, "./modules/app") || !strings.Contains(p.Message, "number") || p.IsError() {
+		t.Fatalf("got = %+v, want C007 warning naming the consumer scope and the module's number", p)
+	}
+	g.ContractMode = "enforce"
+	if problems := Validate(g); len(problems) != 1 || !problems[0].IsError() {
+		t.Fatalf("enforce must escalate C007 to an error: %v", problems)
+	}
+}
+
+// TestValidate_ProducerSensitiveLieAgainstModuleFiresC009 is the review's Repro B: the module marks the output sensitive but the producer contract promises sensitive = false. The module is the declaration of record, so the contract is the thing to fix.
+func TestValidate_ProducerSensitiveLieAgainstModuleFiresC009(t *testing.T) {
+	g := writeReconcileFixture(t,
+		`output "vpc_id" {
+  value     = "x"
+  sensitive = true
+}`,
+		`variable "vpc_id" { type = string }`,
+		`
+producer "./modules/vpc" {
+  output "vpc_id" { sensitive = false }
+}
+`)
+	problems := Validate(g)
+	if len(problems) != 1 {
+		t.Fatalf("got = %v, want exactly one problem", problems)
+	}
+	if p := problems[0]; !strings.Contains(p.Message, "[C009]") || !strings.Contains(p.Message, "./modules/vpc") || p.IsError() {
+		t.Fatalf("got = %+v, want C009 warning naming the producer scope", p)
+	}
+}
+
+// TestValidate_ConsumerSensitiveLieAgainstModuleFiresC008 proves the input-side twin of C009: the module declares the variable sensitive, the consumer contract claims it is not — an explicit false is a claim, and it contradicts the module in either direction.
+func TestValidate_ConsumerSensitiveLieAgainstModuleFiresC008(t *testing.T) {
+	g := writeReconcileFixture(t,
+		`output "vpc_id" { value = "x" }`,
+		`variable "vpc_id" {
+  type      = string
+  sensitive = true
+}`,
+		`
+consumer "./modules/app" {
+  input "vpc_id" { sensitive = false }
+}
+`)
+	problems := Validate(g)
+	if len(problems) != 1 {
+		t.Fatalf("got = %v, want exactly one problem", problems)
+	}
+	if p := problems[0]; !strings.Contains(p.Message, "[C008]") || !strings.Contains(p.Message, "./modules/app") || p.IsError() {
+		t.Fatalf("got = %+v, want C008 warning naming the consumer scope", p)
+	}
+}
+
+// TestValidate_ClaimsMatchingModuleSchemaAreSilent proves reconciliation is not a tax on honest contracts: type and sensitive claims that agree with the module schema on both roles produce zero problems.
+func TestValidate_ClaimsMatchingModuleSchemaAreSilent(t *testing.T) {
+	g := writeReconcileFixture(t,
+		`output "vpc_id" {
+  value     = "x"
+  sensitive = true
+}`,
+		`variable "vpc_id" {
+  type      = string
+  sensitive = true
+}`,
+		`
+producer "./modules/vpc" {
+  output "vpc_id" {
+    type      = "string"
+    sensitive = true
+  }
+}
+consumer "./modules/app" {
+  input "vpc_id" {
+    type      = "string"
+    sensitive = true
+  }
+}
+`)
+	if problems := Validate(g); len(problems) != 0 {
+		t.Fatalf("got = %v, want zero problems when claims match the schema", problems)
+	}
+}
+
+// TestValidate_UnconstrainedVariableSkipsTypeReconciliation proves the explicit-claims-only rule on the module side: a variable with no type constraint has nothing to contradict, so a consumer type claim against it fires nothing.
+func TestValidate_UnconstrainedVariableSkipsTypeReconciliation(t *testing.T) {
+	g := writeReconcileFixture(t,
+		`output "vpc_id" { value = "x" }`,
+		`variable "vpc_id" {}`,
+		`
+consumer "./modules/app" {
+  input "vpc_id" { type = "string" }
+}
+`)
+	if problems := Validate(g); len(problems) != 0 {
+		t.Fatalf("got = %v, want zero problems against an unconstrained variable", problems)
 	}
 }
