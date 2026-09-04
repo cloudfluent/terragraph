@@ -55,7 +55,7 @@ The mechanism is an S3 lock **object** via conditional writes (the same idea as 
 
 If the object already exists, the command **fails immediately** (it does not wait the way flock does).
 
-Ctrl-C / SIGTERM / SIGKILL leave the S3 object (the process exits without running `defer`; flock still drops with the fd). A failed `DeleteObject` after a successful run does the same: the command prints the error to stderr and still reports success. Delete the object to recover. There is no `force-unlock` yet.
+Ctrl-C / SIGTERM / SIGKILL leave the S3 object (the process exits without running `defer`; flock still drops with the fd). A failed `DeleteObject` after a successful run does the same: the command prints the error to stderr and still reports success. Recover with `terragraph force-unlock --yes`: it deletes the configured lock object and prints `released <bucket>/<key>`. `--yes` is required — and the command refuses to say more than bucket/key without it — because releasing is unconditional and could break a lock that is genuinely held.
 
 IAM on the lock key needs `s3:GetObject`, `s3:PutObject`, and `s3:DeleteObject`. Conditional delete uses `If-Match`, which AWS evaluates as a Get; `s3:DeleteObject` alone is not enough.
 

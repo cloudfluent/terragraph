@@ -17,6 +17,7 @@ var ErrHeld = errors.New("another terragraph process holds the graph lock")
 type Backend interface {
 	Matches(lock *blueprint.Lock) bool
 	Acquire(ctx context.Context, lock *blueprint.Lock) (Held, error)
+	Release(ctx context.Context, lock *blueprint.Lock) error
 }
 
 // Held is a held graph lock. Close releases it. Close on a nil or already-released Held is a no-op.
@@ -44,4 +45,17 @@ func Acquire(ctx context.Context, lock *blueprint.Lock) (Held, error) {
 		}
 	}
 	return nil, fmt.Errorf("no graph lock backend matches this lock block")
+}
+
+// Release deletes a leftover graph lock object (force-unlock). Held.Close refuses a lock whose etag moved; Release skips that guard on purpose — the holder is gone, so no If-Match could ever match — leaving the --yes confirmation at the CLI as the only safety. A nil lock is a no-op.
+func Release(ctx context.Context, lock *blueprint.Lock) error {
+	if lock == nil {
+		return nil
+	}
+	for _, b := range backends {
+		if b.Matches(lock) {
+			return b.Release(ctx, lock)
+		}
+	}
+	return fmt.Errorf("no graph lock backend matches this lock block")
 }

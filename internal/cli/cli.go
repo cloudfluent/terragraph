@@ -12,6 +12,7 @@ import (
 	"github.com/cloudfluent/terragraph/internal/engine"
 	"github.com/cloudfluent/terragraph/internal/exec"
 	"github.com/cloudfluent/terragraph/internal/graph"
+	"github.com/cloudfluent/terragraph/internal/graphlock"
 	"github.com/cloudfluent/terragraph/internal/lsp"
 	"github.com/cloudfluent/terragraph/internal/runlock"
 	"github.com/cloudfluent/terragraph/internal/vendor"
@@ -59,6 +60,7 @@ func NewRootCmd(version string) *cobra.Command {
 	root.AddCommand(newPlanCmd(&blueprintPath, binaryOf, loggerOf))
 	root.AddCommand(newApplyCmd(&blueprintPath, binaryOf, loggerOf))
 	root.AddCommand(newDestroyCmd(&blueprintPath, binaryOf, loggerOf))
+	root.AddCommand(newForceUnlockCmd(&blueprintPath, binaryOf, loggerOf))
 	root.AddCommand(newVendorCmd(&blueprintPath, loggerOf))
 	root.AddCommand(newLanguageServerCmd())
 
@@ -303,6 +305,35 @@ func newDestroyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf 
 	cmd.Flags().StringVar(&node, "node", "", "restrict to a single node")
 	cmd.Flags().BoolVar(&autoApprove, "auto-approve", false, "skip interactive approval")
 	cmd.Flags().IntVar(&parallelism, "parallelism", 1, "max nodes to run concurrently within one execution level")
+	return cmd
+}
+
+func newForceUnlockCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf func() *slog.Logger) *cobra.Command {
+	var yes bool
+	cmd := &cobra.Command{
+		Use:   "force-unlock",
+		Short: "Release a leftover graph lock object left by an interrupted run",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// loadEngine, not loadLockedEngine: the stuck lock is exactly why this command exists, and it never reads module files, so there is nothing to protect with the process lock.
+			e, err := loadEngine(cmd, blueprintPath, binaryOf, loggerOf)
+			if err != nil {
+				return err
+			}
+			lock := e.Graph.Lock
+			if lock == nil {
+				return fmt.Errorf("this blueprint declares no graph lock")
+			}
+			if !yes {
+				return fmt.Errorf("refusing to release %s/%s without --yes; run terragraph force-unlock --yes", lock.S3.Bucket, lock.S3.Key)
+			}
+			if err := graphlock.Release(cmd.Context(), lock); err != nil {
+				return err
+			}
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "released %s/%s\n", lock.S3.Bucket, lock.S3.Key)
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&yes, "yes", false, "release the lock object (required; the lock may still be genuinely held)")
 	return cmd
 }
 

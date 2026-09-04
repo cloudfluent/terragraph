@@ -81,6 +81,22 @@ func (b s3Backend) Acquire(ctx context.Context, lock *blueprint.Lock) (Held, err
 	return &s3Held{client: client, bucket: cfg.Bucket, key: cfg.Key, etag: etag}, nil
 }
 
+// Release deletes the lock object unconditionally (force-unlock path). Unlike Close there is no If-Match: the etag belongs to a run that no longer exists, and gating on it would make recovery impossible.
+func (b s3Backend) Release(ctx context.Context, lock *blueprint.Lock) error {
+	cfg := lock.S3
+	client, err := b.client(ctx, cfg.Region)
+	if err != nil {
+		return err
+	}
+	if _, err := client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(cfg.Bucket),
+		Key:    aws.String(cfg.Key),
+	}); err != nil {
+		return fmt.Errorf("releasing graph lock s3://%s/%s: %w", cfg.Bucket, cfg.Key, err)
+	}
+	return nil
+}
+
 func (b s3Backend) client(ctx context.Context, region string) (s3API, error) {
 	if b.newClient != nil {
 		return b.newClient(ctx, region)
