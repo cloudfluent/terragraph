@@ -27,6 +27,7 @@ var topSchema = &hcl.BodySchema{
 		{Type: "lock"},
 		{Type: "runtime", LabelNames: []string{"name"}},
 		{Type: "contracts"},
+		{Type: "snapshots"},
 		{Type: "producer", LabelNames: []string{"source"}},
 		{Type: "consumer", LabelNames: []string{"source"}},
 	},
@@ -199,7 +200,7 @@ func LoadPath(path string) (*Blueprint, string, error) {
 	return bp, filepath.Dir(path), err
 }
 
-// parseOneFile parses one HCL file and merges its node/edge/group/use/vendor/tfvars/lock/runtime/producer/consumer blocks into bp, checking name, vendor/tfvars/lock-block, and contract-port uniqueness against the caller-supplied seen-sets (shared across every file being merged into the same bp). Edge endpoint and runtime-reference validation deliberately does not happen here: it happens once, in validateEdges/validateRuntimes, after every file that will ever contribute to bp has been merged, so a reference in one file may target a node, use instance, or runtime declared in another.
+// parseOneFile parses one HCL file and merges its node/edge/group/use/vendor/tfvars/lock/runtime/producer/consumer/snapshots blocks into bp, checking name, vendor/tfvars/lock-block, and contract-port uniqueness against the caller-supplied seen-sets (shared across every file being merged into the same bp). Edge endpoint and runtime-reference validation deliberately does not happen here: it happens once, in validateEdges/validateRuntimes, after every file that will ever contribute to bp has been merged, so a reference in one file may target a node, use instance, or runtime declared in another.
 func parseOneFile(path string, bp *Blueprint, seenNodes, seenGroups, seenUses, seenRuntimes, seenContractPorts map[string]bool) error {
 	src, err := os.ReadFile(path)
 	if err != nil {
@@ -314,6 +315,16 @@ func parseOneFile(path string, bp *Blueprint, seenNodes, seenGroups, seenUses, s
 				return err
 			}
 			bp.ContractMode = mode
+		case "snapshots":
+			// Opting in is one deliberate decision; two blocks would be the same decision made twice, and last-win could never change it anyway.
+			if bp.Snapshots != nil {
+				return fmt.Errorf("%s: duplicate snapshots block", block.DefRange)
+			}
+			sn, err := parseSnapshotsBlock(block)
+			if err != nil {
+				return err
+			}
+			bp.Snapshots = sn
 		}
 	}
 
@@ -462,6 +473,14 @@ func parseContractsBlock(block *hcl.Block) (string, error) {
 		return "", fmt.Errorf("%s: mode must be warn or enforce; legacy and warn were always one behavior, got %q", attr.Range, mode)
 	}
 	return mode, nil
+}
+
+// parseSnapshotsBlock parses the optional top-level `snapshots { }` block (see Blueprint.Snapshots). v1's body accepts nothing: Content against an empty schema refuses every attribute as unsupported, so the block's mere presence is the whole configuration and a typo like `enabled = true` dies at parse instead of silently configuring nothing. A real knob widens this schema when it arrives.
+func parseSnapshotsBlock(block *hcl.Block) (*Snapshots, error) {
+	if _, diags := block.Body.Content(&hcl.BodySchema{}); diags.HasErrors() {
+		return nil, fmt.Errorf("%s: %s", block.DefRange, diags.Error())
+	}
+	return &Snapshots{Enabled: true}, nil
 }
 
 // parseLockBlock parses the optional top-level `lock { }` block.
