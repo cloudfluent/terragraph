@@ -131,7 +131,9 @@ If this is intended, declare approve = "all" on that node, or re-run with --appr
 
 This is checked whether or not anyone is watching. An interactive `yes` answers "apply this plan", not "override the standing policy"; overriding it is `--approve=all`, which is a visible, deliberate act.
 
-An unattended destroy (`--auto-approve`) is held to the same policy without a plan to read: teardown is delete-only, so it requires every node in scope to resolve to `approve = "all"`, while an interactive destroy stays gated by Terraform's own confirmation prompt.
+`destroy` is held to the same policy without a plan to read. Teardown is delete-only, so a node that **declared** anything short of `approve = "all"` has already said it must not be torn down, and destroy refuses before anything runs — with or without `--auto-approve`, for the same reason apply's check does not care whether anyone is watching. A node that declared nothing is unaffected: `terragraph destroy` on an ordinary blueprint behaves exactly as it always has, gated by Terraform's own confirmation prompt.
+
+There is deliberately no `--approve` flag on `destroy`. The layering rule is that a run-wide flag only fills a gap nothing else spoke to, so it could never permit a teardown the blueprint refused; changing the node's own `approve` is the only route, and that goes through review.
 
 The check reads the saved plan file, so it cannot run on the `remote`/`cloud` backends, which have none. Apply stops on those nodes with an error rather than applying uninspected.
 

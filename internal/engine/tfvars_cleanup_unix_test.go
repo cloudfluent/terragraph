@@ -78,3 +78,13 @@ func TestApply_RemovesTFVarsWhenRunEnds(t *testing.T) {
 	}
 	assertNoTFVars(t, e, "app")
 }
+
+// destroy writes the same cleartext file the other two do — and its resolved inputs can feed count/for_each, so a stale one left behind is the worst of the three to reuse. The node declares nothing, so the approve gate lets teardown through.
+func TestDestroy_RemovesTFVarsWhenRunEnds(t *testing.T) {
+	e := loadTFVarsCleanupEngine(t)
+
+	if err := e.Destroy(Options{AutoApprove: true}); err != nil {
+		t.Fatalf("Destroy: %v", err)
+	}
+	assertNoTFVars(t, e, "app")
+}
