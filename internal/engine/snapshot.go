@@ -75,3 +75,23 @@ func (e *Engine) writeSnapshot(name string, outputs map[string]any) error {
 	}
 	return nil
 }
+
+// readSnapshot returns the outputs a prior run published for name, or false
+// when there is nothing usable: no file, or one that does not decode into a
+// schema this reader understands. Every miss is a debug log and a nil, never
+// an error — a fallback that could fail on its own would be a second source
+// of truth competing with the live read it sits behind (see the last-resort
+// use in inputs.go, which gates on Graph.Snapshots before calling this).
+func (e *Engine) readSnapshot(name string) (map[string]any, bool) {
+	data, err := os.ReadFile(e.snapshotPath(name))
+	if err != nil {
+		e.logger().Debug("no output snapshot to fall back on", "node", name, "err", err)
+		return nil, false
+	}
+	var f snapshotFile
+	if err := json.Unmarshal(data, &f); err != nil || f.Schema != 1 || f.Node != name {
+		e.logger().Debug("output snapshot present but unreadable, ignoring it", "node", name, "err", err)
+		return nil, false
+	}
+	return f.Outputs, true
+}
