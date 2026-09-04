@@ -2,9 +2,12 @@
 package cli
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -60,7 +63,7 @@ func NewRootCmd(version string) *cobra.Command {
 	root.AddCommand(newPlanCmd(&blueprintPath, binaryOf, loggerOf))
 	root.AddCommand(newApplyCmd(&blueprintPath, binaryOf, loggerOf))
 	root.AddCommand(newDestroyCmd(&blueprintPath, binaryOf, loggerOf))
-	root.AddCommand(newForceUnlockCmd(&blueprintPath, binaryOf, loggerOf))
+	root.AddCommand(newForceUnlockCmd(&blueprintPath))
 	root.AddCommand(newVendorCmd(&blueprintPath, loggerOf))
 	root.AddCommand(newLanguageServerCmd())
 
@@ -309,28 +312,52 @@ func newDestroyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf 
 	return cmd
 }
 
-func newForceUnlockCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf func() *slog.Logger) *cobra.Command {
+func newForceUnlockCmd(blueprintPath *string) *cobra.Command {
 	var yes bool
 	cmd := &cobra.Command{
 		Use:   "force-unlock",
 		Short: "Release a leftover graph lock object left by an interrupted run",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// loadEngine, not loadLockedEngine: the stuck lock is exactly why this command exists, and it never reads module files, so there is nothing to protect with the process lock.
-			e, err := loadEngine(cmd, blueprintPath, binaryOf, loggerOf)
+			// The blueprint is parsed, not built into a graph: all this needs is the lock block, and graph.Build stats every node source — so a checkout with nothing vendored yet would abort the one command that exists to recover from an interrupted run. Same reason newVendorCmd parses directly.
+			bp, dir, err := blueprint.LoadPath(*blueprintPath)
 			if err != nil {
 				return err
 			}
-			lock := e.Graph.Lock
-			if lock == nil {
-				return fmt.Errorf("this blueprint declares no graph lock")
+			if bp.Lock == nil {
+				return fmt.Errorf("this blueprint declares no graph lock; there is nothing for force-unlock to release")
 			}
+			baseDir, err := filepath.Abs(dir)
+			if err != nil {
+				return fmt.Errorf("resolving blueprint directory: %w", err)
+			}
+
+			// A live process on this checkout is the likeliest legitimate holder of the graph lock about to be deleted, and flock drops with the fd on exit, so a held one means someone is genuinely running rather than that a crash left it behind. It says nothing about other machines — that is what --yes is for — but the same-machine mistake is free to catch.
+			lock, err := runlock.TryAcquire(baseDir)
+			if err != nil {
+				if errors.Is(err, runlock.ErrHeld) {
+					return fmt.Errorf("another terragraph process is using this blueprint and may hold the graph lock legitimately; wait for it to finish")
+				}
+				return fmt.Errorf("locking blueprint: %w", err)
+			}
+			defer func() { _ = lock.Close() }()
+
+			s3 := bp.Lock.S3
+			// Who holds the lock is worth showing but never worth waiting on: this is the command someone reaches for when a backend is already misbehaving, so an unreachable one degrades to "unknown" on a short deadline rather than stalling the refusal it exists to explain.
+			holderCtx, cancel := context.WithTimeout(cmd.Context(), 3*time.Second)
+			who, created := graphlock.Holder(holderCtx, bp.Lock)
+			cancel()
+			held := ""
+			if who != "" {
+				held = fmt.Sprintf(", held by %s since %s", who, created)
+			}
+
 			if !yes {
-				return fmt.Errorf("refusing to release %s/%s without --yes; run terragraph force-unlock --yes", lock.S3.Bucket, lock.S3.Key)
+				return fmt.Errorf("refusing to release s3://%s/%s%s without --yes; the holder may still be running, and releasing is unconditional", s3.Bucket, s3.Key, held)
 			}
-			if err := graphlock.Release(cmd.Context(), lock); err != nil {
+			if err := graphlock.Release(cmd.Context(), bp.Lock); err != nil {
 				return err
 			}
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "released %s/%s\n", lock.S3.Bucket, lock.S3.Key)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "released s3://%s/%s%s\n", s3.Bucket, s3.Key, held)
 			return nil
 		},
 	}

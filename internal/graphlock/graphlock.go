@@ -18,6 +18,8 @@ type Backend interface {
 	Matches(lock *blueprint.Lock) bool
 	Acquire(ctx context.Context, lock *blueprint.Lock) (Held, error)
 	Release(ctx context.Context, lock *blueprint.Lock) error
+	// Holder reports who holds the lock and since when, for force-unlock to show before it breaks one. Empty strings mean unknown, which is not an error: the object may already be gone.
+	Holder(ctx context.Context, lock *blueprint.Lock) (who, created string)
 }
 
 // Held is a held graph lock. Close releases it. Close on a nil or already-released Held is a no-op.
@@ -45,6 +47,19 @@ func Acquire(ctx context.Context, lock *blueprint.Lock) (Held, error) {
 		}
 	}
 	return nil, fmt.Errorf("no graph lock backend matches this lock block")
+}
+
+// Holder reports who currently holds the lock described by lock, and since when, so force-unlock can show what it is about to break. Empty strings mean unknown — an unreadable or already-deleted object is not an error here.
+func Holder(ctx context.Context, lock *blueprint.Lock) (who, created string) {
+	if lock == nil {
+		return "", ""
+	}
+	for _, b := range backends {
+		if b.Matches(lock) {
+			return b.Holder(ctx, lock)
+		}
+	}
+	return "", ""
 }
 
 // Release deletes a leftover graph lock object (force-unlock). Held.Close refuses a lock whose etag moved; Release skips that guard on purpose — the holder is gone, so no If-Match could ever match — leaving the --yes confirmation at the CLI as the only safety. A nil lock is a no-op.
