@@ -2,6 +2,7 @@ package graph
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/ext/typeexpr"
@@ -25,9 +26,14 @@ func contractProblems(g *Graph) []Problem {
 	if g.Contracts == nil {
 		return nil
 	}
-	used := map[string]bool{}
+	// Nodes are grouped by contract key and sorted by name so the schema a contract is judged against never depends on map iteration order. It matters only for remote sources: nodes sharing a local directory share one cached *module.Schema, but two instances of one remote module live in vendor/<node-name> and are inspected separately, so re-vendoring a single node (vendor --node) can leave the two copies disagreeing. Picking by name makes the answer stable; the second copy still goes uninspected, which is a gap worth its own diagnostic rather than a silent tiebreak.
+	byKey := map[string][]*Node{}
 	for _, n := range g.Nodes {
-		used[contractKey(n)] = true
+		key := contractKey(n)
+		byKey[key] = append(byKey[key], n)
+	}
+	for _, nodes := range byKey {
+		sort.Slice(nodes, func(i, j int) bool { return nodes[i].Name < nodes[j].Name })
 	}
 
 	// Enforce is the only mode that blocks, and it exists only as reviewed blueprint configuration — never as a default or a CLI flag someone passes once.
@@ -43,17 +49,12 @@ func contractProblems(g *Graph) []Problem {
 
 	// C001/C002/C006: contracts against reality, independent of edges — a promise about a port the module never declared, or a scope nothing instantiates, is wrong whether or not anything consumes it yet.
 	for _, dc := range sortedContracts(g.Contracts) {
-		if !used[dc.Dir] {
+		owners := byKey[dc.Dir]
+		if len(owners) == 0 {
 			report("contract.[C006] %s: no node in this graph uses source %q; update the scope path or remove the contract", dc.Scope, dc.Scope)
 			continue
 		}
-		var schemaOwner *Node
-		for _, n := range g.Nodes {
-			if contractKey(n) == dc.Dir {
-				schemaOwner = n
-				break
-			}
-		}
+		schemaOwner := owners[0]
 		for _, name := range sortedPorts(dc.Producer) {
 			if !schemaOwner.Schema.HasOutput(name) {
 				report("contract.[C001] producer %s.output.%s: module declares no such output; remove the promise or add the output", dc.Scope, name)
@@ -150,16 +151,19 @@ func parseCtyType(s string) (cty.Type, error) {
 }
 
 // sortedContracts / sortedPorts exist so problem order — and therefore test output and JSON — never depends on map iteration.
+//
+// Scope alone does not order the set: entries are keyed by Dir, and two of them can share a Scope spelling while resolving to different directories (the root blueprint and a group each writing "./modules/vpc" relative to their own file). Dir breaks that tie, because leaving it to the sort's stability hands the order straight back to the map this function exists to sort away from.
 func sortedContracts(c *blueprint.Contracts) []*blueprint.DirContracts {
 	out := make([]*blueprint.DirContracts, 0, len(c.ByDir))
 	for _, dc := range c.ByDir {
 		out = append(out, dc)
 	}
-	for i := 1; i < len(out); i++ {
-		for j := i; j > 0 && out[j].Scope < out[j-1].Scope; j-- {
-			out[j], out[j-1] = out[j-1], out[j]
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Scope != out[j].Scope {
+			return out[i].Scope < out[j].Scope
 		}
-	}
+		return out[i].Dir < out[j].Dir
+	})
 	return out
 }
 
@@ -168,10 +172,6 @@ func sortedPorts(m map[string]blueprint.PortContract) []string {
 	for name := range m {
 		out = append(out, name)
 	}
-	for i := 1; i < len(out); i++ {
-		for j := i; j > 0 && out[j] < out[j-1]; j-- {
-			out[j], out[j-1] = out[j-1], out[j]
-		}
-	}
+	sort.Strings(out)
 	return out
 }

@@ -35,7 +35,7 @@ type Graph struct {
 	Lock *blueprint.Lock
 	// Contracts is the blueprint's contract set, merged by Build: the root blueprint's own producer/consumer blocks plus every instantiated group's (see mergeContracts). Keying is hybrid (see blueprint.DirContracts): local scopes by resolved source directory, remote scopes by the declared source string, so two vendored instances of one remote module share one record. Nil is the ordinary, uncontracted graph, and every contract-aware consumer must treat nil as "no claims, no checks".
 	Contracts *blueprint.Contracts
-	// ContractMode is the blueprint's `contracts { mode = ... }` value, set by engine load after Build; graph reads it only to pick contract-problem severity (enforce escalates C001-C006 to errors), never to change what is checked.
+	// ContractMode is the blueprint's `contracts { mode = ... }` value, set by engine load after Build; graph reads it only to pick contract-problem severity (enforce escalates every C0xx to an error), never to change what is checked.
 	ContractMode string
 }
 

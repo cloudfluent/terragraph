@@ -576,3 +576,49 @@ producer "github.com/org/repo//modules/vpc" {
 		t.Fatalf("got = %v, want exactly one C001 naming the shared source", problems)
 	}
 }
+
+// Two nodes sharing one remote source are inspected separately — their Dir is vendor/<node-name> — so re-vendoring one of them (vendor --node) can leave the copies disagreeing about what the module declares. Which copy the contract is judged against must be a decision, not whatever the node map yields.
+//
+// The fixture makes the choice observable: only "b" declares vpc_id, so reading "a" reports C001 and reading "b" reports nothing. Asserting the lowest-named node wins pins the rule. Note that a loop here would prove nothing — Go randomises map iteration between processes but held one order within a single run, so the map-ordered version passed a twelve-iteration stability check and only varied from one `go test` to the next.
+func TestContractProblems_RemoteSourceSchemaIsTheLowestNamedNode(t *testing.T) {
+	root := t.TempDir()
+	writeFixtureFile(t, filepath.Join(root, "vendor/a/main.tf"), `output "other" { value = "x" }`)
+	writeFixtureFile(t, filepath.Join(root, "vendor/b/main.tf"), `output "vpc_id" { value = "x" }`)
+	writeFixtureFile(t, filepath.Join(root, "blueprint.hcl"), `
+node "a" { source = "github.com/acme/vpc" }
+node "b" { source = "github.com/acme/vpc" }
+
+producer "github.com/acme/vpc" {
+  output "vpc_id" { type = "string" }
+}
+`)
+	bp, err := blueprint.ParseFile(filepath.Join(root, "blueprint.hcl"))
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	g, err := Build(bp, root)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	problems := contractProblems(g)
+	if len(problems) != 1 || !strings.Contains(problems[0].Message, "[C001]") {
+		t.Fatalf("got = %v, want one C001 from reading node a's copy", problems)
+	}
+}
+
+// sortedContracts orders by Scope, but entries are keyed by Dir, and the root blueprint and a group can each write "./modules/vpc" relative to their own file — same spelling, different module. The tie has to break on something stable; leaving it to sort stability hands the order back to map iteration, which is what this function exists to remove.
+func TestSortedContracts_BreaksScopeTiesOnDir(t *testing.T) {
+	c := &blueprint.Contracts{ByDir: map[string]*blueprint.DirContracts{
+		"/z/modules/vpc": {Scope: "./modules/vpc", Dir: "/z/modules/vpc"},
+		"/a/modules/vpc": {Scope: "./modules/vpc", Dir: "/a/modules/vpc"},
+		"/m/modules/vpc": {Scope: "./modules/vpc", Dir: "/m/modules/vpc"},
+	}}
+
+	want := []string{"/a/modules/vpc", "/m/modules/vpc", "/z/modules/vpc"}
+	for k, dc := range sortedContracts(c) {
+		if dc.Dir != want[k] {
+			t.Fatalf("position %d = %q, want %q", k, dc.Dir, want[k])
+		}
+	}
+}
