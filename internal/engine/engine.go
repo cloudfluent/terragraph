@@ -342,12 +342,18 @@ func (e *Engine) tfVarsOrphans() []graph.Problem {
 	return problems
 }
 
-// stateOrphans warns about a local-backend state file left in <BaseDir>/.terragraph/state by a node that no longer exists under that name (renamed or removed from the blueprint), so a rename doesn't silently strand the old state where a future node of that name would silently adopt it. Nodes with an explicit backend_config path never write here, so matching on the file stem is exact. Never deletes anything; it is the user's call whether the node was renamed (rename it back) or truly abandoned (remove the file or re-import the state elsewhere).
+// stateOrphans warns about a local-backend state file left in <BaseDir>/.terragraph/state by a node that no longer owns it (renamed or removed from the blueprint), so a rename doesn't silently strand the old state where a future node of that name would silently adopt it. Files are claimed by the basename of every node's resolved backend_config path, not by node name: a node may point an explicit path at a differently named file under this directory (see blueprint.md), and graph.Build default-fills the rest to <name>.tfstate anyway — so a basename no current node resolves to is an orphan. Never deletes anything; it is the user's call whether the node was renamed (rename it back) or truly abandoned (remove the file or re-import the state elsewhere).
 func (e *Engine) stateOrphans() []graph.Problem {
 	dir := filepath.Join(e.BaseDir, ".terragraph", "state")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil // No state directory yet (fresh or never-applied project): nothing can be orphaned.
+	}
+	claimed := make(map[string]bool)
+	for _, n := range e.Graph.Nodes {
+		if p, ok := n.BackendConfig["path"]; ok {
+			claimed[filepath.Base(p)] = true
+		}
 	}
 	var stale []string
 	for _, entry := range entries {
@@ -358,7 +364,7 @@ func (e *Engine) stateOrphans() []graph.Problem {
 		if !strings.HasSuffix(fname, ".tfstate") {
 			continue
 		}
-		if _, ok := e.Graph.Nodes[strings.TrimSuffix(fname, ".tfstate")]; !ok {
+		if !claimed[fname] {
 			stale = append(stale, fname)
 		}
 	}

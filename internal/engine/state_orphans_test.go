@@ -64,3 +64,31 @@ func TestStateOrphans_NoStrayFileNoNewProblems(t *testing.T) {
 		t.Fatalf("expected no problems without a stray state file, got: %+v", problems)
 	}
 }
+
+// A node may point an explicit backend_config path at a differently named file under .terragraph/state; while it exists, that file is live state, not an orphan.
+func TestStateOrphans_ExplicitBackendPathClaimsItsFile(t *testing.T) {
+	baseDir := t.TempDir()
+	writeModule(t, filepath.Join(baseDir, "stacks", "vpc"))
+	path := writeBlueprint(t, baseDir, `
+node "vpc" {
+  source = "./stacks/vpc"
+  backend_config = { path = ".terragraph/state/prod.tfstate" }
+}
+`)
+
+	e, err := Load(path, exec.Terraform, io.Discard, io.Discard)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	live := filepath.Join(e.BaseDir, ".terragraph", "state", "prod.tfstate")
+	if err := os.MkdirAll(filepath.Dir(live), 0o755); err != nil {
+		t.Fatalf("mkdir state dir: %v", err)
+	}
+	if err := os.WriteFile(live, []byte(`{"version":4}`), 0o644); err != nil {
+		t.Fatalf("writing live state fixture: %v", err)
+	}
+
+	if problems := e.Validate(); len(problems) != 0 {
+		t.Fatalf("expected no warnings while the explicit path's node exists, got: %+v", problems)
+	}
+}
