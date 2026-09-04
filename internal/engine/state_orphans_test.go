@@ -92,3 +92,38 @@ node "vpc" {
 		t.Fatalf("expected no warnings while the explicit path's node exists, got: %+v", problems)
 	}
 }
+
+// A node whose explicit path points somewhere else entirely must not vouch for a same-named file in the state directory. Matching on the basename alone did exactly that: "live.tfstate" owned by a node writing into its own module directory silenced the orphan sitting under .terragraph/state.
+func TestStateOrphans_ExplicitPathElsewhereDoesNotClaimTheStateDir(t *testing.T) {
+	baseDir := t.TempDir()
+	writeModule(t, filepath.Join(baseDir, "stacks", "vpc"))
+	path := writeBlueprint(t, baseDir, `
+node "vpc" {
+  source         = "./stacks/vpc"
+  backend_config = { path = "/somewhere/else/live.tfstate" }
+}
+`)
+
+	e, err := Load(path, exec.Terraform, io.Discard, io.Discard)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	orphan := filepath.Join(e.BaseDir, ".terragraph", "state", "live.tfstate")
+	if err := os.MkdirAll(filepath.Dir(orphan), 0o755); err != nil {
+		t.Fatalf("mkdir state dir: %v", err)
+	}
+	if err := os.WriteFile(orphan, []byte(`{"version":4}`), 0o644); err != nil {
+		t.Fatalf("writing orphan fixture: %v", err)
+	}
+
+	var got []string
+	for _, p := range e.Validate() {
+		got = append(got, p.Message)
+	}
+	if len(got) != 1 || !strings.Contains(got[0], "live.tfstate") {
+		t.Fatalf("got = %v, want one warning naming the stray live.tfstate", got)
+	}
+	if !strings.Contains(got[0], ".tfstate.backup") {
+		t.Fatalf("remedy should mention the backup sibling, got: %q", got[0])
+	}
+}
