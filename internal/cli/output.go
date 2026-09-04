@@ -59,22 +59,6 @@ func vendorResultsToDTO(results []vendor.Result) []vendorResultDTO {
 	return out
 }
 
-// portEvidenceDTO mirrors engine.PortEvidence; a separate DTO keeps the JSON contract explicit rather than marshalling engine types by accident.
-type portEvidenceDTO struct {
-	Scope      string `json:"scope"`
-	Role       string `json:"role"`
-	Port       string `json:"port"`
-	Confidence string `json:"confidence"`
-	Type       string `json:"type,omitempty"`
-}
-
-// observeResult is the JSON payload for `terragraph observe --output json`.
-type observeResult struct {
-	Lock   string            `json:"lock"`
-	Digest string            `json:"digest"`
-	Ports  []portEvidenceDTO `json:"ports"`
-}
-
 // writeJSON encodes v to w as a single JSON value followed by a newline.
 func writeJSON(w io.Writer, v any) error {
 	return json.NewEncoder(w).Encode(v)

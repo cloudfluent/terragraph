@@ -7,7 +7,7 @@ import (
 	"sort"
 )
 
-// Assertion is one closed-vocabulary predicate over a port's runtime value (nonempty, pattern, min_length, one_of). Declared in phase 1, evaluated only by the future observe command, which has real values; validate never guesses. Kind plus one string Value keeps the canonical form trivially stable, which is what the digest (see Contracts.Digest) depends on.
+// Assertion is one closed-vocabulary predicate over a port's runtime value (nonempty, pattern, min_length, one_of). Declared in phase 1, evaluated only when real values exist; validate never guesses. Kind plus one string Value keeps the canonical form trivially stable, which is what the digest (see Contracts.Digest) depends on.
 type Assertion struct {
 	Kind  string
 	Value string
