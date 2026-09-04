@@ -13,6 +13,7 @@ terragraph apply [flags]
       --auto-approve      skip the interactive approval prompt
   -h, --help              help for apply
       --node string       restrict to a single node
+      --output string     output format: text or json (default "text")
       --parallelism int   max nodes to run concurrently within one execution level (default 1)
 ```
 
