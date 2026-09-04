@@ -279,3 +279,20 @@ group "net" {
 		t.Fatalf("group consumer side missing: %+v", g.Contracts)
 	}
 }
+
+// TestParseContracts_RejectsAbsoluteScopeOnEveryPlatform pins the rejection to the path's shape rather than the host's. filepath.IsAbs answers only for the running platform, so a POSIX-rooted scope sailed through on Windows and a drive-lettered one sails through everywhere else; either way one blueprint would mean different things on two machines, which is what this check exists to stop. Backslashes are doubled on the way into HCL, where a lone one is an escape selector.
+func TestParseContracts_RejectsAbsoluteScopeOnEveryPlatform(t *testing.T) {
+	for _, scope := range []string{"/abs/modules/vpc", `\abs\modules\vpc`, `C:\modules\vpc`, "c:modules/vpc"} {
+		base := t.TempDir()
+		path := filepath.Join(base, "blueprint.hcl")
+		writeContractsFile(t, path, `
+producer "`+strings.ReplaceAll(scope, `\`, `\\`)+`" {
+  output "vpc_id" { type = "string" }
+}
+`)
+		_, err := ParseFile(path)
+		if err == nil || !strings.Contains(err.Error(), "relative") {
+			t.Fatalf("scope %q: got = %v, want absolute-scope rejection", scope, err)
+		}
+	}
+}

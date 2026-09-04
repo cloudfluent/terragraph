@@ -33,7 +33,7 @@ func parseContractSideBlock(block *hcl.Block, baseDir string, c *Contracts, seen
 	if scope == "" {
 		return fmt.Errorf("%s: contract %s source must not be empty", block.DefRange, role)
 	}
-	if filepath.IsAbs(scope) {
+	if isAbsoluteAnywhere(scope) {
 		return fmt.Errorf("%s: contract.%s.%s: source must be a relative path like \"./modules/vpc\" or a remote module source, got %q", block.DefRange, role, scope, scope)
 	}
 	dir := scope
@@ -131,4 +131,14 @@ func validateTypeConstraint(s string) error {
 		return fmt.Errorf("type %q is not a Terraform type constraint: %s", s, diags.Error())
 	}
 	return nil
+}
+
+// isAbsoluteAnywhere reports whether scope reads as an absolute filesystem path on any host, not just this one. filepath.IsAbs answers for the running platform: "/abs/modules/vpc" is absolute on Unix but not on Windows, and "C:\modules\vpc" the reverse. Deferring to it would let a blueprint be rejected on one machine and silently accepted as a remote module source on another, which is exactly the machine-dependent contract identity the check exists to prevent.
+func isAbsoluteAnywhere(scope string) bool {
+	if filepath.IsAbs(scope) || strings.HasPrefix(scope, "/") || strings.HasPrefix(scope, `\`) {
+		return true
+	}
+	// A Windows volume name ("C:", "C:\x", "C:x"): absolute or drive-relative, never a portable module source, and invisible to a Unix filepath.IsAbs.
+	return len(scope) >= 2 && scope[1] == ':' &&
+		((scope[0] >= 'a' && scope[0] <= 'z') || (scope[0] >= 'A' && scope[0] <= 'Z'))
 }
