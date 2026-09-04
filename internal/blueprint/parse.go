@@ -27,6 +27,8 @@ var topSchema = &hcl.BodySchema{
 		{Type: "lock"},
 		{Type: "runtime", LabelNames: []string{"name"}},
 		{Type: "contracts"},
+		{Type: "producer", LabelNames: []string{"source"}},
+		{Type: "consumer", LabelNames: []string{"source"}},
 	},
 }
 
@@ -98,6 +100,8 @@ var groupBodySchema = &hcl.BodySchema{
 		{Type: "edge"},
 		{Type: "use", LabelNames: []string{"name"}},
 		{Type: "export"},
+		{Type: "producer", LabelNames: []string{"source"}},
+		{Type: "consumer", LabelNames: []string{"source"}},
 	},
 }
 
@@ -135,8 +139,9 @@ func ParseFile(path string) (*Blueprint, error) {
 	seenGroups := map[string]bool{}
 	seenUses := map[string]bool{}
 	seenRuntimes := map[string]bool{}
+	seenContractPorts := map[string]bool{}
 
-	if err := parseOneFile(path, bp, seenNodes, seenGroups, seenUses, seenRuntimes); err != nil {
+	if err := parseOneFile(path, bp, seenNodes, seenGroups, seenUses, seenRuntimes, seenContractPorts); err != nil {
 		return nil, err
 	}
 	if err := validateEdges(bp, seenNodes, seenUses); err != nil {
@@ -148,7 +153,7 @@ func ParseFile(path string) (*Blueprint, error) {
 	return bp, nil
 }
 
-// ParseDir reads and parses every .hcl file directly inside dir (not recursively) and merges them into a single Blueprint, the same way loadGroupDef already treats a group source directory: node/group/use names and the vendor block must be unique across the whole directory, not just within one file, and an edge in one file may reference a node or use instance declared in another. Files are visited in the order os.ReadDir returns them (lexical by name), so a duplicate-name error always names the second file, deterministically.
+// ParseDir reads and parses every .hcl file directly inside dir (not recursively) and merges them into a single Blueprint, the same way loadGroupDef already treats a group source directory: node/group/use names, the vendor block, and each contract (role, source, port) must be unique across the whole directory, not just within one file, and an edge in one file may reference a node or use instance declared in another. There are no reserved filenames: every .hcl file merges, whatever it is called. Files are visited in the order os.ReadDir returns them (lexical by name), so a duplicate-name error always names the second file, deterministically.
 func ParseDir(dir string) (*Blueprint, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -160,13 +165,13 @@ func ParseDir(dir string) (*Blueprint, error) {
 	seenGroups := map[string]bool{}
 	seenUses := map[string]bool{}
 	seenRuntimes := map[string]bool{}
+	seenContractPorts := map[string]bool{}
 
 	for _, e := range entries {
-		// contracts.hcl is a reserved sibling, not blueprint content (see ParseContracts): a directory blueprint would otherwise try to merge it and die on its producer/consumer blocks.
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".hcl") || e.Name() == "contracts.hcl" {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".hcl") {
 			continue
 		}
-		if err := parseOneFile(filepath.Join(dir, e.Name()), bp, seenNodes, seenGroups, seenUses, seenRuntimes); err != nil {
+		if err := parseOneFile(filepath.Join(dir, e.Name()), bp, seenNodes, seenGroups, seenUses, seenRuntimes, seenContractPorts); err != nil {
 			return nil, err
 		}
 	}
@@ -194,11 +199,16 @@ func LoadPath(path string) (*Blueprint, string, error) {
 	return bp, filepath.Dir(path), err
 }
 
-// parseOneFile parses one HCL file and merges its node/edge/group/use/vendor/tfvars/lock/runtime blocks into bp, checking name and vendor/tfvars/lock-block uniqueness against the caller-supplied seen-sets (shared across every file being merged into the same bp). Edge endpoint and runtime-reference validation deliberately does not happen here: it happens once, in validateEdges/validateRuntimes, after every file that will ever contribute to bp has been merged, so a reference in one file may target a node, use instance, or runtime declared in another.
-func parseOneFile(path string, bp *Blueprint, seenNodes, seenGroups, seenUses, seenRuntimes map[string]bool) error {
+// parseOneFile parses one HCL file and merges its node/edge/group/use/vendor/tfvars/lock/runtime/producer/consumer blocks into bp, checking name, vendor/tfvars/lock-block, and contract-port uniqueness against the caller-supplied seen-sets (shared across every file being merged into the same bp). Edge endpoint and runtime-reference validation deliberately does not happen here: it happens once, in validateEdges/validateRuntimes, after every file that will ever contribute to bp has been merged, so a reference in one file may target a node, use instance, or runtime declared in another.
+func parseOneFile(path string, bp *Blueprint, seenNodes, seenGroups, seenUses, seenRuntimes, seenContractPorts map[string]bool) error {
 	src, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("reading blueprint file: %w", err)
+	}
+	// Absolute, so contract scopes resolved against it key identically to the node directories graph.Build computes from its own absolute baseDir, no matter whether path was spelled relatively.
+	baseDir, err := filepath.Abs(filepath.Dir(path))
+	if err != nil {
+		return fmt.Errorf("resolving blueprint directory: %w", err)
 	}
 
 	parser := hclparse.NewParser()
@@ -231,7 +241,7 @@ func parseOneFile(path string, bp *Blueprint, seenNodes, seenGroups, seenUses, s
 			}
 			bp.Edges = append(bp.Edges, edges...)
 		case "group":
-			group, err := parseGroupBlock(block)
+			group, err := parseGroupBlock(block, baseDir)
 			if err != nil {
 				return err
 			}
@@ -287,6 +297,13 @@ func parseOneFile(path string, bp *Blueprint, seenNodes, seenGroups, seenUses, s
 			}
 			seenRuntimes[rt.Name] = true
 			bp.Runtimes = append(bp.Runtimes, rt)
+		case "producer", "consumer":
+			if bp.Contracts == nil {
+				bp.Contracts = &Contracts{ByDir: map[string]*DirContracts{}}
+			}
+			if err := parseContractSideBlock(block, baseDir, bp.Contracts, seenContractPorts); err != nil {
+				return err
+			}
 		case "contracts":
 			// The mode is the strictness dial; two blocks would silently last-win, which is exactly the unreviewed strictness change docs/contracts.md forbids.
 			if bp.ContractMode != "" {
@@ -970,8 +987,8 @@ func traverseAttrName(step hcl.Traverser, rng hcl.Range) (string, error) {
 	return attr.Name, nil
 }
 
-// parseGroupBlock parses a group definition: its internal nodes, edges, nested use instantiations, and its export interface. Internal references are validated for existence here (does the referenced node/use instance exist in this group), but not against any real Terraform module schema. That happens later, once the group is actually instantiated, using the same module.Inspect + graph.Validate machinery a top-level blueprint uses.
-func parseGroupBlock(block *hcl.Block) (Group, error) {
+// parseGroupBlock parses a group definition: its internal nodes, edges, nested use instantiations, its export interface, and its own contracts. Internal references are validated for existence here (does the referenced node/use instance exist in this group), but not against any real Terraform module schema. That happens later, once the group is actually instantiated, using the same module.Inspect + graph.Validate machinery a top-level blueprint uses. baseDir is the directory of the file declaring the group: the base the group's own contract scopes resolve against, the same base its internal node sources resolve against.
+func parseGroupBlock(block *hcl.Block, baseDir string) (Group, error) {
 	content, diags := block.Body.Content(groupBodySchema)
 	if diags.HasErrors() {
 		return Group{}, fmt.Errorf("%s: %s", block.DefRange, diags.Error())
@@ -984,6 +1001,7 @@ func parseGroupBlock(block *hcl.Block) (Group, error) {
 	g := Group{Name: block.Labels[0]}
 	seenNodes := map[string]bool{}
 	seenUses := map[string]bool{}
+	seenContractPorts := map[string]bool{}
 	sawExport := false
 
 	for _, b := range content.Blocks {
@@ -1014,6 +1032,13 @@ func parseGroupBlock(block *hcl.Block) (Group, error) {
 			}
 			seenUses[u.As] = true
 			g.Uses = append(g.Uses, u)
+		case "producer", "consumer":
+			if g.Contracts == nil {
+				g.Contracts = &Contracts{ByDir: map[string]*DirContracts{}}
+			}
+			if err := parseContractSideBlock(b, baseDir, g.Contracts, seenContractPorts); err != nil {
+				return Group{}, err
+			}
 		case "export":
 			if sawExport {
 				return Group{}, fmt.Errorf("%s: group %q has more than one export block", b.DefRange, g.Name)

@@ -16,7 +16,7 @@ type Assertion struct {
 // PortContract is one port's half of a contract: a producer's guarantee about an output, or a consumer's requirement for an input. Nullable/Sensitive are pointers because absence is a claim too — an absent nullable on a producer means "may be null", the lenient default the compatibility rules in docs/contracts.md build on — and a bare bool cannot tell "explicitly false" from "never said".
 type PortContract struct {
 	Name       string
-	Scope      string // source path as written in contracts.hcl ("./modules/vpc"); the identity-relevant spelling, never absolutized
+	Scope      string // source path as written in the blueprint ("./modules/vpc", "github.com/org/repo//modules/vpc"); the identity-relevant spelling, never absolutized
 	Type       string // Terraform type-constraint syntax; "" means unconstrained
 	Nullable   *bool
 	Sensitive  *bool

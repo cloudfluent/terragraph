@@ -17,10 +17,10 @@ func writeContractsFile(t *testing.T, path, contents string) {
 	}
 }
 
-// TestParseContracts_TwoSidedGraph proves the full phase-1 grammar round-trips: attributes, pointer tri-states, nested assert predicates, and scope resolution against the contracts file's directory.
-func TestParseContracts_TwoSidedGraph(t *testing.T) {
+// TestParseFile_ContractBlocksRoundTrip proves the full grammar round-trips from an ordinary blueprint file: attributes, pointer tri-states, nested assert predicates, and scope resolution against the file's own directory — the same base a node source in that file resolves against.
+func TestParseFile_ContractBlocksRoundTrip(t *testing.T) {
 	base := t.TempDir()
-	writeContractsFile(t, filepath.Join(base, "contracts.hcl"), `
+	writeContractsFile(t, filepath.Join(base, "blueprint.hcl"), `
 producer "./modules/vpc" {
   output "vpc_id" {
     type      = "string"
@@ -40,16 +40,19 @@ consumer "./modules/app" {
   }
 }
 `)
-	c, dir, err := ParseContracts(filepath.Join(base, "contracts.hcl"))
+	bp, err := ParseFile(filepath.Join(base, "blueprint.hcl"))
 	if err != nil {
-		t.Fatalf("ParseContracts: %v", err)
+		t.Fatalf("ParseFile: %v", err)
 	}
-	if dir != base {
-		t.Fatalf("got base dir %q, want %q", dir, base)
+	if bp.Contracts == nil {
+		t.Fatal("producer/consumer blocks did not produce Blueprint.Contracts")
 	}
-	dc := c.Lookup(filepath.Join(base, "modules", "vpc"))
+	dc := bp.Contracts.Lookup(filepath.Join(base, "modules", "vpc"))
 	if dc == nil {
 		t.Fatalf("no contracts resolved for %s", filepath.Join(base, "modules", "vpc"))
+	}
+	if dc.Scope != "./modules/vpc" {
+		t.Fatalf("got scope %q, want the as-written spelling", dc.Scope)
 	}
 	p := dc.Producer["vpc_id"]
 	if p.Type != "string" || p.Nullable == nil || *p.Nullable {
@@ -58,17 +61,16 @@ consumer "./modules/app" {
 	if len(p.Assertions) != 2 {
 		t.Fatalf("got = %d assertions, want 2", len(p.Assertions))
 	}
-	cons := dc.Consumer // consumer and producer share one source dir only if the same path is declared both ways; here app is a different dir
-	app := c.Lookup(filepath.Join(base, "modules", "app"))
+	app := bp.Contracts.Lookup(filepath.Join(base, "modules", "app"))
 	if app == nil || app.Consumer["vpc_id"].Type != "string" {
-		t.Fatalf("unexpected consumer side: %+v / %+v", cons, app)
+		t.Fatalf("unexpected consumer side: %+v", app)
 	}
 	if app.Consumer["vpc_id"].Sensitive == nil || !*app.Consumer["vpc_id"].Sensitive {
 		t.Fatalf("consumer sensitive must be explicitly true: %+v", app.Consumer["vpc_id"])
 	}
 }
 
-// TestParseContracts_DuplicatePortAcrossMergedFiles proves directory merge reports the collision with the remedy, instead of one file silently winning the map.
+// TestParseContracts_DuplicatePortAcrossMergedFiles proves directory merge reports the collision naming the second file, instead of one file silently winning the map.
 func TestParseContracts_DuplicatePortAcrossMergedFiles(t *testing.T) {
 	base := t.TempDir()
 	writeContractsFile(t, filepath.Join(base, "a.hcl"), `
@@ -78,32 +80,53 @@ producer "./modules/vpc" {
 `)
 	writeContractsFile(t, filepath.Join(base, "b.hcl"), `
 producer "./modules/vpc" {
-  output "vpc_id" { type = "number" }
+  output "vpc_id" { type = "string" }
 }
 `)
-	_, _, err := ParseContracts(base)
-	if err == nil || !strings.Contains(err.Error(), "contract.producer.output.vpc_id") || !strings.Contains(err.Error(), "remove one") {
-		t.Fatalf("got = %v, want duplicate-port error naming the port and the remedy", err)
+	_, err := ParseDir(base)
+	if err == nil || !strings.Contains(err.Error(), "b.hcl") || !strings.Contains(err.Error(), "vpc_id") || !strings.Contains(err.Error(), "remove one") {
+		t.Fatalf("got = %v, want duplicate-port error naming the second file, the port, and the remedy", err)
 	}
 }
 
-// TestParseContracts_RejectsBadStabilityAndAbsoluteScope proves enum and path-shape validation fail at parse time, where the file and range are known, not later at graph time.
+// TestParseContracts_RemoteScopeAccepted proves a contract may target a remote module source: it is keyed by the declared source string as written, since there is no local directory to resolve until R6 aligns graph lookup.
+func TestParseContracts_RemoteScopeAccepted(t *testing.T) {
+	base := t.TempDir()
+	writeContractsFile(t, filepath.Join(base, "blueprint.hcl"), `
+producer "github.com/org/repo//modules/vpc" {
+  output "vpc_id" { type = "string" }
+}
+`)
+	bp, err := ParseFile(filepath.Join(base, "blueprint.hcl"))
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	dc := bp.Contracts.Lookup("github.com/org/repo//modules/vpc")
+	if dc == nil || dc.Producer["vpc_id"].Type != "string" {
+		t.Fatalf("remote scope must parse and key by the source string: %+v", dc)
+	}
+	if dc.Scope != "github.com/org/repo//modules/vpc" || dc.Dir != "github.com/org/repo//modules/vpc" {
+		t.Fatalf("remote scope spelling must be preserved verbatim: %+v", dc)
+	}
+}
+
+// TestParseContracts_RejectsBadStabilityAndAbsoluteScope proves enum and path-shape validation fail at parse time, where the file and range are known, not later at graph time. A remote source is fine; an absolute filesystem path pins a contract to one machine's layout and is not.
 func TestParseContracts_RejectsBadStabilityAndAbsoluteScope(t *testing.T) {
 	base := t.TempDir()
-	writeContractsFile(t, filepath.Join(base, "contracts.hcl"), `
+	writeContractsFile(t, filepath.Join(base, "blueprint.hcl"), `
 producer "./modules/vpc" {
   output "vpc_id" { stability = "sometimes" }
 }
 `)
-	if _, _, err := ParseContracts(filepath.Join(base, "contracts.hcl")); err == nil || !strings.Contains(err.Error(), "stability") {
+	if _, err := ParseFile(filepath.Join(base, "blueprint.hcl")); err == nil || !strings.Contains(err.Error(), "stability") {
 		t.Fatalf("got = %v, want stability enum error", err)
 	}
-	writeContractsFile(t, filepath.Join(base, "contracts.hcl"), `
+	writeContractsFile(t, filepath.Join(base, "blueprint.hcl"), `
 producer "/abs/modules/vpc" {
   output "vpc_id" { type = "string" }
 }
 `)
-	if _, _, err := ParseContracts(filepath.Join(base, "contracts.hcl")); err == nil || !strings.Contains(err.Error(), "relative") {
+	if _, err := ParseFile(filepath.Join(base, "blueprint.hcl")); err == nil || !strings.Contains(err.Error(), "relative") {
 		t.Fatalf("got = %v, want absolute-scope rejection", err)
 	}
 }
@@ -111,12 +134,12 @@ producer "/abs/modules/vpc" {
 // TestParseContracts_RejectsUnparseableType proves a type attribute that is not a Terraform type constraint dies at parse, so a typo never reaches the cty comparison as a mystery string.
 func TestParseContracts_RejectsUnparseableType(t *testing.T) {
 	base := t.TempDir()
-	writeContractsFile(t, filepath.Join(base, "contracts.hcl"), `
+	writeContractsFile(t, filepath.Join(base, "blueprint.hcl"), `
 producer "./modules/vpc" {
   output "vpc_id" { type = "strin" }
 }
 `)
-	if _, _, err := ParseContracts(filepath.Join(base, "contracts.hcl")); err == nil || !strings.Contains(err.Error(), "type") {
+	if _, err := ParseFile(filepath.Join(base, "blueprint.hcl")); err == nil || !strings.Contains(err.Error(), "type") {
 		t.Fatalf("got = %v, want type-constraint error", err)
 	}
 }
@@ -124,7 +147,7 @@ producer "./modules/vpc" {
 // TestParseContracts_DigestStableAcrossBlockOrder proves reordering blocks in the file does not change identity, the property grants and evidence will rely on.
 func TestParseContracts_DigestStableAcrossBlockOrder(t *testing.T) {
 	base := t.TempDir()
-	writeContractsFile(t, filepath.Join(base, "contracts.hcl"), `
+	writeContractsFile(t, filepath.Join(base, "blueprint.hcl"), `
 producer "./modules/vpc" {
   output "a" { type = "string" }
   output "b" { type = "number" }
@@ -133,11 +156,11 @@ consumer "./modules/app" {
   input "a" { type = "string" }
 }
 `)
-	first, _, err := ParseContracts(filepath.Join(base, "contracts.hcl"))
+	first, err := ParseFile(filepath.Join(base, "blueprint.hcl"))
 	if err != nil {
-		t.Fatalf("ParseContracts: %v", err)
+		t.Fatalf("ParseFile: %v", err)
 	}
-	writeContractsFile(t, filepath.Join(base, "contracts.hcl"), `
+	writeContractsFile(t, filepath.Join(base, "blueprint.hcl"), `
 consumer "./modules/app" {
   input "a" { type = "string" }
 }
@@ -146,30 +169,12 @@ producer "./modules/vpc" {
   output "a" { type = "string" }
 }
 `)
-	second, _, err := ParseContracts(filepath.Join(base, "contracts.hcl"))
+	second, err := ParseFile(filepath.Join(base, "blueprint.hcl"))
 	if err != nil {
-		t.Fatalf("ParseContracts: %v", err)
+		t.Fatalf("ParseFile: %v", err)
 	}
-	if first.Digest() != second.Digest() {
-		t.Fatalf("block order changed the digest: %s vs %s", first.Digest(), second.Digest())
-	}
-}
-
-// TestParseDir_SkipsContractsFile proves a directory blueprint and its sibling contracts.hcl coexist: the reserved filename is not blueprint content, so the merge must skip it instead of dying on its producer/consumer blocks.
-func TestParseDir_SkipsContractsFile(t *testing.T) {
-	dir := t.TempDir()
-	writeContractsFile(t, filepath.Join(dir, "nodes.hcl"), `node "a" { source = "./m" }`)
-	writeContractsFile(t, filepath.Join(dir, "contracts.hcl"), `
-producer "./m" {
-  output "id" { type = "string" }
-}
-`)
-	bp, err := ParseDir(dir)
-	if err != nil {
-		t.Fatalf("ParseDir: %v", err)
-	}
-	if _, ok := bp.NodeByName("a"); !ok {
-		t.Fatal("node a missing from merged blueprint")
+	if first.Contracts.Digest() != second.Contracts.Digest() {
+		t.Fatalf("block order changed the digest: %s vs %s", first.Contracts.Digest(), second.Contracts.Digest())
 	}
 }
 
@@ -182,8 +187,8 @@ func TestParseContracts_RejectsWronglyTypedAttributes(t *testing.T) {
 		"one_of":     "producer \"./m\" {\n  output \"id\" {\n    assert {\n      one_of = \"nope\"\n    }\n  }\n}\n",
 		"min_length": "producer \"./m\" {\n  output \"id\" {\n    assert {\n      min_length = \"x\"\n    }\n  }\n}\n",
 	} {
-		writeContractsFile(t, filepath.Join(base, "contracts.hcl"), hcl)
-		_, _, err := ParseContracts(filepath.Join(base, "contracts.hcl"))
+		writeContractsFile(t, filepath.Join(base, "blueprint.hcl"), hcl)
+		_, err := ParseFile(filepath.Join(base, "blueprint.hcl"))
 		if err == nil || !strings.Contains(err.Error(), "must be") {
 			t.Fatalf("%s: got = %v, want a typed-value parse error", name, err)
 		}
@@ -193,22 +198,22 @@ func TestParseContracts_RejectsWronglyTypedAttributes(t *testing.T) {
 // TestParseContracts_RejectsUnknownNames proves a typo cannot silently weaken a contract: unknown attributes and blocks are parse errors, matching what the language server underlines.
 func TestParseContracts_RejectsUnknownNames(t *testing.T) {
 	base := t.TempDir()
-	writeContractsFile(t, filepath.Join(base, "contracts.hcl"), `
+	writeContractsFile(t, filepath.Join(base, "blueprint.hcl"), `
 producer "./m" {
   output "id" {
     nulleable = false
   }
 }
 `)
-	if _, _, err := ParseContracts(filepath.Join(base, "contracts.hcl")); err == nil || !strings.Contains(err.Error(), "Unsupported argument") {
+	if _, err := ParseFile(filepath.Join(base, "blueprint.hcl")); err == nil || !strings.Contains(err.Error(), "Unsupported argument") {
 		t.Fatalf("got = %v, want unsupported-argument error for nulleable", err)
 	}
-	writeContractsFile(t, filepath.Join(base, "contracts.hcl"), `
+	writeContractsFile(t, filepath.Join(base, "blueprint.hcl"), `
 producter "./m" {
   output "id" { type = "string" }
 }
 `)
-	if _, _, err := ParseContracts(filepath.Join(base, "contracts.hcl")); err == nil || !strings.Contains(err.Error(), "Unsupported block type") {
+	if _, err := ParseFile(filepath.Join(base, "blueprint.hcl")); err == nil || !strings.Contains(err.Error(), "Unsupported block type") {
 		t.Fatalf("got = %v, want unsupported-block error for producter", err)
 	}
 }
@@ -216,15 +221,48 @@ producter "./m" {
 // TestParseContracts_RejectsRoleMismatchedPorts proves an input block inside a producer (an easy slip) is refused with the remedy instead of being misfiled as an output guarantee that later surfaces as a misleading C001.
 func TestParseContracts_RejectsRoleMismatchedPorts(t *testing.T) {
 	base := t.TempDir()
-	writeContractsFile(t, filepath.Join(base, "contracts.hcl"), `
+	writeContractsFile(t, filepath.Join(base, "blueprint.hcl"), `
 producer "./m" {
   input "vpc_id" {
     type = "string"
   }
 }
 `)
-	_, _, err := ParseContracts(filepath.Join(base, "contracts.hcl"))
+	_, err := ParseFile(filepath.Join(base, "blueprint.hcl"))
 	if err == nil || !strings.Contains(err.Error(), "input blocks belong in a consumer block") {
 		t.Fatalf("got = %v, want role-mismatch error naming the right owner", err)
+	}
+}
+
+// TestParseGroupBlock_CarriesContracts proves the case the reserved filename could never express: producer/consumer blocks inside a group body parse into Group.Contracts, scoped to the group definition file's own directory — the same base the group's internal node sources resolve against.
+func TestParseGroupBlock_CarriesContracts(t *testing.T) {
+	base := t.TempDir()
+	writeContractsFile(t, filepath.Join(base, "group.hcl"), `
+group "net" {
+  node "vpc" { source = "./vpc" }
+  producer "./vpc" {
+    output "cidr" { type = "string" }
+  }
+  consumer "./peer" {
+    input "cidr" { type = "string" }
+  }
+}
+`)
+	bp, err := ParseFile(filepath.Join(base, "group.hcl"))
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	if len(bp.Groups) != 1 {
+		t.Fatalf("got %d groups, want 1", len(bp.Groups))
+	}
+	g := bp.Groups[0]
+	if g.Contracts == nil {
+		t.Fatal("group body producer/consumer did not produce Group.Contracts")
+	}
+	if g.Contracts.Lookup(filepath.Join(base, "vpc")) == nil {
+		t.Fatalf("group contract scope must resolve against the group file's dir: %+v", g.Contracts)
+	}
+	if g.Contracts.Lookup(filepath.Join(base, "peer")) == nil {
+		t.Fatalf("group consumer side missing: %+v", g.Contracts)
 	}
 }

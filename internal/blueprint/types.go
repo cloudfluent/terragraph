@@ -129,6 +129,8 @@ type Group struct {
 	Edges  []Edge
 	Uses   []Use
 	Export Export
+	// Contracts is nil when the group body declares no producer/consumer blocks. Scopes resolve against the group definition file's own directory (the same base the group's internal node sources resolve against), and graph.Build merges them into Graph.Contracts alongside the root blueprint's, so a group can carry the contracts for its own internal modules.
+	Contracts *Contracts
 }
 
 // Default paths used when a blueprint declares no vendor block, or omits one of its fields.
@@ -198,6 +200,8 @@ type Blueprint struct {
 	Runtimes []Runtime
 	// ContractMode is the `contracts { mode = ... }` block's value: enforce escalates contract warnings to errors; absence is legacy, and an upgrade never picks a stricter mode on its own.
 	ContractMode string
+	// Contracts holds every producer/consumer block declared in this parse scope, nil when none (the ordinary uncontracted graph). Local scopes are keyed by the absolute directory they resolve to against the declaring file's directory; remote scopes by the declared source string. graph.Build merges this set with every instantiated group's own contracts onto Graph.Contracts.
+	Contracts *Contracts
 }
 
 // RuntimeByName returns the runtime declared with this name in this parse scope, or false if none matches.

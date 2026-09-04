@@ -10,7 +10,7 @@ import (
 	"github.com/cloudfluent/terragraph/internal/exec"
 )
 
-// writeEngineContractsFixture mirrors writeContractsFixture from the graph package at engine level: blueprint.hcl, two modules, one data edge, optional contracts.hcl beside the blueprint — which is the file engine load must find on its own.
+// writeEngineContractsFixture mirrors writeContractsFixture from the graph package at engine level: blueprint.hcl, two modules, one data edge, and contractsHCL's producer/consumer blocks appended to the blueprint itself — blocks the blueprint parser now owns, no separate file for load to find.
 func writeEngineContractsFixture(t *testing.T, contractsHCL string) (*Engine, error) {
 	t.Helper()
 	root := t.TempDir()
@@ -20,14 +20,9 @@ func writeEngineContractsFixture(t *testing.T, contractsHCL string) (*Engine, er
 	if err := osWriteFile(filepath.Join(root, "modules", "app", "main.tf"), []byte("variable \"vpc_id\" { type = string }\noutput \"ok\" { value = var.vpc_id }\n")); err != nil {
 		t.Fatalf("writing app module: %v", err)
 	}
-	bp := "node \"vpc\" { source = \"./modules/vpc\" }\nnode \"app\" { source = \"./modules/app\" }\nedge {\n  from = node.vpc.output.vpc_id\n  to   = node.app.input.vpc_id\n}\n"
+	bp := "node \"vpc\" { source = \"./modules/vpc\" }\nnode \"app\" { source = \"./modules/app\" }\nedge {\n  from = node.vpc.output.vpc_id\n  to   = node.app.input.vpc_id\n}\n" + contractsHCL
 	if err := osWriteFile(filepath.Join(root, "blueprint.hcl"), []byte(bp)); err != nil {
 		t.Fatalf("writing blueprint: %v", err)
-	}
-	if contractsHCL != "" {
-		if err := osWriteFile(filepath.Join(root, "contracts.hcl"), []byte(contractsHCL)); err != nil {
-			t.Fatalf("writing contracts: %v", err)
-		}
 	}
 	return Load(filepath.Join(root, "blueprint.hcl"), exec.Terraform, &bytes.Buffer{}, &bytes.Buffer{})
 }
@@ -42,8 +37,8 @@ func osWriteFile(path string, data []byte) error {
 
 func osMkdirAll(dir string) error { return os.MkdirAll(dir, 0o755) }
 
-// TestLoad_AttachesContractsBesideBlueprint proves engine load finds contracts.hcl next to the blueprint with no flag, and that a mismatched contract reaches users as a warning through the ordinary Validate path.
-func TestLoad_AttachesContractsBesideBlueprint(t *testing.T) {
+// TestLoad_AttachesContractsFromBlueprintBlocks proves producer/consumer blocks in the blueprint reach the engine's graph through the ordinary parse path, and that a mismatched contract reaches users as a warning through the ordinary Validate path.
+func TestLoad_AttachesContractsFromBlueprintBlocks(t *testing.T) {
 	e, err := writeEngineContractsFixture(t, `
 producer "./modules/vpc" {
   output "vpc_id" { type = "list(string)" }
@@ -56,7 +51,7 @@ consumer "./modules/app" {
 		t.Fatalf("Load: %v", err)
 	}
 	if e.Graph.Contracts == nil {
-		t.Fatal("engine load did not attach contracts.hcl sitting next to the blueprint")
+		t.Fatal("engine load did not attach the blueprint's own contract blocks")
 	}
 	found := false
 	for _, p := range e.Validate() {
@@ -72,34 +67,68 @@ consumer "./modules/app" {
 	}
 }
 
-// TestLoad_NoContractsFileIsLegacy proves a directory without contracts.hcl loads exactly as before: nil Contracts, no new problems.
-func TestLoad_NoContractsFileIsLegacy(t *testing.T) {
+// TestLoad_NoContractsBlocksIsLegacy proves a blueprint without producer/consumer blocks loads exactly as before: nil Contracts, no new problems.
+func TestLoad_NoContractsBlocksIsLegacy(t *testing.T) {
 	e, err := writeEngineContractsFixture(t, "")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
 	if e.Graph.Contracts != nil {
-		t.Fatal("contracts attached although no contracts.hcl exists")
+		t.Fatal("contracts attached although the blueprint declares none")
 	}
 	if problems := e.Validate(); len(problems) != 0 {
 		t.Fatalf("got = %v, want zero problems", problems)
 	}
 }
 
-// TestLoad_EnforceModeBlocksValidate proves the mode travels blueprint -> engine -> graph and flips checkValidate's verdict: with enforce, a C003 contract violation fails validation exactly like a structural error would.
-func TestLoad_EnforceModeBlocksValidate(t *testing.T) {
+// TestLoad_DirectoryBlueprintMergesContractsSiblingFile proves the filename is a convention, not a mechanism: loading a directory blueprint, a contracts-only contracts.hcl sibling merges like any other file and its blocks attach with no flag and no lookup.
+func TestLoad_DirectoryBlueprintMergesContractsSiblingFile(t *testing.T) {
 	root := t.TempDir()
 	for path, data := range map[string][]byte{
 		"modules/vpc/main.tf": []byte(`output "vpc_id" { value = "x" }`),
 		"modules/app/main.tf": []byte("variable \"vpc_id\" {\n  type = string\n}\n"),
-		"blueprint.hcl":       []byte("contracts {\n  mode = \"enforce\"\n}\n\nnode \"vpc\" {\n  source = \"./modules/vpc\"\n}\n\nnode \"app\" {\n  source = \"./modules/app\"\n}\n\nedge {\n  from = node.vpc.output.vpc_id\n  to   = node.app.input.vpc_id\n}\n"),
+		"blueprint.hcl":       []byte("node \"vpc\" {\n  source = \"./modules/vpc\"\n}\n\nnode \"app\" {\n  source = \"./modules/app\"\n}\n\nedge {\n  from = node.vpc.output.vpc_id\n  to   = node.app.input.vpc_id\n}\n"),
 		"contracts.hcl":       []byte("producer \"./modules/vpc\" {\n  output \"vpc_id\" {\n    type = \"list(string)\"\n  }\n}\n\nconsumer \"./modules/app\" {\n  input \"vpc_id\" {\n    type = \"string\"\n  }\n}\n"),
 	} {
 		if err := osWriteFile(filepath.Join(root, path), data); err != nil {
 			t.Fatalf("writing %s: %v", path, err)
 		}
 	}
-	e, err := Load(filepath.Join(root, "blueprint.hcl"), exec.Terraform, &bytes.Buffer{}, &bytes.Buffer{})
+	e, err := Load(root, exec.Terraform, &bytes.Buffer{}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if e.Graph.Contracts == nil {
+		t.Fatal("contracts.hcl sibling must merge into a directory blueprint like any other file")
+	}
+	found := false
+	for _, p := range e.Validate() {
+		if strings.Contains(p.Message, "[C003]") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected a C003 warning from the sibling file's contracts")
+	}
+}
+
+// TestLoad_EnforceModeBlocksValidate proves the mode travels blueprint -> engine -> graph and flips checkValidate's verdict: with enforce, a C003 contract violation fails validation exactly like a structural error would.
+func TestLoad_EnforceModeBlocksValidate(t *testing.T) {
+	e, err := writeEngineContractsFixture(t, `
+contracts {
+  mode = "enforce"
+}
+producer "./modules/vpc" {
+  output "vpc_id" {
+    type = "list(string)"
+  }
+}
+consumer "./modules/app" {
+  input "vpc_id" {
+    type = "string"
+  }
+}
+`)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}

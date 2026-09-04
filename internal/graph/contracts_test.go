@@ -9,8 +9,8 @@ import (
 	"github.com/cloudfluent/terragraph/internal/blueprint"
 )
 
-// writeContractsFixture builds two leaf modules wired by one data edge, plus a contracts.hcl scoping both by source directory, and returns the built graph and the parsed contracts for the caller to compose.
-func writeContractsFixture(t *testing.T, contractsHCL string) (*Graph, *blueprint.Contracts, string) {
+// writeContractsFixture builds two leaf modules wired by one data edge, with contractsHCL's producer/consumer blocks appended to the blueprint file itself — the ordinary spelling since contracts became blueprint blocks — and returns the built graph (Build attaches the contracts).
+func writeContractsFixture(t *testing.T, contractsHCL string) (*Graph, string) {
 	t.Helper()
 	root := t.TempDir()
 	writeFixtureFile(t, filepath.Join(root, "modules/vpc/main.tf"), `output "vpc_id" { value = "x" }`)
@@ -25,10 +25,7 @@ edge {
   from = node.vpc.output.vpc_id
   to   = node.app.input.vpc_id
 }
-`)
-	if contractsHCL != "" {
-		writeFixtureFile(t, filepath.Join(root, "contracts.hcl"), contractsHCL)
-	}
+`+contractsHCL)
 	bp, err := blueprint.ParseFile(filepath.Join(root, "blueprint.hcl"))
 	if err != nil {
 		t.Fatalf("ParseFile: %v", err)
@@ -37,25 +34,14 @@ edge {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	var c *blueprint.Contracts
-	if contractsHCL != "" {
-		c, _, err = blueprint.ParseContracts(filepath.Join(root, "contracts.hcl"))
-		if err != nil {
-			t.Fatalf("ParseContracts: %v", err)
-		}
-	}
-	return g, c, root
+	return g, root
 }
 
-// TestGraph_ContractsNilWithoutFile proves the legacy default: no contracts.hcl means a nil Graph.Contracts, and Validate produces exactly the problems it did before contracts existed.
-func TestGraph_ContractsNilWithoutFile(t *testing.T) {
-	g, c, _ := writeContractsFixture(t, "")
-	if c != nil {
-		t.Fatal("fixture returned contracts for an empty file")
-	}
-	g.Contracts = c
+// TestGraph_ContractsNilWithoutBlocks proves the legacy default: a blueprint with no producer/consumer blocks means a nil Graph.Contracts, and Validate produces exactly the problems it did before contracts existed.
+func TestGraph_ContractsNilWithoutBlocks(t *testing.T) {
+	g, _ := writeContractsFixture(t, "")
 	if g.Contracts != nil {
-		t.Fatal("nil contracts must stay nil on the graph")
+		t.Fatal("contracts attached although the blueprint declares none")
 	}
 	if problems := Validate(g); len(problems) != 0 {
 		t.Fatalf("got = %v, want zero problems on an uncontracted graph", problems)
@@ -69,8 +55,6 @@ func TestGraph_ContractsSharedBySourceReuse(t *testing.T) {
 	writeFixtureFile(t, filepath.Join(root, "blueprint.hcl"), `
 node "one" { source = "./modules/shared" }
 node "two" { source = "./modules/shared" }
-`)
-	writeFixtureFile(t, filepath.Join(root, "contracts.hcl"), `
 producer "./modules/shared" {
   output "id" { type = "string" }
 }
@@ -83,11 +67,9 @@ producer "./modules/shared" {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	c, _, err := blueprint.ParseContracts(filepath.Join(root, "contracts.hcl"))
-	if err != nil {
-		t.Fatalf("ParseContracts: %v", err)
+	if g.Contracts == nil {
+		t.Fatal("Build did not attach the blueprint's own contracts")
 	}
-	g.Contracts = c
 
 	one := g.Contracts.Lookup(g.Nodes["one"].Dir)
 	two := g.Contracts.Lookup(g.Nodes["two"].Dir)
@@ -101,7 +83,7 @@ producer "./modules/shared" {
 
 // TestValidate_ContractTypeIncompatibilityIsWarning proves C003: a producer type not convertible to the consumer's requirement is reported with the code, both scopes, and warning severity — advisory in phase 1 by design (docs/contracts.md).
 func TestValidate_ContractTypeIncompatibilityIsWarning(t *testing.T) {
-	g, c, _ := writeContractsFixture(t, `
+	g, _ := writeContractsFixture(t, `
 producer "./modules/vpc" {
   output "vpc_id" { type = "list(string)" }
 }
@@ -109,7 +91,6 @@ consumer "./modules/app" {
   input "vpc_id" { type = "string" }
 }
 `)
-	g.Contracts = c
 	problems := Validate(g)
 	if len(problems) != 1 {
 		t.Fatalf("got = %v, want exactly one problem", problems)
@@ -122,7 +103,7 @@ consumer "./modules/app" {
 
 // TestValidate_ContractNullableAndSensitiveViolations proves C004 and C005 on the same edge: consumer demanding non-null from a nullable producer, and a sensitive producer feeding a consumer that does not accept sensitive values.
 func TestValidate_ContractNullableAndSensitiveViolations(t *testing.T) {
-	g, c, _ := writeContractsFixture(t, `
+	g, _ := writeContractsFixture(t, `
 producer "./modules/vpc" {
   output "vpc_id" {
     type      = "string"
@@ -137,7 +118,6 @@ consumer "./modules/app" {
   }
 }
 `)
-	g.Contracts = c
 	var codes []string
 	for _, p := range Validate(g) {
 		for _, want := range []string{"[C004]", "[C005]"} {
@@ -153,7 +133,7 @@ consumer "./modules/app" {
 
 // TestValidate_ContractPromisesUndeclaredPorts proves C001/C002: a contract naming a port the module never declares is a warning with the remedy, checked even when no edge wires the port — a broken promise is broken unedged too.
 func TestValidate_ContractPromisesUndeclaredPorts(t *testing.T) {
-	g, c, _ := writeContractsFixture(t, `
+	g, _ := writeContractsFixture(t, `
 producer "./modules/vpc" {
   output "ghost" { type = "string" }
 }
@@ -161,7 +141,6 @@ consumer "./modules/app" {
   input "phantom" { type = "string" }
 }
 `)
-	g.Contracts = c
 	problems := Validate(g)
 	joined := ""
 	for _, p := range problems {
@@ -174,12 +153,11 @@ consumer "./modules/app" {
 
 // TestValidate_ContractScopeMatchesNoNode proves C006 with its remedy: a scope pointing at a directory no node uses is almost certainly a stale path after a move.
 func TestValidate_ContractScopeMatchesNoNode(t *testing.T) {
-	g, c, _ := writeContractsFixture(t, `
+	g, _ := writeContractsFixture(t, `
 producer "./modules/moved-away" {
   output "id" { type = "string" }
 }
 `)
-	g.Contracts = c
 	problems := Validate(g)
 	if len(problems) != 1 || !strings.Contains(problems[0].Message, "[C006]") || !strings.Contains(problems[0].Message, "no node") {
 		t.Fatalf("got = %v, want one C006 warning", problems)
@@ -188,7 +166,7 @@ producer "./modules/moved-away" {
 
 // TestValidate_CompatibleContractsAreSilent proves the negative: exact-match types, nullable=false on both sides, sensitive accepted — zero problems, so adoption cannot punish correct contracts with noise.
 func TestValidate_CompatibleContractsAreSilent(t *testing.T) {
-	g, c, _ := writeContractsFixture(t, `
+	g, _ := writeContractsFixture(t, `
 producer "./modules/vpc" {
   output "vpc_id" {
     type      = "string"
@@ -204,7 +182,6 @@ consumer "./modules/app" {
   }
 }
 `)
-	g.Contracts = c
 	if problems := Validate(g); len(problems) != 0 {
 		t.Fatalf("got = %v, want zero problems for compatible contracts", problems)
 	}
@@ -212,7 +189,7 @@ consumer "./modules/app" {
 
 // TestValidate_PartialPortCoverageChecksNothing proves a contract on only one side of an edge's ports stays silent: a map miss must not fabricate a zero-valued PortContract whose nil flags fire C004/C005 for a port nobody promised.
 func TestValidate_PartialPortCoverageChecksNothing(t *testing.T) {
-	g, c, _ := writeContractsFixture(t, `
+	g, _ := writeContractsFixture(t, `
 consumer "./modules/app" {
   input "vpc_id" {
     type     = "string"
@@ -220,7 +197,6 @@ consumer "./modules/app" {
   }
 }
 `)
-	g.Contracts = c
 	if problems := Validate(g); len(problems) != 0 {
 		t.Fatalf("got = %v, want zero problems when the producer port is uncontracted", problems)
 	}
@@ -228,7 +204,7 @@ consumer "./modules/app" {
 
 // TestValidate_EnforceEscalatesContractWarningsToErrors proves mode is the only severity dial: same graph, same C003, warning under legacy and error under enforce.
 func TestValidate_EnforceEscalatesContractWarningsToErrors(t *testing.T) {
-	g, c, _ := writeContractsFixture(t, `
+	g, _ := writeContractsFixture(t, `
 producer "./modules/vpc" {
   output "vpc_id" { type = "list(string)" }
 }
@@ -236,12 +212,160 @@ consumer "./modules/app" {
   input "vpc_id" { type = "string" }
 }
 `)
-	g.Contracts = c
 	if problems := Validate(g); len(problems) != 1 || problems[0].IsError() {
 		t.Fatalf("legacy must stay advisory: %v", problems)
 	}
 	g.ContractMode = "enforce"
 	if problems := Validate(g); len(problems) != 1 || !problems[0].IsError() {
 		t.Fatalf("enforce must escalate to error: %v", problems)
+	}
+}
+
+// writeGroupContractsFixture builds a group whose own group.hcl contracts its internal module with producerType, instantiates it once, and wires an expanded edge into a consumer node whose contract demands string.
+func writeGroupContractsFixture(t *testing.T, groupContracts string) *Graph {
+	t.Helper()
+	root := t.TempDir()
+	writeFixtureFile(t, filepath.Join(root, "modules/net/vpc/main.tf"), `output "cidr" { value = "10.0.0.0/8" }`)
+	writeFixtureFile(t, filepath.Join(root, "modules/app/main.tf"), `
+variable "cidr" { type = string }
+output "ok" { value = var.cidr }
+`)
+	writeFixtureFile(t, filepath.Join(root, "modules/net/group.hcl"), `
+group "net" {
+  node "vpc" { source = "./vpc" }
+  export {
+    output "cidr" { from = node.vpc.output.cidr }
+  }
+`+groupContracts+`}
+`)
+	writeFixtureFile(t, filepath.Join(root, "blueprint.hcl"), `
+use "net" {
+  as     = "net"
+  source = "./modules/net"
+}
+node "app" { source = "./modules/app" }
+edge {
+  from = use.net.output.cidr
+  to   = node.app.input.cidr
+}
+consumer "./modules/app" {
+  input "cidr" { type = "string" }
+}
+`)
+	bp, err := blueprint.ParseFile(filepath.Join(root, "blueprint.hcl"))
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	g, err := Build(bp, root)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	return g
+}
+
+// TestBuild_GroupCarriesOwnContracts proves the structural win the reserved filename could never express: a group's own group.hcl contracts its internal module, Build merges those contracts into the enclosing graph keyed by the internal module's real directory, and an edge expanded from a use of that group is checked against the internal promise (C003 here) with no contract file beside the root blueprint.
+func TestBuild_GroupCarriesOwnContracts(t *testing.T) {
+	g := writeGroupContractsFixture(t, `
+  producer "./vpc" {
+    output "cidr" { type = "list(string)" }
+  }
+`)
+	if g.Contracts == nil {
+		t.Fatal("group's own contracts were not merged into the graph")
+	}
+	found := false
+	for _, p := range Validate(g) {
+		if strings.Contains(p.Message, "[C003]") {
+			found = true
+			if p.IsError() {
+				t.Fatalf("contract problems must stay warnings: %s", p.Message)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected C003 on the edge expanded from the group instance, checked against the group's internal promise")
+	}
+}
+
+// TestBuild_GroupContractUndeclaredPortFiresC001 proves a group's promise about its internal module is checked against the module itself: an output the module never declares is C001 even though the group encapsulates the node, because the check keys on the internal node's real directory.
+func TestBuild_GroupContractUndeclaredPortFiresC001(t *testing.T) {
+	g := writeGroupContractsFixture(t, `
+  producer "./vpc" {
+    output "ghost" { type = "string" }
+  }
+`)
+	found := false
+	for _, p := range Validate(g) {
+		if strings.Contains(p.Message, "[C001]") && strings.Contains(p.Message, "ghost") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected C001 for the group's promise about a port its internal module never declared")
+	}
+}
+
+// TestBuild_IdenticalContractsAcrossGroupAndRootDedupe proves the merge rule for legit reuse: the root blueprint and a group both promising the same thing about the same module directory dedupe silently into one record.
+func TestBuild_IdenticalContractsAcrossGroupAndRootDedupe(t *testing.T) {
+	root := t.TempDir()
+	writeFixtureFile(t, filepath.Join(root, "modules/net/vpc/main.tf"), `output "id" { value = "x" }`)
+	writeFixtureFile(t, filepath.Join(root, "modules/net/group.hcl"), `
+group "net" {
+  node "vpc" { source = "./vpc" }
+  producer "./vpc" {
+    output "id" { type = "string" }
+  }
+}
+`)
+	writeFixtureFile(t, filepath.Join(root, "blueprint.hcl"), `
+use "net" {
+  as     = "net"
+  source = "./modules/net"
+}
+producer "./modules/net/vpc" {
+  output "id" { type = "string" }
+}
+`)
+	bp, err := blueprint.ParseFile(filepath.Join(root, "blueprint.hcl"))
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	g, err := Build(bp, root)
+	if err != nil {
+		t.Fatalf("identical claims must dedupe, got: %v", err)
+	}
+	if problems := Validate(g); len(problems) != 0 {
+		t.Fatalf("got = %v, want zero problems after dedupe", problems)
+	}
+}
+
+// TestBuild_ConflictingContractsAcrossGroupAndRootError proves the other half of the merge rule: the same (source, role, port) with different claims in the blueprint and in a group is a Build error, never a silent winner.
+func TestBuild_ConflictingContractsAcrossGroupAndRootError(t *testing.T) {
+	root := t.TempDir()
+	writeFixtureFile(t, filepath.Join(root, "modules/net/vpc/main.tf"), `output "id" { value = "x" }`)
+	writeFixtureFile(t, filepath.Join(root, "modules/net/group.hcl"), `
+group "net" {
+  node "vpc" { source = "./vpc" }
+  producer "./vpc" {
+    output "id" { type = "string" }
+  }
+}
+`)
+	writeFixtureFile(t, filepath.Join(root, "blueprint.hcl"), `
+use "net" {
+  as     = "net"
+  source = "./modules/net"
+}
+producer "./modules/net/vpc" {
+  output "id" { type = "number" }
+}
+`)
+	bp, err := blueprint.ParseFile(filepath.Join(root, "blueprint.hcl"))
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	_, err = Build(bp, root)
+	if err == nil || !strings.Contains(err.Error(), "declared both in the blueprint and in a group") {
+		t.Fatalf("got = %v, want conflicting-claims Build error", err)
 	}
 }

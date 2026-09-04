@@ -2,24 +2,15 @@ package blueprint
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/ext/typeexpr"
-	"github.com/hashicorp/hcl/v2/hclparse"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 	"github.com/zclconf/go-cty/cty"
 )
-
-var contractsTopSchema = &hcl.BodySchema{
-	Blocks: []hcl.BlockHeaderSchema{
-		{Type: "producer", LabelNames: []string{"source"}},
-		{Type: "consumer", LabelNames: []string{"source"}},
-	},
-}
 
 var contractsSideSchema = &hcl.BodySchema{
 	Blocks: []hcl.BlockHeaderSchema{
@@ -48,111 +39,72 @@ var assertSchema = &hcl.BodySchema{
 	},
 }
 
-// ParseContracts parses path — one file, or a directory whose .hcl files are merged (mirroring LoadPath) — and returns the contract set plus the base directory scopes resolve against. Sibling producer/consumer blocks with the same source collapse into one DirContracts; the same port declared twice across merged files is an error naming the port and the remedy, so a merge can never silently drop a promise.
-func ParseContracts(path string) (*Contracts, string, error) {
-	info, err := os.Stat(path)
-	if err != nil {
-		return nil, "", fmt.Errorf("resolving contracts path: %w", err)
+// parseContractSideBlock parses one `producer`/`consumer` block — a top-level blueprint block, or one inside a group body (see parseGroupBlock) — into c. Local scopes ("./x", "../x") resolve against baseDir, the directory of the file declaring the block, exactly like a node source in that same file; any other non-absolute source is a remote module source kept as written and keyed by the source string itself (graph lookup aligns with that key in a later change). Absolute filesystem paths are rejected: they would pin a contract to one machine's layout. seen detects the same (role, source, port) declared twice across everything merged into c, so a merge can never silently drop a promise.
+func parseContractSideBlock(block *hcl.Block, baseDir string, c *Contracts, seen map[string]bool) error {
+	role := block.Type // "producer" | "consumer"
+	scope := block.Labels[0]
+	if scope == "" {
+		return fmt.Errorf("%s: contract %s source must not be empty", block.DefRange, role)
 	}
-	var files []string
-	baseDir := filepath.Dir(path)
-	if info.IsDir() {
-		baseDir = path
-		entries, err := os.ReadDir(path)
-		if err != nil {
-			return nil, "", fmt.Errorf("reading contracts directory: %w", err)
-		}
-		for _, e := range entries {
-			if !e.IsDir() && strings.HasSuffix(e.Name(), ".hcl") {
-				files = append(files, filepath.Join(path, e.Name()))
-			}
-		}
-		sort.Strings(files) // merge order is irrelevant to the result, but a stable order makes any future range-carrying error deterministic
-	} else {
-		files = []string{path}
+	if filepath.IsAbs(scope) {
+		return fmt.Errorf("%s: contract.%s.%s: source must be a relative path like \"./modules/vpc\" or a remote module source, got %q", block.DefRange, role, scope, scope)
 	}
-
-	c := &Contracts{ByDir: map[string]*DirContracts{}}
-	parser := hclparse.NewParser()
-	for _, file := range files {
-		if err := parseContractsFile(parser, file, baseDir, c); err != nil {
-			return nil, "", err
-		}
+	dir := scope
+	if strings.HasPrefix(scope, "./") || strings.HasPrefix(scope, "../") {
+		dir = filepath.Clean(filepath.Join(baseDir, scope))
 	}
-	return c, baseDir, nil
-}
-
-func parseContractsFile(parser *hclparse.Parser, file, baseDir string, c *Contracts) error {
-	src, err := os.ReadFile(file)
-	if err != nil {
-		return fmt.Errorf("reading %s: %w", file, err)
+	dc := c.ByDir[dir]
+	if dc == nil {
+		dc = &DirContracts{Scope: scope, Dir: dir, Producer: map[string]PortContract{}, Consumer: map[string]PortContract{}}
+		c.ByDir[dir] = dc
 	}
-	f, diags := parser.ParseHCL(src, file)
+	ports := dc.Producer
+	portKind := "output"
+	if role == "consumer" {
+		ports = dc.Consumer
+		portKind = "input"
+	}
+	side, diags := block.Body.Content(contractsSideSchema)
 	if diags.HasErrors() {
-		return fmt.Errorf("parsing %s: %s", file, diags.Error())
+		return fmt.Errorf("%s: %s", block.DefRange, diags.Error())
 	}
-	content, diags := f.Body.Content(contractsTopSchema)
-	if diags.HasErrors() {
-		return fmt.Errorf("parsing %s: %s", file, diags.Error())
-	}
-	for _, block := range content.Blocks {
-		role := block.Type // "producer" | "consumer"
-		scope := block.Labels[0]
-		if !strings.HasPrefix(scope, "./") && !strings.HasPrefix(scope, "../") {
-			return fmt.Errorf("contract.%s.%s: source must be a relative path like \"./modules/vpc\" (as node sources are), got %q", role, scope, scope)
-		}
-		dir := filepath.Clean(filepath.Join(baseDir, scope))
-		dc := c.ByDir[dir]
-		if dc == nil {
-			dc = &DirContracts{Scope: scope, Dir: dir, Producer: map[string]PortContract{}, Consumer: map[string]PortContract{}}
-			c.ByDir[dir] = dc
-		}
-		ports := dc.Producer
-		portKind := "output"
+	for _, port := range side.Blocks {
+		name := port.Labels[0]
+		kind := "output"
 		if role == "consumer" {
-			ports = dc.Consumer
-			portKind = "input"
+			kind = "input"
 		}
-		side, diags := block.Body.Content(contractsSideSchema)
-		if diags.HasErrors() {
-			return fmt.Errorf("parsing %s: %s", file, diags.Error())
-		}
-		for _, port := range side.Blocks {
-			name := port.Labels[0]
-			kind := "output"
+		if port.Type != kind {
+			owner := "consumer"
 			if role == "consumer" {
-				kind = "input"
+				owner = "producer"
 			}
-			if port.Type != kind {
-				owner := "consumer"
-				if role == "consumer" {
-					owner = "producer"
-				}
-				return fmt.Errorf("contract.%s.%s: %s blocks belong in a %s block; move %q", role, scope, port.Type, owner, name)
-			}
-			pc, err := parsePortContract(port, role, kind, scope, name, file)
-			if err != nil {
-				return err
-			}
-			if _, dup := ports[name]; dup {
-				return fmt.Errorf("contract.%s.%s.%s: declared more than once across %s; remove one", role, portKind, name, baseDir)
-			}
-			ports[name] = pc
+			return fmt.Errorf("%s: contract.%s.%s: %s blocks belong in a %s block; move %q", block.DefRange, role, scope, port.Type, owner, name)
 		}
+		key := role + " " + dir + " " + name
+		if seen[key] {
+			return fmt.Errorf("%s: contract.%s.%s.%s declared more than once across merged files; remove one", block.DefRange, role, portKind, name)
+		}
+		seen[key] = true
+		pc, err := parsePortContract(port, role, kind, scope, name)
+		if err != nil {
+			return err
+		}
+		ports[name] = pc
 	}
 	return nil
 }
 
-func parsePortContract(port *hcl.Block, role, kind, scope, name, file string) (PortContract, error) {
+func parsePortContract(port *hcl.Block, role, kind, scope, name string) (PortContract, error) {
 	pc := PortContract{Name: name, Scope: scope, Stability: "stable"}
 	content, diags := port.Body.Content(portContractSchema)
 	if diags.HasErrors() {
-		return PortContract{}, fmt.Errorf("parsing %s: %s", file, diags.Error())
+		return PortContract{}, fmt.Errorf("%s: %s", port.DefRange, diags.Error())
 	}
 	for _, attr := range content.Attributes {
 		val, diags := attr.Expr.Value(nil)
 		if diags.HasErrors() {
-			return PortContract{}, fmt.Errorf("parsing %s: %s", file, diags.Error())
+			return PortContract{}, fmt.Errorf("%s: %s", port.DefRange, diags.Error())
 		}
 		switch attr.Name {
 		case "type":
@@ -185,12 +137,12 @@ func parsePortContract(port *hcl.Block, role, kind, scope, name, file string) (P
 	for _, ab := range content.Blocks {
 		ac, diags := ab.Body.Content(assertSchema)
 		if diags.HasErrors() {
-			return PortContract{}, fmt.Errorf("parsing %s: %s", file, diags.Error())
+			return PortContract{}, fmt.Errorf("%s: %s", port.DefRange, diags.Error())
 		}
 		for _, attr := range ac.Attributes {
 			val, diags := attr.Expr.Value(nil)
 			if diags.HasErrors() {
-				return PortContract{}, fmt.Errorf("parsing %s: %s", file, diags.Error())
+				return PortContract{}, fmt.Errorf("%s: %s", port.DefRange, diags.Error())
 			}
 			switch attr.Name {
 			case "nonempty":
