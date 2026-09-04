@@ -31,6 +31,11 @@ func loadTFVarsCleanupEngine(t *testing.T) *Engine {
 	if err := os.WriteFile(filepath.Join(moduleDir, "managed.out"), []byte("version-one\n"), 0o644); err != nil {
 		t.Fatalf("writing managed output: %v", err)
 	}
+	// The unchanged path reads outputs without applying, and the fake terraform refuses `output`
+	// with no state the way the real one does, so this node has to look already-applied.
+	if err := os.WriteFile(filepath.Join(moduleDir, "terraform.tfstate"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("writing fixture state: %v", err)
+	}
 	blueprintPath := writeBlueprint(t, baseDir, `
 node "app" {
   source = "./module"
