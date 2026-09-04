@@ -52,6 +52,7 @@ Mistakes that can be found without evaluating anything are underlined as you typ
 - A module input or output name that doesn't exist
 - A `from` referencing an input, or a `to` referencing an output
 - A `vars` entry the module has no such input variable for, or a `use.vars` key that is not an export input
+- An edge `input` block whose label isn't an input of the `to` node, or whose `from = output.<attr>` isn't an output of the `from` node
 - In `contracts.hcl`: a non-relative source path, a duplicate port, a bad `stability` value, an unknown attribute or block name, and a port block under the wrong role (an `input` inside a `producer` block)
 Hovering an error lists the input or output names that are available.
 

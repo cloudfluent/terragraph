@@ -340,6 +340,9 @@ var completionSchemas = map[string][]attributeSpec{
 		{name: "lock", insert: "lock {\n  s3 {\n    bucket = \"\"\n    key    = \"\"\n    region = \"\"\n  }\n}", detail: "Blueprint block", documentation: "Serializes plan/apply/destroy across machines with a remote lock object."},
 		{name: "contracts", insert: "contracts {\n  mode = \"\"\n}", detail: "Blueprint block", documentation: "Contract strictness: legacy, warn (default), or enforce."},
 	},
+	"contracts": {
+		{name: "mode", insert: "mode = \"warn\"", detail: "legacy | warn | enforce", documentation: "Contract strictness; enforce turns C001-C006 into errors."},
+	},
 	"node": {
 		{name: "source", insert: "source = \"\"", detail: "required string", documentation: "Path or remote source of the Terraform or OpenTofu module."},
 		{name: "vars", insert: "vars = {\n}", detail: "object", documentation: "Literal Terraform input values. Use an edge for another node's output."},
