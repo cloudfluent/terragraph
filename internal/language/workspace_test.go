@@ -289,6 +289,29 @@ edge {
 	}
 }
 
+func TestWorkspaceCompletesEdgeContractBlocks(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "blueprint.hcl")
+	for _, tc := range []struct {
+		name, text, want string
+	}{
+		{"direct edge", "edge {\n  __CURSOR__\n}", "contract"},
+		{"nested input", "edge {\n  input \"id\" {\n    __CURSOR__\n  }\n}", "contract"},
+		{"contract", "edge {\n  contract {\n    __CURSOR__\n  }\n}", "producer"},
+		{"producer", "edge {\n  contract {\n    producer {\n      __CURSOR__\n    }\n  }\n}", "nullable"},
+		{"consumer", "edge {\n  contract {\n    consumer {\n      __CURSOR__\n    }\n  }\n}", "sensitive"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clean, offset := cursor(tc.text, "__CURSOR__")
+			ws := NewWorkspace(dir)
+			ws.SetDocument(path, []byte(clean))
+			if items := ws.Complete(context.Background(), path, offset); !contains(items, tc.want) {
+				t.Fatalf("completion %q missing from %#v", tc.want, items)
+			}
+		})
+	}
+}
+
 func TestWorkspaceDiagnosesEdgeInputBlockPorts(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "stacks", "vpc", "main.tf"), `output "vpc_id" { value = "x" }`)

@@ -78,8 +78,22 @@ func IsRemote(src string) bool {
 //
 // One Edge is not necessarily one `edge` block: a block wiring several outputs of one node into several inputs of another can spell that as nested `input` blocks, which parseEdgeInputs expands into one Edge each before any of this package's callers see them. There is deliberately no field here recording that, so no consumer of a Blueprint can behave differently depending on how a pair of ports was written.
 type Edge struct {
-	From PortRef
-	To   PortRef
+	From     PortRef
+	To       PortRef
+	Contract *EdgeContract
+}
+
+// ContractSide is one half of an edge-local contract: the producer guarantees what its output may carry, while the consumer states what its input accepts.
+type ContractSide struct {
+	Type      string
+	Nullable  bool
+	Sensitive bool
+}
+
+// EdgeContract makes one directed data binding a two-sided agreement without changing the graph's execution direction.
+type EdgeContract struct {
+	Producer ContractSide
+	Consumer ContractSide
 }
 
 // IsDataEdge reports whether this edge carries a value (explicit) as opposed to only constraining execution order (implicit).

@@ -13,6 +13,19 @@ node "eks2" {
 edge {
   from = node.vpc.output.vpc_id
   to   = node.eks.input.vpc_id
+
+  contract {
+    producer {
+      type      = "string"
+      nullable  = false
+      sensitive = false
+    }
+    consumer {
+      type      = "string"
+      nullable  = false
+      sensitive = false
+    }
+  }
 }
 
 edge {

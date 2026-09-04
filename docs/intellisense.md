@@ -37,6 +37,8 @@ edge {
 }
 ```
 
+Data edges also complete an optional [`contract`](blueprint.md#optional-contracts-on-data-edges) block. Inside it, completion offers the required `producer` and `consumer` blocks and their `type`, `nullable`, and `sensitive` fields. The same completion is available inside each nested `input` block.
+
 ## Go to definition
 
 `Cmd+Click` (macOS), `Ctrl+Click` (Windows/Linux), or `F12` on `node.vpc` or `runtime.tofu` jumps to its declaration, including nodes and runtimes declared in another `.hcl` file in the same blueprint directory.

@@ -198,7 +198,7 @@ func rewriteEdge(e blueprint.Edge, uses map[string]useInfo, qualify func(string)
 	out := make([]blueprint.Edge, 0, len(froms)*len(tos))
 	for _, f := range froms {
 		for _, t := range tos {
-			out = append(out, blueprint.Edge{From: f, To: t})
+			out = append(out, blueprint.Edge{From: f, To: t, Contract: e.Contract})
 		}
 	}
 	return out, nil

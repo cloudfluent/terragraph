@@ -120,6 +120,7 @@ func Validate(g *Graph) []Problem {
 		})
 	}
 
+	problems = append(problems, edgeContractProblems(g)...)
 	problems = append(problems, backendProblems(g)...)
 	problems = append(problems, remoteLockProblems(g)...)
 

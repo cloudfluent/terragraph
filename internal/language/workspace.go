@@ -336,9 +336,25 @@ var completionSchemas = map[string][]attributeSpec{
 		{name: "from", insert: "from = node.", detail: "required output reference", documentation: "Source node output, or a bare node for an ordering-only edge."},
 		{name: "to", insert: "to = node.", detail: "required input reference", documentation: "Target node input, or a bare node for an ordering-only edge."},
 		{name: "input", insert: "input \"name\" {\n  from = output.\n}", detail: "Edge block", documentation: "Wires one more output of this edge's from node into an input of its to node. Only on an edge whose from and to are bare references."},
+		{name: "contract", insert: "contract {\n  producer {\n    type      = \"string\"\n    nullable  = false\n    sensitive = false\n  }\n  consumer {\n    type      = \"string\"\n    nullable  = false\n    sensitive = false\n  }\n}", detail: "Optional edge contract", documentation: "Declares the producer guarantee and consumer requirement for this data binding."},
 	},
 	"edge.input": {
 		{name: "from", insert: "from = output.", detail: "required output reference", documentation: "Which output of the edge's own from node feeds this input. Relative: the source node is not repeated here."},
+		{name: "contract", insert: "contract {\n  producer {\n    type      = \"string\"\n    nullable  = false\n    sensitive = false\n  }\n  consumer {\n    type      = \"string\"\n    nullable  = false\n    sensitive = false\n  }\n}", detail: "Optional edge contract", documentation: "Declares the producer guarantee and consumer requirement for this input binding."},
+	},
+	"contract": {
+		{name: "producer", insert: "producer {\n  type      = \"string\"\n  nullable  = false\n  sensitive = false\n}", detail: "Required contract block", documentation: "Declares what the source output guarantees."},
+		{name: "consumer", insert: "consumer {\n  type      = \"string\"\n  nullable  = false\n  sensitive = false\n}", detail: "Required contract block", documentation: "Declares what the target input accepts."},
+	},
+	"producer": {
+		{name: "type", insert: "type = \"string\"", detail: "required type constraint", documentation: "Terraform type constraint guaranteed by the producer."},
+		{name: "nullable", insert: "nullable = false", detail: "required bool", documentation: "Whether the producer may return null."},
+		{name: "sensitive", insert: "sensitive = false", detail: "required bool", documentation: "Whether the producer value is sensitive."},
+	},
+	"consumer": {
+		{name: "type", insert: "type = \"string\"", detail: "required type constraint", documentation: "Terraform type constraint accepted by the consumer."},
+		{name: "nullable", insert: "nullable = false", detail: "required bool", documentation: "Whether the consumer accepts null."},
+		{name: "sensitive", insert: "sensitive = false", detail: "required bool", documentation: "Whether the consumer accepts a sensitive value."},
 	},
 	"runtime": {
 		{name: "binary", insert: "binary = \"\"", detail: "required string", documentation: "Terraform or OpenTofu binary path, or a command resolved from PATH."},
@@ -581,7 +597,7 @@ func enclosingNamedBlock(text []byte, offset int, name string) (start, end int, 
 	return brace, len(text), true
 }
 
-var blockHeader = regexp.MustCompile(`(?s)(node|edge|runtime|group|use|vendor|tfvars|lock|s3|export|input|output)\s*(?:"[^\"]*")?\s*$`)
+var blockHeader = regexp.MustCompile(`(?s)(node|edge|runtime|group|use|vendor|tfvars|lock|s3|export|input|output|contract|producer|consumer)\s*(?:"[^\"]*")?\s*$`)
 
 // openBlock is one Blueprint block still open at some offset: its keyword (empty
 // for a brace that opens an object rather than a block, e.g. vars or env) and the

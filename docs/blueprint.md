@@ -72,6 +72,60 @@ When you own both modules, the better reduction is still one `object`-typed outp
 
 Either endpoint may be a group instance (`use.<name>`), and each expanded edge then resolves through that instance's `export` exactly as a separately written one would, fan-out included: see [groups.md](groups.md).
 
+## Optional contracts on data edges
+
+A data edge may declare an optional two-sided contract. The graph remains directed from `from` to `to`: `producer` records what the source output guarantees, and `consumer` records what the target input accepts. This adds validation at the boundary; it does not create a reverse edge or change execution order.
+
+```hcl
+edge {
+  from = node.vpc.output.vpc_id
+  to   = node.eks.input.vpc_id
+
+  contract {
+    producer {
+      type      = "string"
+      nullable  = false
+      sensitive = false
+    }
+    consumer {
+      type      = "string"
+      nullable  = false
+      sensitive = false
+    }
+  }
+}
+```
+
+Both blocks and all three fields are required when `contract` is present. `type` is a quoted Terraform type constraint such as `"string"`, `"list(string)"`, or `"object({ id = string })"`. Validation reports an Error when the producer type cannot be safely converted to the consumer type, when a nullable producer feeds a non-nullable consumer, or when a sensitive producer feeds a consumer that does not accept sensitive values. When Terraform module metadata exposes the endpoint type or sensitivity, the contract is also checked against that declaration.
+
+Contracts are only valid on data edges. Ordering-only edges carry no value to describe. An edge using nested `input` shorthand declares the contract inside each input, because each expanded binding can have a different agreement:
+
+```hcl
+edge {
+  from = node.vpc
+  to   = node.eks
+
+  input "vpc_id" {
+    from = output.vpc_id
+
+    contract {
+      producer {
+        type      = "string"
+        nullable  = false
+        sensitive = false
+      }
+      consumer {
+        type      = "string"
+        nullable  = false
+        sensitive = false
+      }
+    }
+  }
+}
+```
+
+Omitting `contract` preserves existing edge behavior. Contracts also survive `use` export expansion and fan-out, so validation is applied to every resulting leaf binding.
+
 ## Reusing the same module across instances
 
 A node can reuse one module `source` across multiple instances (e.g. the same `./stacks/vpc` for both `dev` and `prod`) without their state colliding. If the module declares `backend "local"` (an empty block is enough) and the node does not set `path`, terragraph fills `path` to `<blueprint dir>/.terragraph/state/<node>.tfstate` (absolute) and passes it as `terraform init -backend-config=path=...`. An explicit `path` wins.

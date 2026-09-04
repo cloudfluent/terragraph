@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/hashicorp/hcl/v2"
+	"github.com/hashicorp/hcl/v2/ext/typeexpr"
 	"github.com/hashicorp/hcl/v2/hclparse"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 	"github.com/zclconf/go-cty/cty"
@@ -80,11 +81,28 @@ var edgeSchema = &hcl.BodySchema{
 	},
 	Blocks: []hcl.BlockHeaderSchema{
 		{Type: "input", LabelNames: []string{"name"}},
+		{Type: "contract"},
 	},
 }
 
 var edgeInputSchema = &hcl.BodySchema{
 	Attributes: []hcl.AttributeSchema{{Name: "from", Required: true}},
+	Blocks:     []hcl.BlockHeaderSchema{{Type: "contract"}},
+}
+
+var edgeContractSchema = &hcl.BodySchema{
+	Blocks: []hcl.BlockHeaderSchema{
+		{Type: "producer"},
+		{Type: "consumer"},
+	},
+}
+
+var contractSideSchema = &hcl.BodySchema{
+	Attributes: []hcl.AttributeSchema{
+		{Name: "type", Required: true},
+		{Name: "nullable", Required: true},
+		{Name: "sensitive", Required: true},
+	},
 }
 
 var groupBodySchema = &hcl.BodySchema{
@@ -753,7 +771,14 @@ func parseEdgeBlock(block *hcl.Block) ([]Edge, error) {
 		return nil, err
 	}
 
+	contracts := content.Blocks.OfType("contract")
+	if len(contracts) > 1 {
+		return nil, fmt.Errorf("%s: duplicate contract block", contracts[1].DefRange)
+	}
 	if inputs := content.Blocks.OfType("input"); len(inputs) > 0 {
+		if len(contracts) > 0 {
+			return nil, fmt.Errorf("%s: an edge with nested input blocks declares each contract inside the input block", contracts[0].DefRange)
+		}
 		return parseEdgeInputs(block, inputs, from, to)
 	}
 
@@ -774,7 +799,19 @@ func parseEdgeBlock(block *hcl.Block) ([]Edge, error) {
 		}
 	}
 
-	return []Edge{{From: from, To: to}}, nil
+	var contract *EdgeContract
+	if len(contracts) == 1 {
+		if !from.IsPort() {
+			return nil, fmt.Errorf("%s: a contract can only be declared on a data edge", contracts[0].DefRange)
+		}
+		parsed, err := parseEdgeContract(contracts[0])
+		if err != nil {
+			return nil, err
+		}
+		contract = &parsed
+	}
+
+	return []Edge{{From: from, To: to, Contract: contract}}, nil
 }
 
 // parseEdgeInputs expands an edge's nested `input "<var>" { from = output.<attr> }` blocks into one data edge each, between the same pair of endpoints the enclosing edge names. The shape deliberately mirrors a group's export input: a block label naming the destination input, and one attribute saying where the value comes from. Its purpose is only to stop a pair of modules that already expose many flat variables from needing one near-identical `edge` block per variable; nothing about the resulting graph differs from having written them out.
@@ -806,12 +843,83 @@ func parseEdgeInputs(block *hcl.Block, inputs hcl.Blocks, from, to PortRef) ([]E
 			return nil, err
 		}
 
+		contracts := ic.Blocks.OfType("contract")
+		if len(contracts) > 1 {
+			return nil, fmt.Errorf("%s: duplicate contract block", contracts[1].DefRange)
+		}
+		var contract *EdgeContract
+		if len(contracts) == 1 {
+			parsed, err := parseEdgeContract(contracts[0])
+			if err != nil {
+				return nil, err
+			}
+			contract = &parsed
+		}
+
 		edges = append(edges, Edge{
-			From: PortRef{Entity: from.Entity, Node: from.Node, Kind: PortOutput, Name: output},
-			To:   PortRef{Entity: to.Entity, Node: to.Node, Kind: PortInput, Name: name},
+			From:     PortRef{Entity: from.Entity, Node: from.Node, Kind: PortOutput, Name: output},
+			To:       PortRef{Entity: to.Entity, Node: to.Node, Kind: PortInput, Name: name},
+			Contract: contract,
 		})
 	}
 	return edges, nil
+}
+
+func parseEdgeContract(block *hcl.Block) (EdgeContract, error) {
+	content, diags := block.Body.Content(edgeContractSchema)
+	if diags.HasErrors() {
+		return EdgeContract{}, fmt.Errorf("%s: %s", block.DefRange, diags.Error())
+	}
+	producers := content.Blocks.OfType("producer")
+	consumers := content.Blocks.OfType("consumer")
+	if len(producers) != 1 || len(consumers) != 1 {
+		return EdgeContract{}, fmt.Errorf("%s: contract requires exactly one producer block and one consumer block", block.DefRange)
+	}
+	producer, err := parseContractSide(producers[0], "producer")
+	if err != nil {
+		return EdgeContract{}, err
+	}
+	consumer, err := parseContractSide(consumers[0], "consumer")
+	if err != nil {
+		return EdgeContract{}, err
+	}
+	return EdgeContract{Producer: producer, Consumer: consumer}, nil
+}
+
+func parseContractSide(block *hcl.Block, role string) (ContractSide, error) {
+	content, diags := block.Body.Content(contractSideSchema)
+	if diags.HasErrors() {
+		return ContractSide{}, fmt.Errorf("%s: %s", block.DefRange, diags.Error())
+	}
+	typeValue, diags := content.Attributes["type"].Expr.Value(nil)
+	if diags.HasErrors() || typeValue.IsNull() || typeValue.Type() != cty.String {
+		return ContractSide{}, fmt.Errorf("%s: contract %s type must be a literal string", content.Attributes["type"].Range, role)
+	}
+	typeName := typeValue.AsString()
+	typeExpr, typeDiags := hclsyntax.ParseExpression([]byte(typeName), "<contract type>", hcl.InitialPos)
+	if typeDiags.HasErrors() {
+		return ContractSide{}, fmt.Errorf("%s: contract %s type %q is invalid: %s", content.Attributes["type"].Range, role, typeName, typeDiags.Error())
+	}
+	if _, typeDiags = typeexpr.TypeConstraint(typeExpr); typeDiags.HasErrors() {
+		return ContractSide{}, fmt.Errorf("%s: contract %s type %q is invalid: %s", content.Attributes["type"].Range, role, typeName, typeDiags.Error())
+	}
+	readBool := func(name string) (bool, error) {
+		attr := content.Attributes[name]
+		value, valueDiags := attr.Expr.Value(nil)
+		if valueDiags.HasErrors() || value.IsNull() || value.Type() != cty.Bool {
+			return false, fmt.Errorf("%s: contract %s %s must be a literal bool", attr.Range, role, name)
+		}
+		return value.True(), nil
+	}
+	nullable, err := readBool("nullable")
+	if err != nil {
+		return ContractSide{}, err
+	}
+	sensitive, err := readBool("sensitive")
+	if err != nil {
+		return ContractSide{}, err
+	}
+	return ContractSide{Type: typeName, Nullable: nullable, Sensitive: sensitive}, nil
 }
 
 // parseRelativeOutputRef reads the `from = output.<attr>` attribute of an edge's nested input block and returns just the attribute name. The reference is relative on purpose: the enclosing edge already names exactly one source, so repeating it on every nested block would add a second place for it to disagree with itself. An absolute reference is rejected rather than accepted-if-it-matches, so there is only ever one spelling to read.
