@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cloudfluent/terragraph/internal/blueprint"
 	"github.com/cloudfluent/terragraph/internal/exec"
 )
 
@@ -33,8 +32,8 @@ func loadDestroyApproveEngine(t *testing.T, node string) (*Engine, string) {
 	return e, commandLog
 }
 
-// Teardown is delete-only, so an unattended destroy is permitted by approve = "all" alone; a node that said less is refused before anything runs, and --approve=all cannot speak for it, because the node's own declaration wins — the same layering apply already relies on.
-func TestDestroy_ApproveGateRefusesUnattendedTeardown(t *testing.T) {
+// A node that declared approve = "none" has said it must not be torn down, and destroy refuses before taking any lock. The declaration is what is read, not the resolved level: reading approveFor would fill blanks down to "safe" and refuse every ordinary node instead.
+func TestDestroy_RefusesANodeThatDeclaredLessThanAll(t *testing.T) {
 	e, commandLog := loadDestroyApproveEngine(t, `
 node "guarded" {
   source  = "./module"
@@ -44,16 +43,12 @@ node "guarded" {
 
 	err := e.Destroy(Options{AutoApprove: true})
 	if err == nil {
-		t.Fatal(`expected an unattended destroy to be refused at approve = "none"`)
+		t.Fatal(`expected destroy to be refused at approve = "none"`)
 	}
-	for _, want := range []string{"guarded", `approve = "none"`, `set approve = "all"`, "--auto-approve"} {
+	for _, want := range []string{"guarded", `approve = "none"`, `"all"`} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("expected the error to mention %q, got: %v", want, err)
 		}
-	}
-	// The run-wide flag fills a gap; it never overrides what the node declared.
-	if err := e.Destroy(Options{AutoApprove: true, Approve: blueprint.ApproveAll}); err == nil {
-		t.Fatal(`expected --approve=all not to override the node's own approve = "none"`)
 	}
 	// Refused before any lock was taken, so nothing was touched — a log that never came into being is the strongest form of that.
 	data, readErr := os.ReadFile(commandLog)
@@ -65,22 +60,8 @@ node "guarded" {
 	}
 }
 
-// The run-wide default fills a gap nothing else spoke to, so --approve=all permits unattended teardown of nodes that declared nothing — the one-off route for an intentional destroy.
-func TestDestroy_ApproveGateRunLevelPermitsUnattendedTeardown(t *testing.T) {
-	e, _ := loadDestroyApproveEngine(t, `
-node "guarded" { source = "./module" }
-`)
-
-	if err := e.Apply(Options{AutoApprove: true}); err != nil {
-		t.Fatalf("Apply: %v", err)
-	}
-	if err := e.Destroy(Options{AutoApprove: true, Approve: blueprint.ApproveAll}); err != nil {
-		t.Fatalf("expected --approve=all to permit unattended teardown: %v", err)
-	}
-}
-
-// A node declaring approve = "none" can still be torn down by a human: interactive destroy's gate is terraform's own confirmation prompt, which is exactly the someone-saying-so that approve levels defer the decision to.
-func TestDestroy_ApproveGateInteractiveStaysHumanGated(t *testing.T) {
+// The declaration holds whether or not anyone is watching, the same rule apply's gate follows: an interactive "yes" answers "tear down this node", not "override the standing policy". Without this, approve = "none" protected nothing the moment someone was at the terminal.
+func TestDestroy_RefusesADeclaredNodeEvenInteractively(t *testing.T) {
 	e, _ := loadDestroyApproveEngine(t, `
 node "guarded" {
   source  = "./module"
@@ -89,7 +70,21 @@ node "guarded" {
 `)
 
 	e.Stdin = strings.NewReader("yes\n")
-	if err := e.Destroy(Options{}); err != nil {
-		t.Fatalf("expected interactive destroy to be gated by terraform's prompt, not the approve level: %v", err)
+	if err := e.Destroy(Options{}); err == nil {
+		t.Fatal(`expected an interactive destroy to be refused at approve = "none"`)
+	}
+}
+
+// Nothing in the node's chain ever spoke, so nothing is being overridden and teardown proceeds — the ordinary blueprint, unchanged by this gate.
+func TestDestroy_PermitsANodeThatDeclaredNothing(t *testing.T) {
+	e, _ := loadDestroyApproveEngine(t, `
+node "guarded" { source = "./module" }
+`)
+
+	if err := e.Apply(Options{AutoApprove: true}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if err := e.Destroy(Options{AutoApprove: true}); err != nil {
+		t.Fatalf("expected teardown of an undeclared node to proceed: %v", err)
 	}
 }

@@ -287,7 +287,6 @@ func newDestroyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf 
 	var node string
 	var autoApprove bool
 	var parallelism int
-	var approve string
 	cmd := &cobra.Command{
 		Use:   "destroy",
 		Short: "Run terraform/tofu destroy across the graph in reverse dependency order",
@@ -300,17 +299,13 @@ func newDestroyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf 
 			if err := checkValidate(cmd, e); err != nil {
 				return err
 			}
-			level, err := blueprint.ParseApprove(approve)
-			if err != nil {
-				return err
-			}
-			return e.Destroy(engine.Options{Node: node, AutoApprove: autoApprove, Approve: level, Parallelism: parallelism})
+			return e.Destroy(engine.Options{Node: node, AutoApprove: autoApprove, Parallelism: parallelism})
 		},
 	}
 	cmd.Flags().StringVar(&node, "node", "", "restrict to a single node")
 	cmd.Flags().BoolVar(&autoApprove, "auto-approve", false, "skip interactive approval")
 	cmd.Flags().IntVar(&parallelism, "parallelism", 1, "max nodes to run concurrently within one execution level")
-	cmd.Flags().StringVar(&approve, "approve", string(blueprint.ApproveSafe), "what a node may do without saying so per run: none, safe (create/update), or all (adds replace/delete); a node's own approve wins over this")
+	// No --approve here, unlike apply: destroy's gate reads what a node declared, and the layering rule is that a CLI flag only fills a gap nothing else spoke to — so a flag could never permit a teardown the blueprint refused, and offering one would only suggest otherwise.
 	return cmd
 }
 

@@ -9,7 +9,6 @@ terragraph destroy [flags]
 ### Options
 
 ```
-      --approve string    what a node may do without saying so per run: none, safe (create/update), or all (adds replace/delete); a node's own approve wins over this (default "safe")
       --auto-approve      skip interactive approval
   -h, --help              help for destroy
       --node string       restrict to a single node

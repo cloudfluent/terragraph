@@ -18,17 +18,15 @@ func (e *Engine) Destroy(opts Options) error {
 		return fmt.Errorf("--parallelism %d needs --auto-approve: output from concurrent nodes is buffered, so there is nowhere to ask for approval", opts.parallelism())
 	}
 
-	// Teardown is delete-only, so approve = "all" is the only level that permits it (the same all-gating apply's notPermitted gives destroy actions). An interactive destroy keeps terraform's own confirmation as the human gate — approve governs what may happen *without* someone saying so — but --auto-approve removes that human, so every in-scope node must already have said yes; --approve=all can only fill a gap, never override a node's own declaration. Checked before any lock is taken, so a refusal fails immediately rather than after waiting on whatever holds it.
-	if opts.AutoApprove {
-		levels, err := e.executionLevels(opts, true)
-		if err != nil {
-			return err
-		}
-		for _, level := range levels {
-			for _, name := range level {
-				if a := e.approveFor(name, opts.Approve); a != blueprint.ApproveAll {
-					return fmt.Errorf("destroy: node %s resolves to approve = %q, which does not permit teardown; set approve = \"all\" on the node (or its enclosing use), pass --approve=all for this run only, or run destroy without --auto-approve to approve interactively", name, a)
-				}
+	// Teardown is delete-only, so a node that declared anything short of approve = "all" has already said it must not be torn down unattended. This reads the declaration (graph.Node.Approve, "" when neither the node nor an enclosing use ever spoke) rather than approveFor's resolved level, which fills blanks down to ApproveSafe and would therefore refuse every node in an ordinary blueprint while a node that explicitly declared "none" still slipped through interactively — the inverse of the point. A declaration holds whether or not someone is watching, the same rule apply's gate follows. Checked before any lock is taken, so a refusal fails immediately rather than after waiting on whatever holds it.
+	levels, err := e.executionLevels(opts, true)
+	if err != nil {
+		return err
+	}
+	for _, level := range levels {
+		for _, name := range level {
+			if a := e.Graph.Nodes[name].Approve; a != "" && a != blueprint.ApproveAll {
+				return fmt.Errorf("destroy: node %s declares approve = %q, which does not permit teardown; change it to %q on that node (or its enclosing use) if tearing it down is intended", name, a, blueprint.ApproveAll)
 			}
 		}
 	}
