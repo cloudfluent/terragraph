@@ -24,6 +24,10 @@ func WriteTFVars(path string, vars map[string]any) (string, error) {
 		return "", fmt.Errorf("encoding tfvars for %s: %w", path, err)
 	}
 	// 0600, not the 0644 default: resolved inputs include upstream outputs, which are frequently secrets, and this file is per-run scratch that nothing but the owner (and the terraform run acting as them) ever needs to read.
+	// os.WriteFile applies perm only when creating, so a leftover 0644 from an older terragraph would stay world-readable for the whole run; removing first makes every write a create, keeping the owner-only mode true on the upgrade and crash-restart paths too.
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return "", fmt.Errorf("removing stale tfvars file %s: %w", path, err)
+	}
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return "", fmt.Errorf("writing tfvars file %s: %w", path, err)
 	}

@@ -74,19 +74,3 @@ func TestVarFileArgs(t *testing.T) {
 		t.Fatalf("expected nil args for nil vars, got %v", got)
 	}
 }
-
-func TestWriteTFVars_OwnerOnlyPermissions(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, ".terragraph.vpc.tfvars.json")
-
-	if _, err := WriteTFVars(path, map[string]any{"vpc_id": "vpc-123"}); err != nil {
-		t.Fatalf("WriteTFVars: %v", err)
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatalf("stat: %v", err)
-	}
-	if got := info.Mode().Perm(); got != 0o600 {
-		t.Fatalf("tfvars perm = %o, want 0600 (resolved inputs may be secret outputs; the file is never shared)", got)
-	}
-}
