@@ -20,15 +20,20 @@ func (e *Engine) Destroy(opts Options) error {
 
 	// A --node destroy refuses to strand the graph: while a consumer still reads this node's outputs, tearing the node down first makes the consumer's next resolution die with terraform's misleading "has no output value; apply it first". A full destroy is exempt because reverse topological order (downstream first) destroys the consumers along with it. Checked before any lock is taken so a doomed combination fails immediately.
 	if opts.Node != "" {
-		var consumers []string
+		// Nested input blocks from one consumer append its name once per data edge, so consumers are collected into a set and listed once each.
+		consumers := make(map[string]struct{})
 		for _, edge := range e.Graph.Edges {
 			if edge.IsDataEdge() && edge.From.Node == opts.Node && edge.To.Node != opts.Node {
-				consumers = append(consumers, edge.To.Node)
+				consumers[edge.To.Node] = struct{}{}
 			}
 		}
 		if len(consumers) > 0 {
-			sort.Strings(consumers)
-			return fmt.Errorf("destroy: node %q still feeds %s; destroy consumers first (downstream-to-upstream), remove the edges, or run a full destroy", opts.Node, strings.Join(consumers, ", "))
+			names := make([]string, 0, len(consumers))
+			for name := range consumers {
+				names = append(names, name)
+			}
+			sort.Strings(names)
+			return fmt.Errorf("destroy: node %q still feeds %s; destroy consumers first (downstream-to-upstream), remove the edges, or run a full destroy", opts.Node, strings.Join(names, ", "))
 		}
 	}
 

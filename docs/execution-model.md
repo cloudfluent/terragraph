@@ -150,6 +150,8 @@ It asks about the plan you were just shown, and applies exactly that plan — a 
 
 `terragraph destroy` is confirmed the same way, except the question comes from Terraform itself: there is no saved plan for terragraph to ask about on its behalf.
 
+A `--node X` destroy is refused while any data edge still reads X's outputs: destroying X first would leave the consumer's next resolution dying with Terraform's misleading "has no output value; apply it first". Destroy the consumers first (downstream-to-upstream), remove the edges, or run a full destroy, which tears consumers down before their inputs by walking in reverse order.
+
 ### There is no local cache
 
 Earlier versions kept a content-addressed cache at `<blueprint dir>/.terragraph/cache.json`, hashing each node's source files, resolved inputs, runtime and `env` to decide whether it could skip apply. Hashing local files is a proxy for a remote fact, and the gap between the two produced a series of bugs: a backend or inherited `env` change that the key never modelled, remote drift that no local hash could see, and files consumed through `file()`/`templatefile()` that never invalidated anything.

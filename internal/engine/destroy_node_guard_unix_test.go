@@ -67,6 +67,22 @@ func TestDestroy_NodeWithoutDownstreamConsumersProceeds(t *testing.T) {
 	}
 }
 
+// Two data edges from a into b (one per input) must list b once: the error names consumers, not edges.
+func TestDestroy_NodeConsumerListIsDeduplicated(t *testing.T) {
+	e := loadTwoEdgesConsumerEngine(t)
+
+	err := e.Destroy(Options{Node: "a", AutoApprove: true})
+	if err == nil {
+		t.Fatal("expected --node a destroy to be refused while b still consumes its outputs")
+	}
+	if !strings.Contains(err.Error(), "still feeds b, c;") {
+		t.Fatalf("expected the consumer list to name each consumer once, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "b, b") {
+		t.Fatalf("expected b to be listed once, got: %v", err)
+	}
+}
+
 // A full destroy needs no guard of its own: reverse topological order tears b down before a.
 func TestDestroy_FullDestroyTearsDownConsumersFirst(t *testing.T) {
 	e := loadNodeGuardTestEngine(t)
@@ -74,4 +90,46 @@ func TestDestroy_FullDestroyTearsDownConsumersFirst(t *testing.T) {
 	if err := e.Destroy(Options{AutoApprove: true}); err != nil {
 		t.Fatalf("full Destroy: %v", err)
 	}
+}
+
+// loadTwoEdgesConsumerEngine builds a graph where b consumes two of a's outputs and c consumes one, so the refusal must name b once and c once.
+func loadTwoEdgesConsumerEngine(t *testing.T) *Engine {
+	t.Helper()
+	baseDir := t.TempDir()
+	moduleDir := filepath.Join(baseDir, "module")
+	if err := os.MkdirAll(moduleDir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", moduleDir, err)
+	}
+	src := "terraform {\n  backend \"local\" {}\n}\noutput \"managed\" {\n  value = \"ok\"\n}\noutput \"managed2\" {\n  value = \"ok\"\n}\nvariable \"payload\" {\n  type = string\n}\nvariable \"payload2\" {\n  type = string\n}\n"
+	if err := os.WriteFile(filepath.Join(moduleDir, "main.tf"), []byte(src), 0o644); err != nil {
+		t.Fatalf("writing fixture module: %v", err)
+	}
+	blueprintPath := writeBlueprint(t, baseDir, `
+node "a" { source = "./module" }
+node "b" { source = "./module" }
+node "c" { source = "./module" }
+
+edge {
+  from = node.a.output.managed
+  to   = node.b.input.payload
+}
+
+edge {
+  from = node.a.output.managed2
+  to   = node.b.input.payload2
+}
+
+edge {
+  from = node.a.output.managed
+  to   = node.c.input.payload
+}
+`)
+	t.Setenv("TG_COMMAND_LOG", filepath.Join(baseDir, "commands.log"))
+	t.Setenv("TG_PLAN_ERROR", filepath.Join(baseDir, "plan-error"))
+
+	e, err := Load(blueprintPath, exec.Binary(writeFakeTerraform(t, baseDir)), &bytes.Buffer{}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	return e
 }
