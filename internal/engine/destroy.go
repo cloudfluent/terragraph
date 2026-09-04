@@ -3,6 +3,8 @@ package engine
 import (
 	"fmt"
 	"io"
+	"sort"
+	"strings"
 
 	"github.com/cloudfluent/terragraph/internal/exec"
 )
@@ -14,6 +16,20 @@ func (e *Engine) Destroy(opts Options) error {
 	// Same reason Apply refuses it: concurrent nodes have their output buffered and flushed a node at a time, so terraform's confirmation prompt would be invisible until long after the answer was needed. Checked before taking the run lock, so an unrunnable combination fails immediately instead of after waiting for whatever else holds it.
 	if !opts.AutoApprove && opts.parallelism() > 1 {
 		return fmt.Errorf("--parallelism %d needs --auto-approve: output from concurrent nodes is buffered, so there is nowhere to ask for approval", opts.parallelism())
+	}
+
+	// A --node destroy refuses to strand the graph: while a consumer still reads this node's outputs, tearing the node down first makes the consumer's next resolution die with terraform's misleading "has no output value; apply it first". A full destroy is exempt because reverse topological order (downstream first) destroys the consumers along with it. Checked before any lock is taken so a doomed combination fails immediately.
+	if opts.Node != "" {
+		var consumers []string
+		for _, edge := range e.Graph.Edges {
+			if edge.IsDataEdge() && edge.From.Node == opts.Node && edge.To.Node != opts.Node {
+				consumers = append(consumers, edge.To.Node)
+			}
+		}
+		if len(consumers) > 0 {
+			sort.Strings(consumers)
+			return fmt.Errorf("destroy: node %q still feeds %s; destroy consumers first (downstream-to-upstream), remove the edges, or run a full destroy", opts.Node, strings.Join(consumers, ", "))
+		}
 	}
 
 	unlock, err := e.lockRun()
