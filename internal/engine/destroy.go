@@ -3,6 +3,7 @@ package engine
 import (
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/cloudfluent/terragraph/internal/blueprint"
 	"github.com/cloudfluent/terragraph/internal/exec"
@@ -56,6 +57,8 @@ func (e *Engine) Destroy(opts Options) error {
 		if _, err := exec.WriteTFVars(varsPath, vars); err != nil {
 			return nil, err
 		}
+		// Removed however this node exits: the file holds resolved input values in cleartext, and the next run rewrites it from scratch anyway.
+		defer func() { _ = os.Remove(varsPath) }()
 
 		r := &exec.Runner{Binary: e.runtimeFor(name), Dir: e.nodeDir(name), DataDir: e.dataDir(name), Env: e.envFor(name), Stdout: out, Stderr: out}
 		// Unlike apply, there is no saved plan here for terragraph to ask about itself, so terraform's own confirmation is the approval — and it needs somewhere to read the answer from. Left nil when auto-approving, so an unattended run can never block on a question.

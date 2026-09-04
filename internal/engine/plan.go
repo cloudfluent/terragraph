@@ -3,6 +3,7 @@ package engine
 import (
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/cloudfluent/terragraph/internal/exec"
 )
@@ -32,6 +33,8 @@ func (e *Engine) Plan(opts Options) error {
 		if _, err := exec.WriteTFVars(varsPath, vars); err != nil {
 			return nil, err
 		}
+		// Removed however this node exits: the file holds resolved input values in cleartext, and the next run rewrites it from scratch anyway.
+		defer func() { _ = os.Remove(varsPath) }()
 
 		r := &exec.Runner{Binary: e.runtimeFor(name), Dir: nodeDir, DataDir: e.dataDir(name), Env: e.envFor(name), Stdout: out, Stderr: out}
 		if err := r.Init(e.Graph.Nodes[name].BackendConfig); err != nil {
