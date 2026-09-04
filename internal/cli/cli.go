@@ -285,6 +285,10 @@ func newApplyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fu
 			if output != "text" && output != "json" {
 				return fmt.Errorf("unknown output %q (want \"text\" or \"json\")", output)
 			}
+			// Same class as --parallelism's refusal: the approval prompt has nowhere to appear under --output json — stdout is the payload and stderr is diagnostics an automation consumer is not watching for a question — so instead of a prompt nobody answers (or a payload somebody corrupts), the combination is refused up front (#49).
+			if output == "json" && !autoApprove {
+				return fmt.Errorf("--output json needs --auto-approve: the approval prompt would have nowhere to appear without corrupting the JSON payload; approve in text mode or pass --auto-approve")
+			}
 			e, unlock, err := loadLockedEngine(cmd, blueprintPath, binaryOf, loggerOf)
 			if err != nil {
 				return err
@@ -327,6 +331,10 @@ func newDestroyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf 
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if output != "text" && output != "json" {
 				return fmt.Errorf("unknown output %q (want \"text\" or \"json\")", output)
+			}
+			// Same class as --parallelism's refusal: terraform's destroy confirmation has nowhere to appear under --output json — stdout is the payload and stderr is diagnostics an automation consumer is not watching for a question — so the combination is refused up front (#49).
+			if output == "json" && !autoApprove {
+				return fmt.Errorf("--output json needs --auto-approve: the destroy confirmation would have nowhere to appear without corrupting the JSON payload; confirm in text mode or pass --auto-approve")
 			}
 			e, unlock, err := loadLockedEngine(cmd, blueprintPath, binaryOf, loggerOf)
 			if err != nil {

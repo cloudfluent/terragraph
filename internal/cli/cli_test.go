@@ -221,3 +221,13 @@ func TestGraph_DoesNotTakeBlueprintLock(t *testing.T) {
 		t.Fatalf("graph should not take the blueprint lock, stat error = %v", err)
 	}
 }
+
+// TestRunCommands_OutputJSONNeedsAutoApprove proves the #49 stream conflict is refused rather than half-resolved: under --output json the approval/confirmation prompts have nowhere to appear without corrupting the payload, so apply and destroy demand --auto-approve up front, exactly as --parallelism already does.
+func TestRunCommands_OutputJSONNeedsAutoApprove(t *testing.T) {
+	for _, c := range []string{"apply", "destroy"} {
+		_, _, err := runCmd(t, c, "--output", "json")
+		if err == nil || !strings.Contains(err.Error(), "needs --auto-approve") {
+			t.Fatalf("%s --output json: got = %v, want needs-auto-approve refusal", c, err)
+		}
+	}
+}

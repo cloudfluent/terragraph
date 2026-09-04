@@ -21,12 +21,12 @@ func (e *Engine) Destroy(opts Options) ([]NodeRun, error) {
 	// Teardown is delete-only, so a node that declared anything short of approve = "all" has already said it must not be torn down unattended. This reads the declaration (graph.Node.Approve, "" when neither the node nor an enclosing use ever spoke) rather than approveFor's resolved level, which fills blanks down to ApproveSafe and would therefore refuse every node in an ordinary blueprint while a node that explicitly declared "none" still slipped through interactively — the inverse of the point. A declaration holds whether or not someone is watching, the same rule apply's gate follows. Checked before any lock is taken, so a refusal fails immediately rather than after waiting on whatever holds it.
 	levels, err := e.executionLevels(opts, true)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for _, level := range levels {
 		for _, name := range level {
 			if a := e.Graph.Nodes[name].Approve; a != "" && a != blueprint.ApproveAll {
-				return fmt.Errorf("destroy: node %s declares approve = %q, which does not permit teardown; change it to %q on that node (or its enclosing use) if tearing it down is intended", name, a, blueprint.ApproveAll)
+				return nil, fmt.Errorf("destroy: node %s declares approve = %q, which does not permit teardown; change it to %q on that node (or its enclosing use) if tearing it down is intended", name, a, blueprint.ApproveAll)
 			}
 		}
 	}

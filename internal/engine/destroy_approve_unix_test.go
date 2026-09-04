@@ -41,7 +41,7 @@ node "guarded" {
 }
 `)
 
-	err := e.Destroy(Options{AutoApprove: true})
+	_, err := e.Destroy(Options{AutoApprove: true})
 	if err == nil {
 		t.Fatal(`expected destroy to be refused at approve = "none"`)
 	}
@@ -70,7 +70,7 @@ node "guarded" {
 `)
 
 	e.Stdin = strings.NewReader("yes\n")
-	if err := e.Destroy(Options{}); err == nil {
+	if _, err := e.Destroy(Options{}); err == nil {
 		t.Fatal(`expected an interactive destroy to be refused at approve = "none"`)
 	}
 }
@@ -81,10 +81,10 @@ func TestDestroy_PermitsANodeThatDeclaredNothing(t *testing.T) {
 node "guarded" { source = "./module" }
 `)
 
-	if err := e.Apply(Options{AutoApprove: true}); err != nil {
+	if _, err := e.Apply(Options{AutoApprove: true}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	if err := e.Destroy(Options{AutoApprove: true}); err != nil {
+	if _, err := e.Destroy(Options{AutoApprove: true}); err != nil {
 		t.Fatalf("expected teardown of an undeclared node to proceed: %v", err)
 	}
 }
