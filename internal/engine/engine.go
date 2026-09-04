@@ -352,11 +352,21 @@ func (e *Engine) stateOrphans() []graph.Problem {
 	if err != nil {
 		return nil // No state directory yet (fresh or never-applied project): nothing can be orphaned.
 	}
+	// Claims are whole resolved paths, not basenames, so a node that owns some other directory's live.tfstate cannot vouch for the one in here and silence a real orphan.
+	//
+	// A relative explicit path is claimed under both bases it could resolve to. Terraform resolves -backend-config=path against the subprocess's working directory, which is the node's module directory, while docs/blueprint.md's example (".terragraph/state/<node>.tfstate") reads as blueprint-relative — and which one a real terraform produces is not settled here. Claiming both keeps this warning conservative in the direction that matters: it can only ever stay silent about a file some node might own, never accuse one that is live.
 	claimed := make(map[string]bool)
 	for _, n := range e.Graph.Nodes {
-		if p, ok := n.BackendConfig["path"]; ok {
-			claimed[filepath.Base(p)] = true
+		p, ok := n.BackendConfig["path"]
+		if !ok {
+			continue
 		}
+		if filepath.IsAbs(p) {
+			claimed[filepath.Clean(p)] = true
+			continue
+		}
+		claimed[filepath.Clean(filepath.Join(n.Dir, p))] = true
+		claimed[filepath.Clean(filepath.Join(e.BaseDir, p))] = true
 	}
 	var stale []string
 	for _, entry := range entries {
@@ -367,7 +377,7 @@ func (e *Engine) stateOrphans() []graph.Problem {
 		if !strings.HasSuffix(fname, ".tfstate") {
 			continue
 		}
-		if !claimed[fname] {
+		if !claimed[filepath.Join(dir, fname)] {
 			stale = append(stale, fname)
 		}
 	}
@@ -376,7 +386,8 @@ func (e *Engine) stateOrphans() []graph.Problem {
 	for _, fname := range stale {
 		problems = append(problems, graph.Problem{
 			Severity: graph.SeverityWarning,
-			Message:  fmt.Sprintf("%s: state for a node that no longer exists in this blueprint; if the node was renamed, rename it back (or remove/import the state file if abandoned)", filepath.Join(dir, fname)),
+			// The .backup sibling the local backend writes is named here rather than reported on its own: it is not a state file anyone can adopt, but "remove the file" that leaves it behind is incomplete advice.
+			Message: fmt.Sprintf("%s: state for a node that no longer exists in this blueprint; if the node was renamed, rename it back (or remove/import the state file, and its .tfstate.backup sibling if present, when abandoned)", filepath.Join(dir, fname)),
 		})
 	}
 	return problems
