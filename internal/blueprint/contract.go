@@ -44,7 +44,9 @@ type canonicalEntry struct {
 	Port canonicalPort `json:"port"`
 }
 
-// Digest is the contract set's identity: sha256 hex over a canonical JSON form covering exactly the checked claims — scope, role, port, type, nullable, sensitive — with every port sorted by (scope, role, name). Map iteration order must never leak into identity — anything binding to a contract set binds to this value — which is why the entries are collected and sorted rather than marshalled straight from the maps.
+// Digest is the contract set's identity: sha256 hex over a canonical JSON form covering exactly the checked claims — scope, role, port, type, nullable, sensitive — with every port sorted by (scope, role, name). Entries are collected and sorted rather than marshalled straight from the maps so iteration order can never leak into identity.
+//
+// Nothing calls this yet. It is kept, rather than deleted and rewritten later, because the resume condition the run journal needs — "does this incomplete run's contract set still match?" — is exactly this value, and because the property its tests pin (reordering blocks must not change identity, changing any claim must) is easier to keep true continuously than to re-establish. Delete it if that consumer is abandoned.
 func (c *Contracts) Digest() (string, error) {
 	entries := make([]canonicalEntry, 0)
 	for _, dc := range c.ByDir {
