@@ -44,6 +44,8 @@ func (e *Engine) Apply(opts Options) error {
 		if _, err := exec.WriteTFVars(varsPath, vars); err != nil {
 			return nil, err
 		}
+		// Removed however this node exits: the file holds resolved input values in cleartext, and the next run rewrites it from scratch anyway.
+		defer func() { _ = os.Remove(varsPath) }()
 		varFileArgs := exec.VarFileArgs(varsPath, vars)
 
 		r := &exec.Runner{Binary: e.runtimeFor(name), Dir: e.nodeDir(name), DataDir: e.dataDir(name), Env: e.envFor(name), Stdout: out, Stderr: out}

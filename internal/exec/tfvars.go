@@ -23,7 +23,8 @@ func WriteTFVars(path string, vars map[string]any) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("encoding tfvars for %s: %w", path, err)
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	// 0600, not the 0644 default: resolved inputs include upstream outputs, which are frequently secrets, and this file is per-run scratch that nothing but the owner (and the terraform run acting as them) ever needs to read.
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return "", fmt.Errorf("writing tfvars file %s: %w", path, err)
 	}
 	return path, nil
