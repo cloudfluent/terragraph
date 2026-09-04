@@ -26,7 +26,7 @@ var portContractSchema = &hcl.BodySchema{
 	},
 }
 
-// parseContractSideBlock parses one `producer`/`consumer` block — a top-level blueprint block, or one inside a group body (see parseGroupBlock) — into c. Local scopes ("./x", "../x") resolve against baseDir, the directory of the file declaring the block, exactly like a node source in that same file; any other non-absolute source is a remote module source kept as written and keyed by the source string itself (graph lookup aligns with that key in a later change). Absolute filesystem paths are rejected: they would pin a contract to one machine's layout. seen detects the same (role, source, port) declared twice across everything merged into c, so a merge can never silently drop a promise.
+// parseContractSideBlock parses one `producer`/`consumer` block — a top-level blueprint block, or one inside a group body (see parseGroupBlock) — into c. Local scopes ("./x", "../x") resolve against baseDir, the directory of the file declaring the block, exactly like a node source in that same file; any other non-absolute source is a remote module source kept as written and keyed by the source string itself, which is also the key graph lookup uses for remote nodes (see graph.contractKey) — no filesystem resolution happens for remote scopes. Absolute filesystem paths are rejected: they would pin a contract to one machine's layout. seen detects the same (role, source, port) declared twice across everything merged into c, so a merge can never silently drop a promise.
 func parseContractSideBlock(block *hcl.Block, baseDir string, c *Contracts, seen map[string]bool) error {
 	role := block.Type // "producer" | "consumer"
 	scope := block.Labels[0]

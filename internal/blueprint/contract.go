@@ -17,7 +17,7 @@ type PortContract struct {
 	Sensitive *bool
 }
 
-// DirContracts is every contract sharing one module source directory. Scope is the human-spelled path used in messages and identity; Dir is the absolute, cleaned directory graph nodes are matched against.
+// DirContracts is every contract sharing one module source. Scope is the human-spelled path used in messages and identity; Dir is the key graph nodes match against — the absolute, cleaned directory for local scopes ("./x", "../x"), or the declared source string verbatim for remote scopes, since a remote node's vendored directory is per-instance (vendor/<node-name>) while the contract belongs to the source everything vendored from.
 type DirContracts struct {
 	Scope    string
 	Dir      string

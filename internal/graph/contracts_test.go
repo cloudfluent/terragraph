@@ -521,3 +521,58 @@ consumer "./modules/app" {
 		t.Fatalf("got = %v, want zero problems against an unconstrained variable", problems)
 	}
 }
+
+// writeRemoteReuseFixture vendors one remote module source under two node names — exactly the layout `terragraph vendor` produces (vendor/<node-name>, one copy per node) — with every copy containing moduleTF, and contracts the declared source string itself.
+func writeRemoteReuseFixture(t *testing.T, moduleTF, contractsHCL string) *Graph {
+	t.Helper()
+	root := t.TempDir()
+	writeFixtureFile(t, filepath.Join(root, "vendor/vpc-east/main.tf"), moduleTF)
+	writeFixtureFile(t, filepath.Join(root, "vendor/vpc-west/main.tf"), moduleTF)
+	writeFixtureFile(t, filepath.Join(root, "blueprint.hcl"), `
+node "vpc-east" { source = "github.com/org/repo//modules/vpc" }
+node "vpc-west" { source = "github.com/org/repo//modules/vpc" }
+`+contractsHCL)
+	bp, err := blueprint.ParseFile(filepath.Join(root, "blueprint.hcl"))
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	g, err := Build(bp, root)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	return g
+}
+
+// TestBuild_RemoteModulesShareContractsBySourceString proves the remote half of the keying rule: two vendored instances of one remote source resolve to two different directories, so keying by directory would demand a duplicate contract exactly where reuse matters most — one contract on the declared source string must cover both nodes and a truthful promise validates clean.
+func TestBuild_RemoteModulesShareContractsBySourceString(t *testing.T) {
+	g := writeRemoteReuseFixture(t, `output "id" { value = "x" }`, `
+producer "github.com/org/repo//modules/vpc" {
+  output "id" { type = "string" }
+}
+`)
+	shared := g.Contracts.Lookup("github.com/org/repo//modules/vpc")
+	if shared == nil {
+		t.Fatal("contract must be keyed by the declared source string verbatim")
+	}
+	for _, name := range []string{"vpc-east", "vpc-west"} {
+		if key := contractKey(g.Nodes[name]); key != "github.com/org/repo//modules/vpc" {
+			t.Fatalf("node %s contract key = %q, want the declared remote source string", name, key)
+		}
+	}
+	if problems := Validate(g); len(problems) != 0 {
+		t.Fatalf("got = %v, want zero problems: one truthful contract covers both instances", problems)
+	}
+}
+
+// TestBuild_RemoteContractBrokenPromiseFiresC001Once proves the failure side of shared remote keying: a promise the module never fulfills is C001 once per scope (one record), not once per vendored instance, and C006 stays silent because a node does use the source.
+func TestBuild_RemoteContractBrokenPromiseFiresC001Once(t *testing.T) {
+	g := writeRemoteReuseFixture(t, `output "id" { value = "x" }`, `
+producer "github.com/org/repo//modules/vpc" {
+  output "ghost" { type = "string" }
+}
+`)
+	problems := Validate(g)
+	if len(problems) != 1 || !strings.Contains(problems[0].Message, "[C001]") || !strings.Contains(problems[0].Message, "github.com/org/repo//modules/vpc") {
+		t.Fatalf("got = %v, want exactly one C001 naming the shared source", problems)
+	}
+}

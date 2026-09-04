@@ -12,6 +12,14 @@ import (
 	"github.com/cloudfluent/terragraph/internal/blueprint"
 )
 
+// contractKey is the string a node's contracts are looked up by: local scopes key by resolved directory, remote scopes by the declared source string verbatim. A remote node's Dir is vendor/<node-name>, so two instances of one remote module resolve to two directories — keying those by directory would demand a duplicate contract exactly where reuse matters most, and a per-node vendored path can never match the source-spelled scope parse produced.
+func contractKey(n *Node) string {
+	if blueprint.IsRemote(n.Source) {
+		return n.Source
+	}
+	return n.Dir
+}
+
 // contractProblems reports every contract violation with a stable [C0xx] code (docs/contracts.md is the table of record). Severity is the blueprint's mode dial: warn (the default when no mode is set) keeps every code advisory, enforce escalates all of them to errors — the only way strictness can enter is reviewed blueprint configuration, never a default.
 func contractProblems(g *Graph) []Problem {
 	if g.Contracts == nil {
@@ -19,7 +27,7 @@ func contractProblems(g *Graph) []Problem {
 	}
 	used := map[string]bool{}
 	for _, n := range g.Nodes {
-		used[n.Dir] = true
+		used[contractKey(n)] = true
 	}
 
 	// Enforce is the only mode that blocks, and it exists only as reviewed blueprint configuration — never as a default or a CLI flag someone passes once.
@@ -41,7 +49,7 @@ func contractProblems(g *Graph) []Problem {
 		}
 		var schemaOwner *Node
 		for _, n := range g.Nodes {
-			if n.Dir == dc.Dir {
+			if contractKey(n) == dc.Dir {
 				schemaOwner = n
 				break
 			}
@@ -91,8 +99,8 @@ func contractProblems(g *Graph) []Problem {
 		if !e.IsDataEdge() {
 			continue
 		}
-		from := g.Contracts.Lookup(g.Nodes[e.From.Node].Dir)
-		to := g.Contracts.Lookup(g.Nodes[e.To.Node].Dir)
+		from := g.Contracts.Lookup(contractKey(g.Nodes[e.From.Node]))
+		to := g.Contracts.Lookup(contractKey(g.Nodes[e.To.Node]))
 		if from == nil || to == nil {
 			continue
 		}
