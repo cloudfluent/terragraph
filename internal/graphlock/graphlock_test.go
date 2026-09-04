@@ -16,6 +16,11 @@ type fakeBackend struct {
 
 func (f fakeBackend) Matches(lock *blueprint.Lock) bool { return f.matches }
 
+// The fake reports no holder: every test here is about dispatch and error paths, not about what a real object says, and "unknown" is the shape a caller must already handle.
+func (f fakeBackend) Holder(ctx context.Context, lock *blueprint.Lock) (string, string) {
+	return "", ""
+}
+
 func (f fakeBackend) Acquire(ctx context.Context, lock *blueprint.Lock) (Held, error) {
 	if f.calls != nil {
 		*f.calls++

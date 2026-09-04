@@ -82,6 +82,16 @@ func (b s3Backend) Acquire(ctx context.Context, lock *blueprint.Lock) (Held, err
 }
 
 // Release deletes the lock object unconditionally (force-unlock path). Unlike Close there is no If-Match: the etag belongs to a run that no longer exists, and gating on it would make recovery impossible.
+// Holder reports who wrote the lock object and when, from the payload Acquire stored. Empty strings mean the object is gone or unreadable — force-unlock still has to work when the answer cannot be had, so this reports absence rather than failing.
+func (b s3Backend) Holder(ctx context.Context, lock *blueprint.Lock) (who, created string) {
+	cfg := lock.S3
+	client, err := b.client(ctx, cfg.Region)
+	if err != nil {
+		return "", ""
+	}
+	return readLockHolder(ctx, client, cfg)
+}
+
 func (b s3Backend) Release(ctx context.Context, lock *blueprint.Lock) error {
 	cfg := lock.S3
 	client, err := b.client(ctx, cfg.Region)
