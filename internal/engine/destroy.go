@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/cloudfluent/terragraph/internal/blueprint"
 	"github.com/cloudfluent/terragraph/internal/exec"
 )
 
@@ -15,6 +16,21 @@ func (e *Engine) Destroy(opts Options) error {
 	// Same reason Apply refuses it: concurrent nodes have their output buffered and flushed a node at a time, so terraform's confirmation prompt would be invisible until long after the answer was needed. Checked before taking the run lock, so an unrunnable combination fails immediately instead of after waiting for whatever else holds it.
 	if !opts.AutoApprove && opts.parallelism() > 1 {
 		return fmt.Errorf("--parallelism %d needs --auto-approve: output from concurrent nodes is buffered, so there is nowhere to ask for approval", opts.parallelism())
+	}
+
+	// Teardown is delete-only, so approve = "all" is the only level that permits it (the same all-gating apply's notPermitted gives destroy actions). An interactive destroy keeps terraform's own confirmation as the human gate — approve governs what may happen *without* someone saying so — but --auto-approve removes that human, so every in-scope node must already have said yes; --approve=all can only fill a gap, never override a node's own declaration. Checked before any lock is taken, so a refusal fails immediately rather than after waiting on whatever holds it.
+	if opts.AutoApprove {
+		levels, err := e.executionLevels(opts, true)
+		if err != nil {
+			return err
+		}
+		for _, level := range levels {
+			for _, name := range level {
+				if a := e.approveFor(name, opts.Approve); a != blueprint.ApproveAll {
+					return fmt.Errorf("destroy: node %s resolves to approve = %q, which does not permit teardown; set approve = \"all\" on the node (or its enclosing use), pass --approve=all for this run only, or run destroy without --auto-approve to approve interactively", name, a)
+				}
+			}
+		}
 	}
 
 	unlock, err := e.lockRun()

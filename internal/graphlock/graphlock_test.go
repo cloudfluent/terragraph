@@ -29,6 +29,13 @@ func (f fakeBackend) Acquire(ctx context.Context, lock *blueprint.Lock) (Held, e
 	return noopHeld{}, nil
 }
 
+func (f fakeBackend) Release(ctx context.Context, lock *blueprint.Lock) error {
+	if f.calls != nil {
+		*f.calls++
+	}
+	return nil
+}
+
 func withBackends(t *testing.T, bs ...Backend) {
 	t.Helper()
 	orig := backends
