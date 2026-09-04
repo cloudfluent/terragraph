@@ -4,7 +4,7 @@
 
 `terragraph validate` (and `graph`/`plan`/`apply`/`destroy`, which run it first) reports two severities:
 - **Error**: blocks the command (a `from`/`to` referencing a port that doesn't exist, two data edges targeting the same input after group expansion even when they are exact duplicates, a data edge and `vars` both setting the same input, a cycle, a value that doesn't fit the target variable's declared type, `backend_config` set on a module with no `backend` block, two nodes sharing a module directory with identical `backend_config` maps).
-- **Warning**: printed but never blocks. A required variable with no edge feeding it may legitimately come from that module's own `terraform.tfvars` or the environment, outside the blueprint entirely.
+- **Warning**: printed but never blocks. A required variable with no edge feeding it may legitimately come from that module's own `terraform.tfvars` or the environment, outside the blueprint entirely; so may a `.terragraph/state/<name>.tfstate` file left behind by a node that's since been renamed or removed (see below).
 
 Cycle detection reports every independent cyclic cluster in one pass (Tarjan's SCC algorithm), not just the first one found.
 
@@ -30,6 +30,8 @@ tfvars {
   ```
 
   `terragraph validate` warns (never deletes) about a stale file left behind in a shared module directory by a node that's since been renamed or removed from the blueprint.
+
+  `terragraph validate` likewise warns (never deletes) about a stale `state/<name>.tfstate` under the blueprint's `.terragraph/state/` — where the local backend parks state for nodes that don't set an explicit `path`. Files are matched by the backend path each current node resolves to, so a renamed or removed node's state is flagged for you to rename back, remove, or re-import.
 
 ## Execution levels and parallelism
 

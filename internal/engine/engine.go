@@ -175,10 +175,11 @@ func load(blueprintPath string, binary exec.Binary, stdout, stderr io.Writer, ta
 	}, lock, nil
 }
 
-// Validate returns every structural problem found in the graph (missing ports, two data edges targeting the same input, a data edge and vars both setting the same input, cycles, unresolved required variables, backend_config without a backend block, identical backend_config maps on a shared module directory) plus any tfvars orphan warnings (see tfVarsOrphans) and shared-source runtime conflict warnings (see runtimeConflicts). Check each Problem's IsError(): only errors should block graph/plan/apply/destroy, warnings are advisory.
+// Validate returns every structural problem found in the graph (missing ports, two data edges targeting the same input, a data edge and vars both setting the same input, cycles, unresolved required variables, backend_config without a backend block, identical backend_config maps on a shared module directory) plus any tfvars orphan warnings (see tfVarsOrphans), stale local-backend state warnings (see stateOrphans) and shared-source runtime conflict warnings (see runtimeConflicts). Check each Problem's IsError(): only errors should block graph/plan/apply/destroy, warnings are advisory.
 func (e *Engine) Validate() []graph.Problem {
 	problems := graph.Validate(e.Graph)
 	problems = append(problems, e.tfVarsOrphans()...)
+	problems = append(problems, e.stateOrphans()...)
 	problems = append(problems, e.runtimeConflicts()...)
 	return problems
 }
@@ -340,6 +341,43 @@ func (e *Engine) tfVarsOrphans() []graph.Problem {
 				Message:  fmt.Sprintf("%s: belongs to no node in this blueprint; remove it if the node was renamed or deleted", filepath.Join(dir, fname)),
 			})
 		}
+	}
+	return problems
+}
+
+// stateOrphans warns about a local-backend state file left in <BaseDir>/.terragraph/state by a node that no longer owns it (renamed or removed from the blueprint), so a rename doesn't silently strand the old state where a future node of that name would silently adopt it. Files are claimed by the basename of every node's resolved backend_config path, not by node name: a node may point an explicit path at a differently named file under this directory (see blueprint.md), and graph.Build default-fills the rest to <name>.tfstate anyway — so a basename no current node resolves to is an orphan. Never deletes anything; it is the user's call whether the node was renamed (rename it back) or truly abandoned (remove the file or re-import the state elsewhere).
+func (e *Engine) stateOrphans() []graph.Problem {
+	dir := filepath.Join(e.BaseDir, ".terragraph", "state")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil // No state directory yet (fresh or never-applied project): nothing can be orphaned.
+	}
+	claimed := make(map[string]bool)
+	for _, n := range e.Graph.Nodes {
+		if p, ok := n.BackendConfig["path"]; ok {
+			claimed[filepath.Base(p)] = true
+		}
+	}
+	var stale []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		fname := entry.Name()
+		if !strings.HasSuffix(fname, ".tfstate") {
+			continue
+		}
+		if !claimed[fname] {
+			stale = append(stale, fname)
+		}
+	}
+	sort.Strings(stale)
+	var problems []graph.Problem
+	for _, fname := range stale {
+		problems = append(problems, graph.Problem{
+			Severity: graph.SeverityWarning,
+			Message:  fmt.Sprintf("%s: state for a node that no longer exists in this blueprint; if the node was renamed, rename it back (or remove/import the state file if abandoned)", filepath.Join(dir, fname)),
+		})
 	}
 	return problems
 }
