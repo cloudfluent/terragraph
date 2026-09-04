@@ -87,11 +87,11 @@ func TestValidate_EdgeContractChecksProducerModuleSensitivity(t *testing.T) {
 	}
 }
 
-func TestValidate_EdgeContractChecksModuleSensitivity(t *testing.T) {
+func TestValidate_EdgeContractAllowsSensitiveValueIntoOrdinaryModuleVariable(t *testing.T) {
 	g := contractGraph(contractedEdge("string", "string", false, false, true, true))
 	g.Nodes["a"].Schema.OutputDetails["id"] = module.Output{Name: "id", Sensitive: true}
-	if got := contractMessages(g); !strings.Contains(got, "module input is not declared sensitive") {
-		t.Fatalf("problems = %q, want consumer/module sensitivity mismatch", got)
+	if problems := Validate(g); len(problems) != 0 {
+		t.Fatalf("problems = %v, want ordinary variable to accept a sensitive value", problems)
 	}
 }
 

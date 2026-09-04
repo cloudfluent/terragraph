@@ -96,7 +96,7 @@ edge {
 }
 ```
 
-Both blocks and all three fields are required when `contract` is present. `type` is a quoted Terraform type constraint such as `"string"`, `"list(string)"`, or `"object({ id = string })"`. Validation reports an Error when the producer type cannot be safely converted to the consumer type, when a nullable producer feeds a non-nullable consumer, or when a sensitive producer feeds a consumer that does not accept sensitive values. When Terraform module metadata exposes the endpoint type or sensitivity, the contract is also checked against that declaration.
+Both blocks and all three fields are required when `contract` is present. `type` is a quoted Terraform type constraint such as `"string"`, `"list(string)"`, or `"object({ id = string })"`. Validation reports an Error when the producer type cannot be safely converted to the consumer type, when a nullable producer feeds a non-nullable consumer, or when a sensitive producer feeds a consumer that does not accept sensitive values. When Terraform module metadata exposes endpoint types or source-output sensitivity, the contract is also checked against that declaration. A target variable's `sensitive` flag is not an input constraint: Terraform can pass a sensitive value into an ordinary variable and continues to propagate its sensitivity.
 
 Contracts are only valid on data edges. Ordering-only edges carry no value to describe. An edge using nested `input` shorthand declares the contract inside each input, because each expanded binding can have a different agreement:
 

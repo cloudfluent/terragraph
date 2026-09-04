@@ -58,9 +58,6 @@ func edgeContractProblems(g *Graph) []Problem {
 					problems = append(problems, Problem{Severity: SeverityError, Message: fmt.Sprintf("%s: consumer contract type %s does not match module input type %s; update the contract or variable", edge.To, consumer.Type, input.Type)})
 				}
 			}
-			if consumer.Sensitive && !input.Sensitive {
-				problems = append(problems, Problem{Severity: SeverityError, Message: fmt.Sprintf("%s: consumer accepts sensitive values but module input is not declared sensitive; set sensitive = true on the variable", edge.To)})
-			}
 		}
 	}
 	return problems
