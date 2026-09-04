@@ -198,7 +198,7 @@ type Blueprint struct {
 	Lock *Lock
 	// Runtimes holds every `runtime` block declared in this parse scope (see Runtime). Parsing guarantees names are unique and at most one sets Default within this same slice; it does not guarantee every Node.Runtime/Use.Runtime reference in this scope resolves to a name here until validateRuntimes has run, which ParseFile/ParseDir always do before returning.
 	Runtimes []Runtime
-	// ContractMode is the `contracts { mode = ... }` block's value: enforce escalates contract warnings to errors; absence is legacy, and an upgrade never picks a stricter mode on its own.
+	// ContractMode is the `contracts { mode = ... }` block's value: enforce escalates contract warnings to errors; absence is warn, and an upgrade never picks a stricter mode on its own.
 	ContractMode string
 	// Contracts holds every producer/consumer block declared in this parse scope, nil when none (the ordinary uncontracted graph). Local scopes are keyed by the absolute directory they resolve to against the declaring file's directory; remote scopes by the declared source string. graph.Build merges this set with every instantiated group's own contracts onto Graph.Contracts.
 	Contracts *Contracts

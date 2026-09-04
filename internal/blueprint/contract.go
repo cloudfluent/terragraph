@@ -4,24 +4,17 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"sort"
 )
 
-// Assertion is one closed-vocabulary predicate over a port's runtime value (nonempty, pattern, min_length, one_of). Declared in phase 1, evaluated only when real values exist; validate never guesses. Kind plus one string Value keeps the canonical form trivially stable, which is what the digest (see Contracts.Digest) depends on.
-type Assertion struct {
-	Kind  string
-	Value string
-}
-
 // PortContract is one port's half of a contract: a producer's guarantee about an output, or a consumer's requirement for an input. Nullable/Sensitive are pointers because absence is a claim too — an absent nullable on a producer means "may be null", the lenient default the compatibility rules in docs/contracts.md build on — and a bare bool cannot tell "explicitly false" from "never said".
 type PortContract struct {
-	Name       string
-	Scope      string // source path as written in the blueprint ("./modules/vpc", "github.com/org/repo//modules/vpc"); the identity-relevant spelling, never absolutized
-	Type       string // Terraform type-constraint syntax; "" means unconstrained
-	Nullable   *bool
-	Sensitive  *bool
-	Stability  string // "stable" (default) | "volatile"
-	Assertions []Assertion
+	Name      string
+	Scope     string // source path as written in the blueprint ("./modules/vpc", "github.com/org/repo//modules/vpc"); the identity-relevant spelling, never absolutized
+	Type      string // Terraform type-constraint syntax; "" means unconstrained
+	Nullable  *bool
+	Sensitive *bool
 }
 
 // DirContracts is every contract sharing one module source directory. Scope is the human-spelled path used in messages and identity; Dir is the absolute, cleaned directory graph nodes are matched against.
@@ -39,13 +32,11 @@ type Contracts struct {
 
 // canonicalPort is the JSON-facing shape digest runs over. Pointers with omitempty keep "explicitly false" and "absent" distinct, which is the whole point of the pointer fields on PortContract.
 type canonicalPort struct {
-	Scope      string      `json:"scope"`
-	Port       string      `json:"port"`
-	Type       string      `json:"type,omitempty"`
-	Nullable   *bool       `json:"nullable,omitempty"`
-	Sensitive  *bool       `json:"sensitive,omitempty"`
-	Stability  string      `json:"stability,omitempty"`
-	Assertions []Assertion `json:"assertions,omitempty"`
+	Scope     string `json:"scope"`
+	Port      string `json:"port"`
+	Type      string `json:"type,omitempty"`
+	Nullable  *bool  `json:"nullable,omitempty"`
+	Sensitive *bool  `json:"sensitive,omitempty"`
 }
 
 type canonicalEntry struct {
@@ -53,15 +44,15 @@ type canonicalEntry struct {
 	Port canonicalPort `json:"port"`
 }
 
-// Digest is the contract set's identity: sha256 hex over a canonical JSON form with every port sorted by (scope, role, name). Map iteration order must never leak into identity — evidence and future grants bind to this value — which is why the entries are collected and sorted rather than marshalled straight from the maps.
-func (c *Contracts) Digest() string {
+// Digest is the contract set's identity: sha256 hex over a canonical JSON form covering exactly the checked claims — scope, role, port, type, nullable, sensitive — with every port sorted by (scope, role, name). Map iteration order must never leak into identity — anything binding to a contract set binds to this value — which is why the entries are collected and sorted rather than marshalled straight from the maps.
+func (c *Contracts) Digest() (string, error) {
 	entries := make([]canonicalEntry, 0)
 	for _, dc := range c.ByDir {
 		for name, p := range dc.Producer {
-			entries = append(entries, canonicalEntry{Role: "producer", Port: (canonicalPort{Scope: dc.Scope, Port: name, Type: p.Type, Nullable: p.Nullable, Sensitive: p.Sensitive, Stability: p.Stability, Assertions: p.Assertions})})
+			entries = append(entries, canonicalEntry{Role: "producer", Port: canonicalPort{Scope: dc.Scope, Port: name, Type: p.Type, Nullable: p.Nullable, Sensitive: p.Sensitive}})
 		}
 		for name, p := range dc.Consumer {
-			entries = append(entries, canonicalEntry{Role: "consumer", Port: (canonicalPort{Scope: dc.Scope, Port: name, Type: p.Type, Nullable: p.Nullable, Sensitive: p.Sensitive, Stability: p.Stability, Assertions: p.Assertions})})
+			entries = append(entries, canonicalEntry{Role: "consumer", Port: canonicalPort{Scope: dc.Scope, Port: name, Type: p.Type, Nullable: p.Nullable, Sensitive: p.Sensitive}})
 		}
 	}
 	sort.Slice(entries, func(i, j int) bool {
@@ -73,21 +64,15 @@ func (c *Contracts) Digest() string {
 		}
 		return entries[i].Port.Port < entries[j].Port.Port
 	})
-	// Assertions sort within a port so two spellings of the same predicate set digest identically.
-	for i := range entries {
-		a := entries[i].Port.Assertions
-		sort.Slice(a, func(x, y int) bool { return a[x].Kind < a[y].Kind })
-	}
 	data, err := json.Marshal(entries)
 	if err != nil {
-		// canonicalPort holds only strings, pointers, and a slice of the same: there is no input that can fail to marshal, so this cannot be reached with a non-nil error.
-		panic(err)
+		return "", fmt.Errorf("contracts digest: %w", err)
 	}
 	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:])
+	return hex.EncodeToString(sum[:]), nil
 }
 
-// Lookup returns this directory's contracts, or nil when the source is uncontracted — the ordinary legacy case.
+// Lookup returns this directory's contracts, or nil when the source is uncontracted — the ordinary case.
 func (c *Contracts) Lookup(dir string) *DirContracts {
 	if c == nil {
 		return nil

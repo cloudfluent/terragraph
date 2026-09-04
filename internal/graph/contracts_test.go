@@ -37,7 +37,7 @@ edge {
 	return g, root
 }
 
-// TestGraph_ContractsNilWithoutBlocks proves the legacy default: a blueprint with no producer/consumer blocks means a nil Graph.Contracts, and Validate produces exactly the problems it did before contracts existed.
+// TestGraph_ContractsNilWithoutBlocks proves the uncontracted default: a blueprint with no producer/consumer blocks means a nil Graph.Contracts, and Validate produces exactly the problems it did before contracts existed.
 func TestGraph_ContractsNilWithoutBlocks(t *testing.T) {
 	g, _ := writeContractsFixture(t, "")
 	if g.Contracts != nil {
@@ -202,7 +202,7 @@ consumer "./modules/app" {
 	}
 }
 
-// TestValidate_EnforceEscalatesContractWarningsToErrors proves mode is the only severity dial: same graph, same C003, warning under legacy and error under enforce.
+// TestValidate_EnforceEscalatesContractWarningsToErrors proves mode is the only severity dial: same graph, same C003, warning with no mode set and error under enforce.
 func TestValidate_EnforceEscalatesContractWarningsToErrors(t *testing.T) {
 	g, _ := writeContractsFixture(t, `
 producer "./modules/vpc" {
@@ -213,7 +213,7 @@ consumer "./modules/app" {
 }
 `)
 	if problems := Validate(g); len(problems) != 1 || problems[0].IsError() {
-		t.Fatalf("legacy must stay advisory: %v", problems)
+		t.Fatalf("unset mode must stay advisory: %v", problems)
 	}
 	g.ContractMode = "enforce"
 	if problems := Validate(g); len(problems) != 1 || !problems[0].IsError() {

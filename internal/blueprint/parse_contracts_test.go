@@ -17,7 +17,7 @@ func writeContractsFile(t *testing.T, path, contents string) {
 	}
 }
 
-// TestParseFile_ContractBlocksRoundTrip proves the full grammar round-trips from an ordinary blueprint file: attributes, pointer tri-states, nested assert predicates, and scope resolution against the file's own directory — the same base a node source in that file resolves against.
+// TestParseFile_ContractBlocksRoundTrip proves the grammar round-trips from an ordinary blueprint file: attributes, pointer tri-states, and scope resolution against the file's own directory — the same base a node source in that file resolves against.
 func TestParseFile_ContractBlocksRoundTrip(t *testing.T) {
 	base := t.TempDir()
 	writeContractsFile(t, filepath.Join(base, "blueprint.hcl"), `
@@ -25,11 +25,6 @@ producer "./modules/vpc" {
   output "vpc_id" {
     type      = "string"
     nullable  = false
-    stability = "stable"
-    assert {
-      nonempty = true
-      pattern  = "^vpc-"
-    }
   }
 }
 consumer "./modules/app" {
@@ -57,9 +52,6 @@ consumer "./modules/app" {
 	p := dc.Producer["vpc_id"]
 	if p.Type != "string" || p.Nullable == nil || *p.Nullable {
 		t.Fatalf("unexpected producer port: %+v", p)
-	}
-	if len(p.Assertions) != 2 {
-		t.Fatalf("got = %d assertions, want 2", len(p.Assertions))
 	}
 	app := bp.Contracts.Lookup(filepath.Join(base, "modules", "app"))
 	if app == nil || app.Consumer["vpc_id"].Type != "string" {
@@ -110,17 +102,32 @@ producer "github.com/org/repo//modules/vpc" {
 	}
 }
 
-// TestParseContracts_RejectsBadStabilityAndAbsoluteScope proves enum and path-shape validation fail at parse time, where the file and range are known, not later at graph time. A remote source is fine; an absolute filesystem path pins a contract to one machine's layout and is not.
-func TestParseContracts_RejectsBadStabilityAndAbsoluteScope(t *testing.T) {
+// TestParseContracts_RejectsRemovedGrammar proves stability and assert, removed with the evidence layer they existed to serve, are unsupported rather than silently ignored: a stale file must fail loudly at parse, not quietly weaken into a contract that checks nothing.
+func TestParseContracts_RejectsRemovedGrammar(t *testing.T) {
 	base := t.TempDir()
 	writeContractsFile(t, filepath.Join(base, "blueprint.hcl"), `
 producer "./modules/vpc" {
-  output "vpc_id" { stability = "sometimes" }
+  output "vpc_id" { stability = "stable" }
 }
 `)
-	if _, err := ParseFile(filepath.Join(base, "blueprint.hcl")); err == nil || !strings.Contains(err.Error(), "stability") {
-		t.Fatalf("got = %v, want stability enum error", err)
+	if _, err := ParseFile(filepath.Join(base, "blueprint.hcl")); err == nil || !strings.Contains(err.Error(), "Unsupported argument") || !strings.Contains(err.Error(), "stability") {
+		t.Fatalf("got = %v, want unsupported-argument error for stability", err)
 	}
+	writeContractsFile(t, filepath.Join(base, "blueprint.hcl"), `
+producer "./modules/vpc" {
+  output "vpc_id" {
+    assert { nonempty = true }
+  }
+}
+`)
+	if _, err := ParseFile(filepath.Join(base, "blueprint.hcl")); err == nil || !strings.Contains(err.Error(), "Unsupported block type") || !strings.Contains(err.Error(), "assert") {
+		t.Fatalf("got = %v, want unsupported-block error for assert", err)
+	}
+}
+
+// TestParseContracts_RejectsAbsoluteScope proves path-shape validation fails at parse time, where the file and range are known, not later at graph time: an absolute filesystem path pins a contract to one machine's layout.
+func TestParseContracts_RejectsAbsoluteScope(t *testing.T) {
+	base := t.TempDir()
 	writeContractsFile(t, filepath.Join(base, "blueprint.hcl"), `
 producer "/abs/modules/vpc" {
   output "vpc_id" { type = "string" }
@@ -173,8 +180,16 @@ producer "./modules/vpc" {
 	if err != nil {
 		t.Fatalf("ParseFile: %v", err)
 	}
-	if first.Contracts.Digest() != second.Contracts.Digest() {
-		t.Fatalf("block order changed the digest: %s vs %s", first.Contracts.Digest(), second.Contracts.Digest())
+	firstDigest, err := first.Contracts.Digest()
+	if err != nil {
+		t.Fatalf("Digest: %v", err)
+	}
+	secondDigest, err := second.Contracts.Digest()
+	if err != nil {
+		t.Fatalf("Digest: %v", err)
+	}
+	if firstDigest != secondDigest {
+		t.Fatalf("block order changed the digest: %s vs %s", firstDigest, secondDigest)
 	}
 }
 
@@ -182,10 +197,8 @@ producer "./modules/vpc" {
 func TestParseContracts_RejectsWronglyTypedAttributes(t *testing.T) {
 	base := t.TempDir()
 	for name, hcl := range map[string]string{
-		"type":       "producer \"./m\" {\n  output \"id\" {\n    type = 5\n  }\n}\n",
-		"nullable":   "producer \"./m\" {\n  output \"id\" {\n    nullable = \"yes\"\n  }\n}\n",
-		"one_of":     "producer \"./m\" {\n  output \"id\" {\n    assert {\n      one_of = \"nope\"\n    }\n  }\n}\n",
-		"min_length": "producer \"./m\" {\n  output \"id\" {\n    assert {\n      min_length = \"x\"\n    }\n  }\n}\n",
+		"type":     "producer \"./m\" {\n  output \"id\" {\n    type = 5\n  }\n}\n",
+		"nullable": "producer \"./m\" {\n  output \"id\" {\n    nullable = \"yes\"\n  }\n}\n",
 	} {
 		writeContractsFile(t, filepath.Join(base, "blueprint.hcl"), hcl)
 		_, err := ParseFile(filepath.Join(base, "blueprint.hcl"))

@@ -356,26 +356,9 @@ func copyPorts(m map[string]blueprint.PortContract) map[string]blueprint.PortCon
 	return out
 }
 
-// sameClaims compares two ports' promises, ignoring Scope (the same directory can be spelled differently from different files) and Name (equal by construction here): the digest-relevant claims only. Assertions are a set semantically, so order is normalized before comparing.
+// sameClaims compares two ports' promises, ignoring Scope (the same directory can be spelled differently from different files) and Name (equal by construction here): the digest-relevant claims only.
 func sameClaims(a, b blueprint.PortContract) bool {
-	if a.Type != b.Type || a.Stability != b.Stability {
-		return false
-	}
-	if !eqBoolPtr(a.Nullable, b.Nullable) || !eqBoolPtr(a.Sensitive, b.Sensitive) {
-		return false
-	}
-	if len(a.Assertions) != len(b.Assertions) {
-		return false
-	}
-	as, bs := append([]blueprint.Assertion(nil), a.Assertions...), append([]blueprint.Assertion(nil), b.Assertions...)
-	sort.Slice(as, func(i, j int) bool { return as[i].Kind+as[i].Value < as[j].Kind+as[j].Value })
-	sort.Slice(bs, func(i, j int) bool { return bs[i].Kind+bs[i].Value < bs[j].Kind+bs[j].Value })
-	for i := range as {
-		if as[i] != bs[i] {
-			return false
-		}
-	}
-	return true
+	return a.Type == b.Type && eqBoolPtr(a.Nullable, b.Nullable) && eqBoolPtr(a.Sensitive, b.Sensitive)
 }
 
 func eqBoolPtr(a, b *bool) bool {

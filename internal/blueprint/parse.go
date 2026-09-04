@@ -458,8 +458,8 @@ func parseContractsBlock(block *hcl.Block) (string, error) {
 		return "", fmt.Errorf("%s: mode must be a literal string", attr.Range)
 	}
 	mode := val.AsString()
-	if mode != "legacy" && mode != "warn" && mode != "enforce" {
-		return "", fmt.Errorf("%s: mode must be legacy, warn, or enforce, got %q", attr.Range, mode)
+	if mode != "warn" && mode != "enforce" {
+		return "", fmt.Errorf("%s: mode must be warn or enforce; legacy and warn were always one behavior, got %q", attr.Range, mode)
 	}
 	return mode, nil
 }

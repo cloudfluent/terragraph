@@ -12,7 +12,7 @@ import (
 	"github.com/cloudfluent/terragraph/internal/blueprint"
 )
 
-// contractProblems reports every contract violation with a stable [C0xx] code (docs/contracts.md is the table of record). Severity is the blueprint's mode dial: legacy/warn keep every code advisory, enforce escalates all of them to errors — the only way strictness can enter is reviewed blueprint configuration, never a default.
+// contractProblems reports every contract violation with a stable [C0xx] code (docs/contracts.md is the table of record). Severity is the blueprint's mode dial: warn (the default when no mode is set) keeps every code advisory, enforce escalates all of them to errors — the only way strictness can enter is reviewed blueprint configuration, never a default.
 func contractProblems(g *Graph) []Problem {
 	if g.Contracts == nil {
 		return nil

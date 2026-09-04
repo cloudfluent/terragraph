@@ -3,7 +3,6 @@ package blueprint
 import (
 	"fmt"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/hashicorp/hcl/v2"
@@ -24,18 +23,6 @@ var portContractSchema = &hcl.BodySchema{
 		{Name: "type", Required: false},
 		{Name: "nullable", Required: false},
 		{Name: "sensitive", Required: false},
-		{Name: "stability", Required: false},
-	},
-	Blocks: []hcl.BlockHeaderSchema{{Type: "assert"}},
-}
-
-// assertSchema is a closed vocabulary, one attribute per predicate kind: extending the set is an addition to this schema and the docs, never a syntax change, because digests must stay comparable across releases (see docs/contracts.md).
-var assertSchema = &hcl.BodySchema{
-	Attributes: []hcl.AttributeSchema{
-		{Name: "nonempty", Required: false},
-		{Name: "pattern", Required: false},
-		{Name: "min_length", Required: false},
-		{Name: "one_of", Required: false},
 	},
 }
 
@@ -96,7 +83,7 @@ func parseContractSideBlock(block *hcl.Block, baseDir string, c *Contracts, seen
 }
 
 func parsePortContract(port *hcl.Block, role, kind, scope, name string) (PortContract, error) {
-	pc := PortContract{Name: name, Scope: scope, Stability: "stable"}
+	pc := PortContract{Name: name, Scope: scope}
 	content, diags := port.Body.Content(portContractSchema)
 	if diags.HasErrors() {
 		return PortContract{}, fmt.Errorf("%s: %s", port.DefRange, diags.Error())
@@ -123,57 +110,6 @@ func parsePortContract(port *hcl.Block, role, kind, scope, name string) (PortCon
 				pc.Nullable = new(val.True())
 			} else {
 				pc.Sensitive = new(val.True())
-			}
-		case "stability":
-			if val.Type() != cty.String {
-				return PortContract{}, attrTypeError(role, kind, name, "stability", val, "a string")
-			}
-			pc.Stability = val.AsString()
-			if pc.Stability != "stable" && pc.Stability != "volatile" {
-				return PortContract{}, fmt.Errorf("contract.%s.%s.%s: stability must be \"stable\" or \"volatile\", got %q", role, kind, name, pc.Stability)
-			}
-		}
-	}
-	for _, ab := range content.Blocks {
-		ac, diags := ab.Body.Content(assertSchema)
-		if diags.HasErrors() {
-			return PortContract{}, fmt.Errorf("%s: %s", port.DefRange, diags.Error())
-		}
-		for _, attr := range ac.Attributes {
-			val, diags := attr.Expr.Value(nil)
-			if diags.HasErrors() {
-				return PortContract{}, fmt.Errorf("%s: %s", port.DefRange, diags.Error())
-			}
-			switch attr.Name {
-			case "nonempty":
-				if val.Type() != cty.Bool {
-					return PortContract{}, attrTypeError(role, kind, name, "nonempty", val, "a bool")
-				}
-				pc.Assertions = append(pc.Assertions, Assertion{Kind: "nonempty", Value: fmt.Sprintf("%t", val.True())})
-			case "pattern":
-				if val.Type() != cty.String {
-					return PortContract{}, attrTypeError(role, kind, name, "pattern", val, "a string")
-				}
-				pc.Assertions = append(pc.Assertions, Assertion{Kind: "pattern", Value: val.AsString()})
-			case "min_length":
-				if val.Type() != cty.Number {
-					return PortContract{}, attrTypeError(role, kind, name, "min_length", val, "a number")
-				}
-				pc.Assertions = append(pc.Assertions, Assertion{Kind: "min_length", Value: val.AsBigFloat().String()})
-			case "one_of":
-				if !val.Type().IsListType() && !val.Type().IsSetType() && !val.Type().IsTupleType() {
-					return PortContract{}, attrTypeError(role, kind, name, "one_of", val, "a list of strings")
-				}
-				parts := make([]string, 0)
-				for it := val.ElementIterator(); it.Next(); {
-					_, el := it.Element()
-					if el.Type() != cty.String {
-						return PortContract{}, attrTypeError(role, kind, name, "one_of", el, "a list of strings")
-					}
-					parts = append(parts, el.AsString())
-				}
-				sort.Strings(parts) // one_of is a set semantically; sorted spelling keeps the digest independent of listing order
-				pc.Assertions = append(pc.Assertions, Assertion{Kind: "one_of", Value: strings.Join(parts, ",")})
 			}
 		}
 	}

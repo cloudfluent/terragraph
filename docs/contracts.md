@@ -29,11 +29,6 @@ producer "./modules/vpc" {
     type      = "string"        # Terraform type constraint syntax
     nullable  = false           # this output is never null
     sensitive = false           # not a secret
-    stability = "stable"        # "stable" (default) | "volatile"
-    assert {
-      nonempty = true           # value must not be "" when a string
-      pattern  = "^vpc-"        # value must match this regex
-    }
   }
 }
 
@@ -51,11 +46,9 @@ producer means "may be null" (a weak promise), and an omitted `nullable` on a
 consumer means "accepts null". Violations only fire on explicit strictness
 that the other side does not meet.
 
-`assert` predicates are declared now and evaluated later, by the observe
-command (a follow-up phase) that has actual values to test. `validate` never
-guesses at values. The phase-1 predicate set is closed — `nonempty`,
-`pattern`, `min_length` (strings/lists), `one_of` — so digests stay stable;
-new predicates are additions, never syntax changes.
+The grammar carries only claims `validate` actually checks; there is no
+predicate syntax — `assert` was removed with the evidence layer that would
+have evaluated it, and `stability` never affected any check.
 
 ## Contract identity
 
@@ -79,16 +72,16 @@ carry contracts, plus a schema sanity check for every declared contract:
 | C005 | warning | producer is `sensitive = true` but the consumer does not accept sensitive values |
 | C006 | warning | contract scope matches no node in the graph (stale path after a move or rename) |
 
-All contract problems are warnings in the default modes; the mode block below
+All contract problems are warnings in the default mode; the mode block below
 is the only severity dial.
 
 ### Modes
 
-`contracts { mode = "..." }` in the blueprint is reviewed configuration and the
-only severity dial: `legacy` and `warn` (default) report every C001–C006 as a
-warning; `enforce` escalates them to errors, which blocks `validate`, `plan`,
-`apply`, and `destroy` the same way structural errors already do. An upgrade
-never selects a stricter mode on its own.
+`contracts { mode = "..." }` in the blueprint is reviewed configuration and
+the only severity dial: `warn` (the default when the block is absent) reports
+every C001–C006 as a warning; `enforce` escalates them to errors, which
+blocks `validate`, `plan`, `apply`, and `destroy` the same way structural
+errors already do. An upgrade never selects a stricter mode on its own.
 
 ## Non-goals for this phase
 
@@ -96,5 +89,4 @@ never selects a stricter mode on its own.
   file can already reach group-internal modules by relative path.
 - No cross-check of contract `sensitive` against the module's own
   `sensitive = true` output flag; the contract is intent, the module is
-  declaration, and reconciling them is observe's job.
-- No arbitrary assertion expressions. Predicate set only (see above).
+  the declaration of record.
