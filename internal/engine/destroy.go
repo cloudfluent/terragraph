@@ -26,7 +26,7 @@ func (e *Engine) Destroy(opts Options) error {
 		for _, level := range levels {
 			for _, name := range level {
 				if a := e.approveFor(name, opts.Approve); a != blueprint.ApproveAll {
-					return fmt.Errorf("destroy: node %s resolves to approve = %q, which does not permit teardown; set approve = \"all\" on the node (or its enclosing use) or run destroy without --auto-approve to approve interactively", name, a)
+					return fmt.Errorf("destroy: node %s resolves to approve = %q, which does not permit teardown; set approve = \"all\" on the node (or its enclosing use), pass --approve=all for this run only, or run destroy without --auto-approve to approve interactively", name, a)
 				}
 			}
 		}
