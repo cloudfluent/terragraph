@@ -211,3 +211,23 @@ func TestGraph_DoesNotTakeBlueprintLock(t *testing.T) {
 		t.Fatalf("graph should not take the blueprint lock, stat error = %v", err)
 	}
 }
+
+// destroy must expose the same --approve escape hatch apply does: the engine gate resolves opts.Approve, so a CLI that never parses the flag leaves `destroy --auto-approve` with no unattended route for nodes that declared nothing. An unknown value fails in ParseApprove — proving registration, parsing, and the pass-through call order — without shelling out to terraform.
+func TestDestroy_ApproveFlagIsWired(t *testing.T) {
+	dir := t.TempDir()
+	writeFixtureFile(t, filepath.Join(dir, "blueprint.hcl"), `node "a" { source = "./stacks/a" }`)
+	writeFixtureFile(t, filepath.Join(dir, "stacks/a/main.tf"), `output "x" { value = "hi" }`)
+
+	root := NewRootCmd("test")
+	var outBuf, errBuf bytes.Buffer
+	root.SetOut(&outBuf)
+	root.SetErr(&errBuf)
+	root.SetArgs([]string{"--blueprint", dir, "destroy", "--approve=bogus"})
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected an error for an unknown --approve value")
+	}
+	if !strings.Contains(err.Error(), "unknown approve level") || strings.Contains(err.Error(), "unknown flag") {
+		t.Fatalf("expected --approve to reach blueprint.ParseApprove, got: %v", err)
+	}
+}

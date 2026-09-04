@@ -33,6 +33,10 @@ type Graph struct {
 	In    map[string][]string
 	// Lock is the blueprint's optional graph remote lock, set only in Build (not inner group build). Nil means flock-only.
 	Lock *blueprint.Lock
+	// Contracts is the blueprint's contract set, merged by Build: the root blueprint's own producer/consumer blocks plus every instantiated group's (see mergeContracts). Keying is hybrid (see blueprint.DirContracts): local scopes by resolved source directory, remote scopes by the declared source string, so two vendored instances of one remote module share one record. Nil is the ordinary, uncontracted graph, and every contract-aware consumer must treat nil as "no claims, no checks".
+	Contracts *blueprint.Contracts
+	// ContractMode is the blueprint's `contracts { mode = ... }` value, set by engine load after Build; graph reads it only to pick contract-problem severity (enforce escalates C001-C006 to errors), never to change what is checked.
+	ContractMode string
 }
 
 // cloneNode returns a value copy of n with its BackendConfig/Vars/Env maps deep-copied. n.Nodes for a group instantiation come from a group definition that resolveContext.parseGroupDir may hand back to more than one `use` site (see loadGroupDef); without this, every instance of the same group would share the exact same underlying BackendConfig/Vars/Env map objects, since a plain struct copy only copies the map header, not its contents.
@@ -106,6 +110,10 @@ func build(bp *blueprint.Blueprint, baseDir, namespace string, ambient *blueprin
 		Nodes: make(map[string]*Node),
 		Out:   make(map[string][]string),
 		In:    make(map[string][]string),
+	}
+
+	if err := mergeContracts(g, bp.Contracts); err != nil {
+		return nil, nil, err
 	}
 
 	qualify := func(name string) string {
@@ -188,6 +196,11 @@ func build(bp *blueprint.Blueprint, baseDir, namespace string, ambient *blueprin
 			g.Out[e.From.Node] = append(g.Out[e.From.Node], e.To.Node)
 			g.In[e.To.Node] = append(g.In[e.To.Node], e.From.Node)
 		}
+
+		// The group's own contracts rode on its internal graph (see resolveUse); splice them into this scope's set like its nodes and edges.
+		if err := mergeContracts(g, internal.Contracts); err != nil {
+			return nil, nil, fmt.Errorf("use %q as %q: %w", u.GroupName, u.As, err)
+		}
 	}
 
 	for _, e := range bp.Edges {
@@ -214,8 +227,7 @@ func resolveUse(u blueprint.Use, referencingDir, instancePrefix string, ambient 
 		return useInfo{}, nil, err
 	}
 	defer pop()
-
-	def, groupRuntimes, err := loadGroupDef(rc, groupDir, u.GroupName)
+	def, groupRuntimes, dirContracts, err := loadGroupDef(rc, groupDir, u.GroupName)
 	if err != nil {
 		return useInfo{}, nil, err
 	}
@@ -224,6 +236,14 @@ func resolveUse(u blueprint.Use, referencingDir, instancePrefix string, ambient 
 	innerBP := &blueprint.Blueprint{Nodes: def.Nodes, Edges: def.Edges, Uses: def.Uses, Runtimes: groupRuntimes}
 	internal, innerUses, err := build(innerBP, groupDir, instancePrefix, ambient, ambientEnv, ambientBackendConfig, ambientApprove, rc)
 	if err != nil {
+		return useInfo{}, nil, err
+	}
+
+	// The group's own contracts — declared inside its group block, plus any producer/consumer blocks at the top level of its source directory — ride on the internal graph, so claims about the group's internal modules are validated with it and merged upward by the caller.
+	if err := mergeContracts(internal, def.Contracts); err != nil {
+		return useInfo{}, nil, err
+	}
+	if err := mergeContracts(internal, dirContracts); err != nil {
 		return useInfo{}, nil, err
 	}
 
@@ -265,4 +285,85 @@ func resolveUse(u blueprint.Use, referencingDir, instancePrefix string, ambient 
 		roots:  roots,
 		sinks:  sinks,
 	}, internal, nil
+}
+
+// mergeContracts merges src into g.Contracts, allocating it on first use. The same (source, role, port) promised twice with identical claims dedupes silently — the root blueprint and one of its groups may legitimately contract the same module — but differing claims about one port are an error: two contradictory promises must be resolved by a human, not by last-write-wins.
+func mergeContracts(g *Graph, src *blueprint.Contracts) error {
+	if src == nil {
+		return nil
+	}
+	if g.Contracts == nil {
+		g.Contracts = &blueprint.Contracts{ByDir: map[string]*blueprint.DirContracts{}}
+	}
+	for _, dc := range src.ByDir {
+		existing := g.Contracts.ByDir[dc.Dir]
+		if existing == nil {
+			g.Contracts.ByDir[dc.Dir] = dc
+			continue
+		}
+		merged, err := mergeDirContracts(existing, dc)
+		if err != nil {
+			return err
+		}
+		g.Contracts.ByDir[dc.Dir] = merged
+	}
+	return nil
+}
+
+// mergeDirContracts folds add's ports into base without mutating either side (both may be owned by a cached parse result), returning a fresh DirContracts. The first-seen Scope spelling wins; identity runs on Dir.
+func mergeDirContracts(base, add *blueprint.DirContracts) (*blueprint.DirContracts, error) {
+	merged := &blueprint.DirContracts{
+		Scope:    base.Scope,
+		Dir:      base.Dir,
+		Producer: copyPorts(base.Producer),
+		Consumer: copyPorts(base.Consumer),
+	}
+	for name, p := range add.Producer {
+		if err := mergePort(merged, "output", name, p); err != nil {
+			return nil, err
+		}
+	}
+	for name, p := range add.Consumer {
+		if err := mergePort(merged, "input", name, p); err != nil {
+			return nil, err
+		}
+	}
+	return merged, nil
+}
+
+func mergePort(dc *blueprint.DirContracts, kind, name string, p blueprint.PortContract) error {
+	role := "producer"
+	ports := dc.Producer
+	if kind == "input" {
+		role = "consumer"
+		ports = dc.Consumer
+	}
+	if cur, ok := ports[name]; ok {
+		if !sameClaims(cur, p) {
+			return fmt.Errorf("contract.%s.%s.%s (%s): declared both in the blueprint and in a group with different claims; make the claims identical or remove one", role, kind, name, dc.Scope)
+		}
+		return nil // identical re-declaration dedupes
+	}
+	ports[name] = p
+	return nil
+}
+
+func copyPorts(m map[string]blueprint.PortContract) map[string]blueprint.PortContract {
+	out := make(map[string]blueprint.PortContract, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
+
+// sameClaims compares two ports' promises, ignoring Scope (the same directory can be spelled differently from different files) and Name (equal by construction here): the digest-relevant claims only.
+func sameClaims(a, b blueprint.PortContract) bool {
+	return a.Type == b.Type && eqBoolPtr(a.Nullable, b.Nullable) && eqBoolPtr(a.Sensitive, b.Sensitive)
+}
+
+func eqBoolPtr(a, b *bool) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }

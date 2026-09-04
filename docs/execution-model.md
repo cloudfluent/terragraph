@@ -129,6 +129,8 @@ If this is intended, declare approve = "all" on that node, or re-run with --appr
 
 This is checked whether or not anyone is watching. An interactive `yes` answers "apply this plan", not "override the standing policy"; overriding it is `--approve=all`, which is a visible, deliberate act.
 
+An unattended destroy (`--auto-approve`) is held to the same policy without a plan to read: teardown is delete-only, so it requires every node in scope to resolve to `approve = "all"`, while an interactive destroy stays gated by Terraform's own confirmation prompt.
+
 The check reads the saved plan file, so it cannot run on the `remote`/`cloud` backends, which have none. Apply stops on those nodes with an error rather than applying uninspected.
 
 ## Approval
