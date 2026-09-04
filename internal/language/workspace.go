@@ -79,9 +79,6 @@ func (w *Workspace) Complete(_ context.Context, path string, offset int) []Compl
 	if offset < 0 || offset > len(text) {
 		return nil
 	}
-	if isContractsFile(path) {
-		return contractsCompletions(text, offset)
-	}
 
 	model := w.model(path, text)
 	start := traversalStart(text, offset)
@@ -108,18 +105,6 @@ func (w *Workspace) Complete(_ context.Context, path string, offset int) []Compl
 		return relativeOutputCompletions(model, text, fragment, start, offset)
 	}
 	return contextCompletions(blocks, fragment, start, offset)
-}
-
-// isContractsFile identifies the reserved contracts sibling (see blueprint.ParseContracts): such files speak the contract grammar, not the blueprint one, so completion and diagnostics route to their own rules.
-func isContractsFile(path string) bool {
-	return filepath.Base(path) == "contracts.hcl"
-}
-
-// contractsCompletions serves contracts.hcl from its own schema; the blueprint workspace model does not apply there.
-func contractsCompletions(text []byte, offset int) []Completion {
-	blocks := blockPathAt(text, offset)
-	start := traversalStart(text, offset)
-	return contextCompletionsIn(contractsCompletionSchemas, blocks, string(text[start:offset]), start, offset)
 }
 
 type workspaceModel struct {
@@ -338,10 +323,6 @@ var completionSchemas = map[string][]attributeSpec{
 		{name: "vendor", insert: "vendor {\n}", detail: "Blueprint block", documentation: "Configures the local vendor directory."},
 		{name: "tfvars", insert: "tfvars {\n}", detail: "Blueprint block", documentation: "Configures where resolved input values are written."},
 		{name: "lock", insert: "lock {\n  s3 {\n    bucket = \"\"\n    key    = \"\"\n    region = \"\"\n  }\n}", detail: "Blueprint block", documentation: "Serializes plan/apply/destroy across machines with a remote lock object."},
-		{name: "contracts", insert: "contracts {\n  mode = \"\"\n}", detail: "Blueprint block", documentation: "Contract strictness: legacy, warn (default), or enforce."},
-	},
-	"contracts": {
-		{name: "mode", insert: "mode = \"warn\"", detail: "legacy | warn | enforce", documentation: "Contract strictness; enforce turns C001-C006 into errors."},
 	},
 	"node": {
 		{name: "source", insert: "source = \"\"", detail: "required string", documentation: "Path or remote source of the Terraform or OpenTofu module."},
@@ -395,56 +376,9 @@ var completionSchemas = map[string][]attributeSpec{
 	},
 }
 
-// contractsCompletionSchemas mirrors docs/contracts.md's grammar for files named contracts.hcl, keyed the same way completionSchemas is (block-path suffix). The two grammars share no vocabulary: this file's blocks are never blueprint blocks and vice versa.
-var contractsCompletionSchemas = map[string][]attributeSpec{
-	"": {
-		{name: "producer", insert: "producer \"./modules/name\" {\n  output \"port\" {\n    type = \"\"\n  }\n}", detail: "Contract block", documentation: "Guarantees about every output of one module source directory."},
-		{name: "consumer", insert: "consumer \"./modules/name\" {\n  input \"port\" {\n    type = \"\"\n  }\n}", detail: "Contract block", documentation: "Requirements for one input of one module source directory."},
-	},
-	"producer": {
-		{name: "output", insert: "output \"name\" {\n  type = \"\"\n}", detail: "Producer port", documentation: "One output this source guarantees."},
-	},
-	"consumer": {
-		{name: "input", insert: "input \"name\" {\n  type = \"\"\n}", detail: "Consumer port", documentation: "One input this source requires."},
-	},
-	"producer.output": {
-		{name: "type", insert: "type = \"string\"", detail: "Terraform type constraint", documentation: "Type this output guarantees."},
-		{name: "nullable", insert: "nullable = false", detail: "bool", documentation: "Promise the value is never null."},
-		{name: "sensitive", insert: "sensitive = true", detail: "bool", documentation: "Mark the value sensitive; consumers must opt in."},
-		{name: "stability", insert: "stability = \"stable\"", detail: "stable | volatile", documentation: "Whether the value's meaning is stable across applies."},
-		{name: "assert", insert: "assert {\n  nonempty = true\n}", detail: "Predicate block", documentation: "Value predicates."},
-	},
-	"consumer.input": {
-		{name: "type", insert: "type = \"string\"", detail: "Terraform type constraint", documentation: "Type this input requires."},
-		{name: "nullable", insert: "nullable = false", detail: "bool", documentation: "Require a non-null value."},
-		{name: "sensitive", insert: "sensitive = true", detail: "bool", documentation: "Accept sensitive values from upstream."},
-		{name: "stability", insert: "stability = \"stable\"", detail: "stable | volatile", documentation: "Whether the expected meaning is stable across applies."},
-		{name: "assert", insert: "assert {\n  pattern = \"\"\n}", detail: "Predicate block", documentation: "Value predicates."},
-	},
-	"producer.output.assert": assertAttrs,
-	"consumer.input.assert":  assertAttrs,
-}
-
-// assertAttrs is the closed predicate vocabulary (docs/contracts.md): additions only, never syntax changes, because digests must stay comparable.
-var assertAttrs = []attributeSpec{
-	{name: "nonempty", insert: "nonempty = true", detail: "bool", documentation: "Value must not be empty."},
-	{name: "pattern", insert: "pattern = \"\"", detail: "regex", documentation: "Value must match this regular expression."},
-	{name: "min_length", insert: "min_length = 1", detail: "number", documentation: "Minimum length for strings and lists."},
-	{name: "one_of", insert: "one_of = [\"\"]", detail: "list(string)", documentation: "Value must be one of these."},
-}
-
-// The attribute names contractsDiagnostics accepts, mirroring blueprint.portContractSchema and blueprint.assertSchema.
-var contractsPortAttrs = []string{"type", "nullable", "sensitive", "stability"}
-var contractsAssertAttrs = []string{"nonempty", "pattern", "min_length", "one_of"}
-
 // contextCompletions suggests what may be written inside the block containing the cursor. path is that block's chain of enclosing Blueprint blocks (see blockPathAt), matched against completionSchemas by longest suffix, so a nested block picks its own schema ("edge.input") while one that only ever means one thing keeps a single entry wherever it appears ("node", inside a group or not).
 func contextCompletions(path []string, prefix string, start, end int) []Completion {
-	return contextCompletionsIn(completionSchemas, path, prefix, start, end)
-}
-
-// contextCompletionsIn is contextCompletions parameterized by schema map: the blueprint grammar and the contracts.hcl grammar share the suffix-matching machinery but share no vocabulary.
-func contextCompletionsIn(schemas map[string][]attributeSpec, path []string, prefix string, start, end int) []Completion {
-	fields := schemaForPathIn(schemas, path)
+	fields := schemaForPath(path)
 	return stringCompletions(specNames(fields), prefix, func(name string) Completion {
 		for _, field := range fields {
 			if field.name == name {
@@ -455,12 +389,12 @@ func contextCompletionsIn(schemas map[string][]attributeSpec, path []string, pre
 	})
 }
 
-func schemaForPathIn(schemas map[string][]attributeSpec, path []string) []attributeSpec {
+func schemaForPath(path []string) []attributeSpec {
 	if len(path) == 0 {
-		return schemas[""]
+		return completionSchemas[""]
 	}
 	for i := range path {
-		if fields, ok := schemas[strings.Join(path[i:], ".")]; ok {
+		if fields, ok := completionSchemas[strings.Join(path[i:], ".")]; ok {
 			return fields
 		}
 	}
@@ -647,7 +581,7 @@ func enclosingNamedBlock(text []byte, offset int, name string) (start, end int, 
 	return brace, len(text), true
 }
 
-var blockHeader = regexp.MustCompile(`(?s)(node|edge|runtime|group|use|vendor|tfvars|lock|s3|export|input|output|producer|consumer|assert)\s*(?:"[^\"]*")?\s*$`)
+var blockHeader = regexp.MustCompile(`(?s)(node|edge|runtime|group|use|vendor|tfvars|lock|s3|export|input|output)\s*(?:"[^\"]*")?\s*$`)
 
 // openBlock is one Blueprint block still open at some offset: its keyword (empty
 // for a brace that opens an object rather than a block, e.g. vars or env) and the
@@ -835,9 +769,6 @@ func (w *Workspace) Definition(_ context.Context, path string, offset int) (Loca
 func (w *Workspace) Diagnose(_ context.Context, path string) []Diagnostic {
 	path = absolute(path)
 	text := w.document(path)
-	if isContractsFile(path) {
-		return contractsDiagnostics(path, text)
-	}
 	model := w.model(path, text)
 	diagnostics := []Diagnostic{}
 	for _, match := range nodeReference.FindAllSubmatchIndex(text, -1) {
@@ -886,100 +817,6 @@ func (w *Workspace) Diagnose(_ context.Context, path string) []Diagnostic {
 		diagnostics = append(diagnostics, Diagnostic{Start: start, End: end, Message: "Unknown input " + string(text[start:end]) + availableHint(ports.inputs)})
 	}
 	return append(diagnostics, edgeInputDiagnostics(model, path, text)...)
-}
-
-// contractsDiagnostics gives contracts.hcl parse-level parity with blueprint.ParseContracts: unknown blocks and attributes, non-relative scopes, duplicate (scope, role, port) declarations, and the stability enum — everything checkable from the file alone, so errors update while typing.
-func contractsDiagnostics(path string, text []byte) []Diagnostic {
-	file, _ := hclsyntax.ParseConfig(text, path, hcl.InitialPos)
-	body, ok := file.Body.(*hclsyntax.Body)
-	if !ok {
-		return nil
-	}
-
-	diagnostics := []Diagnostic{}
-	seen := map[[3]string]bool{}
-	for _, block := range body.Blocks {
-		if block.Type != "producer" && block.Type != "consumer" {
-			diagnostics = append(diagnostics, Diagnostic{Start: block.TypeRange.Start.Byte, End: block.TypeRange.End.Byte, Message: "Unsupported block " + block.Type + "; contracts.hcl allows only producer and consumer blocks"})
-			continue
-		}
-		scope := ""
-		if len(block.Labels) == 1 && len(block.LabelRanges) == 1 {
-			scope = block.Labels[0]
-			if !strings.HasPrefix(scope, "./") && !strings.HasPrefix(scope, "../") {
-				start, end := unquotedRange(text, block.LabelRanges[0])
-				diagnostics = append(diagnostics, Diagnostic{Start: start, End: end, Message: "contract scope must be a relative path like \"./modules/vpc\", got \"" + scope + "\""})
-			}
-		}
-		portKind := "output"
-		if block.Type == "consumer" {
-			portKind = "input"
-		}
-		for _, port := range block.Body.Blocks {
-			if port.Type != portKind {
-				diagnostics = append(diagnostics, Diagnostic{Start: port.TypeRange.Start.Byte, End: port.TypeRange.End.Byte, Message: "Unsupported block " + port.Type + "; a " + block.Type + " block contains only " + portKind + " port blocks"})
-				continue
-			}
-			name := ""
-			if len(port.Labels) == 1 && len(port.LabelRanges) == 1 {
-				name = port.Labels[0]
-				key := [3]string{scope, block.Type, name}
-				if seen[key] {
-					start, end := unquotedRange(text, port.LabelRanges[0])
-					diagnostics = append(diagnostics, Diagnostic{Start: start, End: end, Message: "contract " + block.Type + " " + portKind + " \"" + name + "\" is declared more than once; remove one"})
-				}
-				seen[key] = true
-			}
-			for _, attr := range sortedAttributes(port.Body.Attributes) {
-				diagnosePortAttribute(&diagnostics, attr)
-			}
-			for _, assert := range port.Body.Blocks {
-				if assert.Type != "assert" {
-					diagnostics = append(diagnostics, Diagnostic{Start: assert.TypeRange.Start.Byte, End: assert.TypeRange.End.Byte, Message: "Unsupported block " + assert.Type + "; a port block contains only an assert block"})
-					continue
-				}
-				for _, attr := range sortedAttributes(assert.Body.Attributes) {
-					if !containsString(contractsAssertAttrs, attr.Name) {
-						diagnostics = append(diagnostics, Diagnostic{Start: attr.NameRange.Start.Byte, End: attr.NameRange.End.Byte, Message: "Unknown attribute " + attr.Name + "; assert accepts " + strings.Join(contractsAssertAttrs, ", ")})
-					}
-				}
-			}
-		}
-	}
-	return diagnostics
-}
-
-// diagnosePortAttribute flags unknown port attribute names and the stability enum, mirroring blueprint.parsePortContract.
-func diagnosePortAttribute(diagnostics *[]Diagnostic, attr *hclsyntax.Attribute) {
-	if !containsString(contractsPortAttrs, attr.Name) {
-		*diagnostics = append(*diagnostics, Diagnostic{Start: attr.NameRange.Start.Byte, End: attr.NameRange.End.Byte, Message: "Unknown attribute " + attr.Name + "; a port accepts " + strings.Join(contractsPortAttrs, ", ") + " and an assert block"})
-		return
-	}
-	if attr.Name != "stability" {
-		return
-	}
-	val, diags := attr.Expr.Value(nil)
-	if diags.HasErrors() || val.Type() != ctyString {
-		return
-	}
-	if got := val.AsString(); got != "stable" && got != "volatile" {
-		rng := attr.Expr.Range()
-		*diagnostics = append(*diagnostics, Diagnostic{Start: rng.Start.Byte, End: rng.End.Byte, Message: "stability must be \"stable\" or \"volatile\", got \"" + got + "\""})
-	}
-}
-
-// sortedAttributes iterates a body's attributes by name so diagnostics come in a stable order (Go map order is randomized per run).
-func sortedAttributes(attrs hclsyntax.Attributes) []*hclsyntax.Attribute {
-	names := make([]string, 0, len(attrs))
-	for name := range attrs {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	sorted := make([]*hclsyntax.Attribute, 0, len(names))
-	for _, name := range names {
-		sorted = append(sorted, attrs[name])
-	}
-	return sorted
 }
 
 // edgeInputDiagnostics checks an edge's nested input blocks, which the reference
@@ -1108,9 +945,6 @@ func (w *Workspace) blueprintFiles(path string) []string {
 	files := []string{}
 	for _, entry := range entries {
 		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".hcl" {
-			if entry.Name() == "contracts.hcl" {
-				continue // reserved sibling (see blueprint.ParseDir): contracts content is not blueprint content
-			}
 			files = append(files, filepath.Join(dir, entry.Name()))
 		}
 	}

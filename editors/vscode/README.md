@@ -1,6 +1,6 @@
 # Terragraph Blueprint for VS Code
 
-This extension starts `terragraph language-server` and supplies Blueprint-aware completion for `blueprint.hcl`, `group.hcl`, and `contracts.hcl` files opened as HCL.
+This extension starts `terragraph language-server` and supplies Blueprint-aware completion for `blueprint.hcl` and `group.hcl` files opened as HCL.
 
 Marketplace releases contain a matching `terragraph language-server` binary, so no separate CLI installation is required for editor features. Set `terragraph.languageServer.path` only to override that bundled binary.
 
