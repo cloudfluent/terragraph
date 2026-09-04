@@ -58,10 +58,10 @@ func (c *Contracts) Digest() string {
 	entries := make([]canonicalEntry, 0)
 	for _, dc := range c.ByDir {
 		for name, p := range dc.Producer {
-			entries = append(entries, canonicalEntry{Role: "producer", Port: canonical(canonicalPort{Scope: dc.Scope, Port: name, Type: p.Type, Nullable: p.Nullable, Sensitive: p.Sensitive, Stability: p.Stability, Assertions: p.Assertions})})
+			entries = append(entries, canonicalEntry{Role: "producer", Port: (canonicalPort{Scope: dc.Scope, Port: name, Type: p.Type, Nullable: p.Nullable, Sensitive: p.Sensitive, Stability: p.Stability, Assertions: p.Assertions})})
 		}
 		for name, p := range dc.Consumer {
-			entries = append(entries, canonicalEntry{Role: "consumer", Port: canonical(canonicalPort{Scope: dc.Scope, Port: name, Type: p.Type, Nullable: p.Nullable, Sensitive: p.Sensitive, Stability: p.Stability, Assertions: p.Assertions})})
+			entries = append(entries, canonicalEntry{Role: "consumer", Port: (canonicalPort{Scope: dc.Scope, Port: name, Type: p.Type, Nullable: p.Nullable, Sensitive: p.Sensitive, Stability: p.Stability, Assertions: p.Assertions})})
 		}
 	}
 	sort.Slice(entries, func(i, j int) bool {
@@ -86,8 +86,6 @@ func (c *Contracts) Digest() string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
 }
-
-func canonical(p canonicalPort) canonicalPort { return p }
 
 // Lookup returns this directory's contracts, or nil when the source is uncontracted — the ordinary legacy case.
 func (c *Contracts) Lookup(dir string) *DirContracts {

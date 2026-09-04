@@ -42,7 +42,7 @@ func scopeFor(e *Engine, dir string) string {
 	return "./" + filepath.ToSlash(rel)
 }
 
-// Observe walks every source directory in the graph once and reports what reality says about each port. A directory's outputs are read through its lexicographically-first node (deterministic choice; nodes sharing a source share one state by the backend_config rules), and a failed read means "not applied", not an error: unknown is an answer here, not a failure.
+// Observe walks every source directory in the graph once and reports what reality says about each port. Nodes sharing a source directory can hold different states (backend_config exists to diverge state keys per instance), so each directory's nodes are walked in sorted order and the first applied one supplies the outputs; a failed read is "not applied", not an error — unknown is an answer here, not a failure. Evidence stays one row per port because the contract scope is the directory.
 func (e *Engine) Observe() (*Evidence, error) {
 	digest := (&blueprint.Contracts{}).Digest()
 	if e.Graph.Contracts != nil {
@@ -66,12 +66,16 @@ func (e *Engine) Observe() (*Evidence, error) {
 		schema := e.Graph.Nodes[names[0]].Schema
 		scope := scopeFor(e, dir)
 
+		// Nodes sharing a source dir can hold DIFFERENT states (backend_config diverging keys per instance, isolated TF_DATA_DIR), so "the first node" is not "the state": walk them in order and let the first applied one speak. If none is applied the port stays unknown — still one evidence row per port, because the contract scope is the directory.
 		outputs, applied := map[string]any{}, false
-		// The read's streams are discarded because its failure is an expected outcome, not a diagnosis: every never-applied node makes terraform print a full backend/refresh error block, and "unknown" already says everything observe wants to say about it. Real problems surface at plan/apply, where they block.
-		r := e.runner(names[0])
-		r.Stdout, r.Stderr = io.Discard, io.Discard
-		if out, err := r.Outputs(); err == nil {
-			outputs, applied = out, true
+		for _, name := range names {
+			r := e.runner(name)
+			// The read's streams are discarded because its failure is an expected outcome, not a diagnosis: every never-applied node makes terraform print a full backend/refresh error block, and "unknown" already says everything observe wants to say about it. Real problems surface at plan/apply, where they block.
+			r.Stdout, r.Stderr = io.Discard, io.Discard
+			if out, err := r.Outputs(); err == nil {
+				outputs, applied = out, true
+				break
+			}
 		}
 
 		outputNames := make([]string, 0, len(schema.Outputs))

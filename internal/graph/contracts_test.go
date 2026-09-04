@@ -210,6 +210,22 @@ consumer "./modules/app" {
 	}
 }
 
+// TestValidate_PartialPortCoverageChecksNothing proves a contract on only one side of an edge's ports stays silent: a map miss must not fabricate a zero-valued PortContract whose nil flags fire C004/C005 for a port nobody promised.
+func TestValidate_PartialPortCoverageChecksNothing(t *testing.T) {
+	g, c, _ := writeContractsFixture(t, `
+consumer "./modules/app" {
+  input "vpc_id" {
+    type     = "string"
+    nullable = false
+  }
+}
+`)
+	g.Contracts = c
+	if problems := Validate(g); len(problems) != 0 {
+		t.Fatalf("got = %v, want zero problems when the producer port is uncontracted", problems)
+	}
+}
+
 // TestValidate_EnforceEscalatesContractWarningsToErrors proves mode is the only severity dial: same graph, same C003, warning under legacy and error under enforce.
 func TestValidate_EnforceEscalatesContractWarningsToErrors(t *testing.T) {
 	g, c, _ := writeContractsFixture(t, `

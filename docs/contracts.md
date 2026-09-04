@@ -92,10 +92,6 @@ never selects a stricter mode on its own.
 
 ## Non-goals for this phase
 
-- No terragraph-written files. The generated evidence file (`terragraph.lock`)
-  and the observe/proposal commands are a separate, explicitly-approved change
-  — terragraph currently writes exactly two kinds of file (ephemeral tfvars,
-  vendor manifest) and this phase adds none.
 - No group-local `contracts.hcl` inside group source directories; the root
   file can already reach group-internal modules by relative path.
 - No cross-check of contract `sensitive` against the module's own

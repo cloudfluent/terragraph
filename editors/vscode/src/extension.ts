@@ -42,6 +42,7 @@ export async function activate(
     documentSelector: [
       { scheme: "file", pattern: "**/blueprint.hcl" },
       { scheme: "file", pattern: "**/group.hcl" },
+      { scheme: "file", pattern: "**/contracts.hcl" },
     ],
     outputChannel: output,
     traceOutputChannel: output,

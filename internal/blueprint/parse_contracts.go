@@ -244,5 +244,3 @@ func validateTypeConstraint(s string) error {
 	}
 	return nil
 }
-
-var _ = cty.String // keeps the cty import honest if typeexpr's signatures shift; delete if lint objects

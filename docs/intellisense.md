@@ -10,9 +10,10 @@ The extension bundles a compatible language server, so nothing here requires ins
 
 Open the completion list with `Ctrl+Space` (`Control+Space` on macOS).
 
-- Top-level blueprint blocks: `node`, `edge`, `runtime`, `group`, `use`, `vendor`, `tfvars`, `lock`
+- Top-level blueprint blocks: `node`, `edge`, `runtime`, `group`, `use`, `vendor`, `tfvars`, `lock`, `contracts`
 - The attributes each block accepts: a node's `source`, `vars`, `env`, `runtime`, `backend_config`; a `use` block's `as`, `source`, `vars`, `env`, `runtime`, `backend_config`, `approve`; and so on
 - A Terraform/OpenTofu module's own input variables and outputs
+- Declared runtime names
 - Contracts files: `producer`/`consumer` blocks, their `output`/`input` port blocks, port attributes (`type`, `nullable`, `sensitive`, `stability`), and the closed `assert` predicate set (`nonempty`, `pattern`, `min_length`, `one_of`) — see [contracts.md](contracts.md)
 
 Inside a node's `vars = {}` only the input variables that module declares are suggested. Inside a `use` block's `vars = {}` only that instance's export input names are suggested. To pass another node's result, use an `edge` rather than `vars`.

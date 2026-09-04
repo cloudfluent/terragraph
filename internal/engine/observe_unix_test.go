@@ -160,3 +160,46 @@ func TestWriteLock_DeterministicBytesAndOwnerOnly(t *testing.T) {
 		t.Fatalf("lock is not valid JSON: %v", err)
 	}
 }
+
+// TestObserve_SharedSourceFallsThroughToAppliedNode proves a directory's evidence comes from its first APPLIED node, not its first node by name: instances sharing a source diverge state (backend_config exists for that), and stopping at an unapplied sibling would under-report reality as unknown.
+func TestObserve_SharedSourceFallsThroughToAppliedNode(t *testing.T) {
+	baseDir := t.TempDir()
+	writeModule(t, filepath.Join(baseDir, "modules", "shared"))
+	writeBlueprint(t, baseDir, `
+node "alpha" {
+  source = "./modules/shared"
+}
+
+node "beta" {
+  source = "./modules/shared"
+}
+`)
+	// Fails `output` only for alpha (the lexicographically-first node), so the walk must fall through to beta.
+	path := filepath.Join(baseDir, "terraform-fake")
+	script := `#!/bin/sh
+case "$1" in
+  init) exit 0 ;;
+  output)
+    case "$TF_DATA_DIR" in
+      *tfdata/alpha) exit 1 ;;
+      *) printf '{"id":{"value":"x"}}'; exit 0 ;;
+    esac
+    ;;
+esac
+exit 1
+`
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("writing fake terraform: %v", err)
+	}
+	e, err := Load(filepath.Join(baseDir, "blueprint.hcl"), exec.Binary(path), &strings.Builder{}, &strings.Builder{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	ev, err := e.Observe()
+	if err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if p := findEvidence(ev, "producer", "id"); p.Confidence != "observed" || p.Type != "string" {
+		t.Fatalf("got = %+v, want observed/string from the applied sibling beta", p)
+	}
+}

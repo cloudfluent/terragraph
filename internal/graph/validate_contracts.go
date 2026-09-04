@@ -68,8 +68,12 @@ func contractProblems(g *Graph) []Problem {
 		if from == nil || to == nil {
 			continue
 		}
-		p := from.Producer[e.From.Name]
-		c := to.Consumer[e.To.Name]
+		// Port-level, not just dir-level: a dir may be contracted on one side of this edge only, and a map miss yields a zero PortContract whose nil flags would speak for a port nobody promised (the phase-1 rule: uncontracted endpoints check nothing).
+		p, okP := from.Producer[e.From.Name]
+		c, okC := to.Consumer[e.To.Name]
+		if !okP || !okC {
+			continue
+		}
 		if p.Type != "" && c.Type != "" {
 			pt, err := parseCtyType(p.Type)
 			if err != nil {
