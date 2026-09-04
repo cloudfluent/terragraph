@@ -161,6 +161,9 @@ func load(blueprintPath string, binary exec.Binary, stdout, stderr io.Writer, ta
 		return nil, nil, err
 	}
 
+	// The mode is blueprint-owned, reviewed configuration; wiring it here keeps graph.Build ignorant of it (severity is a validate-time concern only).
+	g.ContractMode = bp.ContractMode
+
 	return &Engine{
 		Binary:    binary,
 		BaseDir:   baseDir,
