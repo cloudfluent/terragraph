@@ -27,7 +27,7 @@ An input is a single slot: two data edges targeting the same input are a validat
 
 Node canvas layout (for the future visual editor) lives in a separate `blueprint.layout.json`, so moving a box never shows up in a `blueprint.hcl` diff.
 
-Edges wire values; contracts review them. See [`docs/contracts.md`](contracts.md) for producer guarantees and consumer requirements keyed by module source.
+Edges wire values; contracts review them. See [`docs/contracts.md`](contracts.md) to declare producer guarantees and consumer requirements as top-level `producer`/`consumer` blocks keyed by module source.
 
 ## Graph remote lock (`lock`)
 

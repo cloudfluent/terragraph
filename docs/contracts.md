@@ -9,17 +9,14 @@ it is never enabled silently.
 
 ## Where contracts live
 
-`contracts.hcl` is a single file sitting next to the blueprint (or directly
-inside the directory `--blueprint` names); the engine looks for that one file,
-and its absence is the legacy case. Graphs without a `contracts.hcl` behave
-exactly as before.
-
-Contracts are **keyed by module source directory**, not by node name. Every
-node that shares a source directory shares its contract — so a group
-instantiated twice, or one module reused through `backend_config`, inherits
-the same contract everywhere it appears. This matches how terragraph already
-sees the world: by the time the graph is built, every edge is leaf-to-leaf
-and module schemas are cached per directory.
+`producer` and `consumer` are ordinary top-level blueprint blocks. They parse
+from any `.hcl` file a blueprint parses: a single-file blueprint, every file
+of a directory blueprint (which merge like every other block kind), and a
+group body — so a group's own `group.hcl` carries the contracts for its
+internal modules, resolved against the group file's own directory. There is
+no reserved filename: `contracts.hcl` is a convention, not a mechanism — a
+file by that name is just another blueprint file whose blocks merge with the
+rest.
 
 ## Grammar
 
@@ -41,27 +38,66 @@ consumer "./modules/app" {
 }
 ```
 
-Attribute defaults are the *lenient* claim: an omitted `nullable` on a
-producer means "may be null" (a weak promise), and an omitted `nullable` on a
-consumer means "accepts null". Violations only fire on explicit strictness
-that the other side does not meet.
+The block label is the module source, spelled exactly as a node's `source`:
+a relative path (`./modules/vpc`, `../shared/vpc`) or a remote module source
+(`github.com/org/repo//modules/vpc`). Absolute paths are rejected at parse
+time.
 
-The grammar carries only claims `validate` actually checks; there is no
-predicate syntax — `assert` was removed with the evidence layer that would
-have evaluated it, and `stability` never affected any check.
+A port carries at most three attributes — `type` (a Terraform type
+constraint, parse-checked where the file and port are known), `nullable`, and
+`sensitive` — and the grammar carries nothing `validate` does not check:
+there is no predicate syntax and no `stability`.
 
-## Contract identity
+Attribute absence is the *lenient* claim: an omitted `nullable` on a producer
+means "may be null" (a weak promise), an omitted `nullable` on a consumer
+means "accepts null", and an omitted `sensitive` claims nothing. Checks only
+fire on explicit strictness the other side does not meet.
 
-A contract's identity is `sha256` over its canonical JSON: scope as written
-(`./modules/vpc`), role, port name, and every set attribute, with ports
-sorted by name. Renaming a path changes identity even when content is
-identical; reordering blocks never does. Two instances of one source report
-the same digest because they share one contract record.
+## Keying: one contract per source, not per node
 
-## Compatibility rules and error codes
+Contracts are keyed by module source, not by node name. A local scope keys by
+the directory it resolves to against the declaring file's directory — the
+same base a node source in that file resolves against. A remote scope keys
+by the declared source string itself, because a remote node's vendored
+directory is per-instance (`vendor/<node-name>`) while the contract belongs
+to the source everything was vendored from. Every node sharing a source
+shares its contract: a group instantiated twice, one module reused through
+`backend_config`, or two vendored instances of the same remote module inherit
+the same contract everywhere they appear.
 
-Checked by `terragraph validate` for every data edge whose endpoints both
-carry contracts, plus a schema sanity check for every declared contract:
+## Facts, and who declares them
+
+Terraform modules already declare most contract facts in their own `variable`
+and `output` blocks. `validate` reconciles every explicit contract claim
+against the module's schema:
+
+| Fact | Declared by the module | Reconciled |
+|---|---|---|
+| Consumer `type` | `variable` type constraint | yes — C007 |
+| Consumer `sensitive` | `variable` `sensitive` | yes — C008 |
+| Producer `sensitive` | `output` `sensitive` | yes — C009 |
+| Producer `type` | nothing — a root-module output cannot declare a type | no — the contract's reason to exist |
+
+Producer output type is the one fact no `.tf` file can declare, which is
+exactly why the producer side of a contract exists: the contract is the only
+place that promise can be written down, and the compatibility checks (C003)
+are the only thing that reviews it.
+
+## Error classes and codes
+
+`terragraph validate` reports three classes. C001/C002/C006 are existence and
+scope: a promise about a port the module never declared, or a scope nothing
+instantiates, is wrong whether or not anything consumes it yet. C003–C005 are
+side-vs-side compatibility, checked for every data edge whose endpoints both
+carry contracts on that port — producer and consumer each keep their word and
+still cannot be wired together. C007–C009 are contract-vs-module
+contradiction: the module's `variable` and `output` blocks are the
+declaration of record, and a contract claiming a different type or
+sensitivity is simply wrong about the module it describes — fix the contract,
+not the wiring. Reconciliation fires only on explicit claims (an absent
+attribute is no claim, and a variable with no type constraint has nothing to
+contradict), in both directions. Uncontracted endpoints check nothing — that
+is the migration path.
 
 | Code | Severity | Fires when |
 |---|---|---|
@@ -75,19 +111,9 @@ carry contracts, plus a schema sanity check for every declared contract:
 | C008 | warning | consumer's explicit `sensitive` claim contradicts the module's declared variable sensitivity |
 | C009 | warning | producer's explicit `sensitive` claim contradicts the module's declared output sensitivity |
 
-Contract errors come in two classes. C003–C005 mean the two *sides* are
-incompatible: producer and consumer each keep their word and still cannot be
-wired together. C007–C009 mean a contract contradicts *its own module*: the
-module's `variable` and `output` blocks are the declaration of record, and a
-contract claiming a different type or sensitivity is simply wrong about the
-module it describes — fix the contract, not the wiring. Reconciliation fires
-only on explicit claims (an absent attribute is no claim, and a variable with
-no type constraint has nothing to contradict), in both directions. Producer
-`type` is never reconciled: root-module outputs cannot declare a type, so the
-producer's type promise is exactly the fact the contract exists to carry.
-
-All contract problems are warnings in the default mode; the mode block below
-is the only severity dial.
+Every code is a warning under the default mode; the mode block below is the
+one severity dial, and it moves all of them together — there is no per-code
+severity.
 
 ### Modes
 
@@ -97,7 +123,17 @@ every C001–C009 as a warning; `enforce` escalates them to errors, which
 blocks `validate`, `plan`, `apply`, and `destroy` the same way structural
 errors already do. An upgrade never selects a stricter mode on its own.
 
-## Non-goals for this phase
+## Contract identity
 
-- No group-local `contracts.hcl` inside group source directories; the root
-  file can already reach group-internal modules by relative path.
+A contract set's identity is `sha256` hex over its canonical JSON: one entry
+per port covering exactly the checked claims — scope as written, role, port
+name, `type`, `nullable`, `sensitive` — with every entry sorted by (scope,
+role, name). Editing a claim changes the digest; reordering or re-splitting
+blocks across files never does. Two instances of one source report the same
+digest because they share one contract record.
+
+## Deferred
+
+- The evidence layer (`terragraph.lock`, `observe`, `propose`) — removed per review; runtime evidence may return once the declarative layer settles.
+- Predicate syntax (`assert` blocks) — no check evaluates it today.
+- LSP/VS Code support for contract blocks — returns once the grammar settles.
