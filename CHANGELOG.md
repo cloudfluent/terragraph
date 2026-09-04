@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.2.2](https://github.com/cloudfluent/terragraph/compare/v0.2.1...v0.2.2) (2026-09-04)
+
+
+### Features
+
+* add two-sided contracts keyed by module source ([1e5f342](https://github.com/cloudfluent/terragraph/commit/1e5f3420f53e7c0a9b0eb4aecc4eabb4aeb9a4d0)), closes [#49](https://github.com/cloudfluent/terragraph/issues/49)
+* terragraph force-unlock releases a leftover graph lock (--yes required) ([5cee803](https://github.com/cloudfluent/terragraph/commit/5cee80340be14a20836a967a1d0312cd2cc7f3d5))
+
+
+### Bug Fixes
+
+* a node's explicit backend path no longer claims a same-named orphan ([7872629](https://github.com/cloudfluent/terragraph/commit/7872629c2cdc5118e15bb32cc16b3093e4b1169c))
+* contract diagnostics no longer depend on map iteration order ([6497330](https://github.com/cloudfluent/terragraph/commit/64973304956effc90b23a4470dc72cedb661471f))
+* destroy refuses --auto-approve when a node's approve level does not permit teardown ([7361b66](https://github.com/cloudfluent/terragraph/commit/7361b66e2bf9562d013b72b09dc66f3b94e734b4))
+* destroy's approve gate checks what a node declared ([d91f66a](https://github.com/cloudfluent/terragraph/commit/d91f66aeb834cbea99b878331ef05f9e57230247))
+* force-unlock works on an unvendored checkout and names the lock holder ([2d9f247](https://github.com/cloudfluent/terragraph/commit/2d9f247a9080a4a71f68b8008c93ed7261e73ebd))
+* tfvars are owner-only and removed when the run ends ([e1192b3](https://github.com/cloudfluent/terragraph/commit/e1192b37c4dae09c0d62845347b14383eaf5e55c))
+* warn when a renamed node orphans its local-backend state ([e0d95a9](https://github.com/cloudfluent/terragraph/commit/e0d95a90dd11ff358dc43ed6efa6dcdabda54530))
+
 ## [0.2.1](https://github.com/cloudfluent/terragraph/compare/v0.2.0...v0.2.1) (2026-09-03)
 
 
