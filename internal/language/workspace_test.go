@@ -2,6 +2,7 @@ package language
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -95,6 +96,7 @@ func TestWorkspaceCompletesBlueprintSyntaxByContext(t *testing.T) {
 		{"top level", "__CURSOR__", "node", "Blueprint block"},
 		{"node attribute", "node \"vpc\" {\n  __CURSOR__\n}", "vars", "object"},
 		{"edge attribute", "edge {\n  __CURSOR__\n}", "from", "required output reference"},
+		{"relationship attribute", "relationship {\n  __CURSOR__\n}", "between", "required node pair"},
 		{"runtime attribute", "runtime \"tofu\" {\n  __CURSOR__\n}", "binary", "required string"},
 		{"use attribute", "use \"network\" {\n  __CURSOR__\n}", "env", "map(string)"},
 		{"use vars attribute", "use \"network\" {\n  __CURSOR__\n}", "vars", "object"},
@@ -113,6 +115,32 @@ func TestWorkspaceCompletesBlueprintSyntaxByContext(t *testing.T) {
 				t.Fatalf("completion %q detail = %q, want %q", tc.want, got, tc.detail)
 			}
 		})
+	}
+}
+
+func TestWorkspaceCompletesOnlyBareNodesInRelationship(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "blueprint.hcl")
+	base := `
+node "a" { source = "./a" }
+node "b" { source = "./b" }
+relationship {
+  between = [%s, node.b]
+}
+`
+
+	text, offset := cursor(fmt.Sprintf(base, "node.__CURSOR__"), "__CURSOR__")
+	ws := NewWorkspace(dir)
+	ws.SetDocument(path, []byte(text))
+	items := ws.Complete(context.Background(), path, offset)
+	if !contains(items, "a") || !contains(items, "b") {
+		t.Fatalf("bare node completions missing from %#v", items)
+	}
+
+	text, offset = cursor(fmt.Sprintf(base, "node.a.__CURSOR__"), "__CURSOR__")
+	ws.SetDocument(path, []byte(text))
+	if items := ws.Complete(context.Background(), path, offset); len(items) != 0 {
+		t.Fatalf("relationship port completions = %#v, want none", items)
 	}
 }
 

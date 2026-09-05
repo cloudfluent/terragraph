@@ -1,6 +1,6 @@
 ## terragraph graph
 
-Print the resolved execution levels or a Graphviz DOT rendering
+Print execution dependencies or architectural relationships
 
 ```
 terragraph graph [flags]
@@ -12,6 +12,7 @@ terragraph graph [flags]
       --format string   output format: list or dot (default "list")
   -h, --help            help for graph
       --output string   output stream encoding: text or json (json is only supported with --format list) (default "text")
+      --view string     graph view: execution or relationships (default "execution")
 ```
 
 ### Options inherited from parent commands

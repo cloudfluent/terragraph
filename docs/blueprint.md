@@ -1,6 +1,6 @@
 # Blueprint
 
-A blueprint (`blueprint.hcl` by default) is a flat list of `node` and `edge` facts, not nested configuration. `--blueprint` can also point at a directory instead of a single file: every `.hcl` file directly inside it (not recursively) is merged into one blueprint, exactly the way a [group](groups.md)'s source directory already merges its own `.hcl` files. This is useful for splitting a large blueprint across several files (e.g. `nodes.hcl`, `edges.hcl`) without any of them needing a specific name.
+A blueprint (`blueprint.hcl` by default) is a flat list of graph facts, not nested configuration. `--blueprint` can also point at a directory instead of a single file: every `.hcl` file directly inside it (not recursively) is merged into one blueprint, exactly the way a [group](groups.md)'s source directory already merges its own `.hcl` files. This is useful for splitting a large blueprint across several files (e.g. `nodes.hcl`, `edges.hcl`) without any of them needing a specific name.
 
 ```hcl
 node "vpc" {
@@ -28,6 +28,35 @@ An input is a single slot: two data edges targeting the same input are a validat
 Node canvas layout (for the future visual editor) lives in a separate `blueprint.layout.json`, so moving a box never shows up in a `blueprint.hcl` diff.
 
 Edges wire values; contracts review them. See [`docs/contracts.md`](contracts.md) to declare producer guarantees and consumer requirements as top-level `producer`/`consumer` blocks keyed by module source.
+
+## Undirected architectural relationships
+
+Use a `relationship` when two leaf modules are architectural peers but neither one should execute before the other:
+
+```hcl
+relationship {
+  between = [node.vpc, node.eks]
+}
+```
+
+The two endpoints must be distinct bare `node.<name>` references. Their order has no meaning, so declaring the reverse pair again is a duplicate. Ports and `use` endpoints are rejected: a relationship is intentionally node-level, and a group declares relationships between its own leaf nodes. Each `use` instance then receives a separately namespaced copy such as `checkout.cluster -- checkout.nodegroup`; relationships never cross between instances.
+
+A relationship is metadata, not a Terraform value flow or execution dependency. It does not add to `from`/`to`, `In`/`Out`, cycle detection, execution levels, `plan`, or `apply`. View the overlay separately from the execution DAG:
+
+```console
+$ terragraph graph --view relationships
+relationship: eks -- vpc
+
+$ terragraph graph --view relationships --format dot
+graph terragraph_relationships {
+  rankdir=LR;
+  "eks";
+  "vpc";
+  "eks" -- "vpc";
+}
+```
+
+Every relationship endpoint should have a source-keyed [`producer` or `consumer` contract](contracts.md). Missing contracts report C010 as a warning in the default mode and as an error under `contracts { mode = "enforce" }`. This checks that the architectural assertion has a reviewed module contract without pretending that two undirected nodes have matching ports.
 
 ## Graph remote lock (`lock`)
 
