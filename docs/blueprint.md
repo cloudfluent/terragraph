@@ -47,6 +47,19 @@ lock {
 
 When `lock` is present, every node must use a remote backend (`s3` / `gcs` / `azurerm` / `http` / `remote` / `cloud`). `backend "local"` or no backend block is a validate **Error**. An S3 graph lock must not share an object with a node (same `key` and same bucket, or same `key` when `backend_config.bucket` is omitted). No `lock` block leaves current behavior (including local state) unchanged.
 
+## Output snapshots (`snapshots`)
+
+An optional empty `snapshots { }` block opts the graph into local output
+snapshots. Activation is the block itself, not a CLI flag; at most one
+`snapshots` per blueprint; the body accepts nothing in this release. With
+it, `apply` records exactly the outputs a data edge consumes from each node
+into the gitignored `.terragraph/outputs/`, and input resolution gains a
+source of **last** resort — after this run's applied outputs and after live
+`terraform output`, never ahead of either. Without the block, nothing is
+written and resolution is unchanged. See
+[execution-model.md](execution-model.md#output-snapshots) for the ordering
+rationale.
+
 ## Several values between the same two nodes (`input`)
 
 One `edge` block is one pair, which is faithful to "a flat list of facts" but noisy when two modules that already expose many flat variables need ten of them wired. An edge whose `from` and `to` are bare references may instead carry nested `input` blocks, the same shape as a group's [`export` input](groups.md):

@@ -12,7 +12,7 @@ import (
 	"github.com/cloudfluent/terragraph/internal/blueprint"
 )
 
-// resolveInputs gathers the values for name's inputs (every data edge pointing at it, plus its own literal Vars), checking each one against the target variable's declared type. applied holds outputs already captured earlier in the current run (keyed by node name); for an upstream node not touched in this run, its outputs are read directly from its own existing state instead.
+// resolveInputs gathers the values for name's inputs (every data edge pointing at it, plus its own literal Vars), checking each one against the target variable's declared type. Sources are tried in a fixed order — outputs already captured earlier in the current run (keyed by node name), then that upstream node's own existing state read live — and only when the graph opted into snapshots and the live read failed, the node's published output snapshot as a last resort (see snapshot.go): never ahead of the live read, so it can never serve a value newer infrastructure has moved past.
 func (e *Engine) resolveInputs(name string, applied map[string]map[string]any) (map[string]any, error) {
 	vars := map[string]any{}
 
@@ -26,10 +26,22 @@ func (e *Engine) resolveInputs(name string, applied map[string]map[string]any) (
 			var err error
 			outputs, err = e.runner(edge.From.Node).Outputs()
 			if err != nil {
-				return nil, fmt.Errorf(
-					"resolving %s: upstream node %q has not been applied yet (%w)",
-					edge.To, edge.From.Node, err,
-				)
+				// The snapshot is a last resort, never a preference: consulted
+				// only after the live read has failed, and only when the graph
+				// opted in (Graph.Snapshots). Reading it any earlier resurrects
+				// the removed incremental-apply cache under a new name — worst
+				// on destroy, where these values feed a resource's count or
+				// for_each and a stale value changes what gets torn down.
+				found := false
+				if e.Graph.Snapshots {
+					outputs, found = e.readSnapshot(edge.From.Node)
+				}
+				if !found {
+					return nil, fmt.Errorf(
+						"resolving %s: upstream node %q has not been applied yet (%w)",
+						edge.To, edge.From.Node, err,
+					)
+				}
 			}
 		}
 
