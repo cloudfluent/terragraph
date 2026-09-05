@@ -205,3 +205,48 @@ func TestApply_SnapshotsWriteConsumedOutputsOnly(t *testing.T) {
 		t.Fatalf("snapshot changed between applies:\nfirst:  %q\nsecond: %q", first, second)
 	}
 }
+
+// TestApply_SnapshotRewriteTightensLooseMode proves the remove-before-write rule: os.WriteFile only applies 0o600 on create, so a rewrite over a wider mode must start from a fresh file or the loose bits live on for the file's lifetime.
+func TestApply_SnapshotRewriteTightensLooseMode(t *testing.T) {
+	e, baseDir := loadSnapshotTestEngine(t, true)
+	if err := e.Apply(Options{AutoApprove: true}); err != nil {
+		t.Fatalf("first Apply: %v", err)
+	}
+	path := filepath.Join(baseDir, ".terragraph", "outputs", "a.json")
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatalf("loosening mode: %v", err)
+	}
+	if err := e.Apply(Options{AutoApprove: true}); err != nil {
+		t.Fatalf("rewrite Apply: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat after rewrite: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("got mode %v after rewrite, want 0600 — a rewrite over loose bits kept them", info.Mode().Perm())
+	}
+}
+
+// TestApply_SnapshotOrphanRemovedWhenConsumersVanish proves "no consumers → no file" holds on re-apply: removing the edge that justified a snapshot must remove the file, or a stale secret outlives its readers.
+func TestApply_SnapshotOrphanRemovedWhenConsumersVanish(t *testing.T) {
+	e, baseDir := loadSnapshotTestEngine(t, true)
+	if err := e.Apply(Options{AutoApprove: true}); err != nil {
+		t.Fatalf("Apply with edge: %v", err)
+	}
+	path := filepath.Join(baseDir, ".terragraph", "outputs", "a.json")
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("snapshot missing after edge-bearing apply: %v", err)
+	}
+
+	e2, err := Load(writeBlueprint(t, baseDir, "snapshots { }\nnode \"a\" { source = \"./module\" }\nnode \"b\" { source = \"./module\" }\n"), e.Binary, &bytes.Buffer{}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("Load without edge: %v", err)
+	}
+	if err := e2.Apply(Options{AutoApprove: true}); err != nil {
+		t.Fatalf("Apply without edge: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("got %v, want the snapshot gone once no edge consumes it", err)
+	}
+}

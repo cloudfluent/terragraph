@@ -56,6 +56,12 @@ func (e *Engine) writeSnapshot(name string, outputs map[string]any) error {
 		}
 	}
 	if len(published) == 0 {
+		// The edge set can change between applies (an edge removed, a rename): a prior
+		// file whose consumers are all gone is a stale secret with no reader, so "no
+		// consumers → no file" must hold on re-apply too, not only on first write.
+		if err := os.Remove(e.snapshotPath(name)); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("node %s: removing stale output snapshot: %w", name, err)
+		}
 		return nil
 	}
 
@@ -70,6 +76,13 @@ func (e *Engine) writeSnapshot(name string, outputs map[string]any) error {
 		return fmt.Errorf("node %s: encoding output snapshot: %w", name, err)
 	}
 	data = append(data, '\n')
+	// Remove before write, like exec.WriteTFVars for the same reason: os.WriteFile only
+	// applies 0o600 on create, so a rewrite over an existing wider mode (or a leftover
+	// from a checkout with different umask behavior) would keep the old bits for the
+	// file's lifetime — these values are the same class of upstream outputs tfvars carry.
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("node %s: removing prior output snapshot: %w", name, err)
+	}
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return fmt.Errorf("node %s: writing output snapshot: %w", name, err)
 	}
