@@ -25,12 +25,13 @@ type Node struct {
 	Approve blueprint.Approve
 }
 
-// Graph is the blueprint resolved into a DAG: nodes with schema attached, plus adjacency in both directions. Out[a] contains every node that has an edge from a (i.e. must run after a); In[a] contains every node that has an edge to a (i.e. must run before a).
+// Graph is the blueprint resolved into an executable DAG plus a separate undirected relationship overlay. Out[a] contains every node that has an edge from a (i.e. must run after a); In[a] contains every node that has an edge to a (i.e. must run before a). Relationships never enter either adjacency map.
 type Graph struct {
-	Nodes map[string]*Node
-	Edges []blueprint.Edge
-	Out   map[string][]string
-	In    map[string][]string
+	Nodes         map[string]*Node
+	Edges         []blueprint.Edge
+	Relationships []blueprint.Relationship
+	Out           map[string][]string
+	In            map[string][]string
 	// Lock is the blueprint's optional graph remote lock, set only in Build (not inner group build). Nil means flock-only.
 	Lock *blueprint.Lock
 	// Contracts is the blueprint's contract set, merged by Build: the root blueprint's own producer/consumer blocks plus every instantiated group's (see mergeContracts). Keying is hybrid (see blueprint.DirContracts): local scopes by resolved source directory, remote scopes by the declared source string, so two vendored instances of one remote module share one record. Nil is the ordinary, uncontracted graph, and every contract-aware consumer must treat nil as "no claims, no checks".
@@ -196,6 +197,7 @@ func build(bp *blueprint.Blueprint, baseDir, namespace string, ambient *blueprin
 			g.Out[e.From.Node] = append(g.Out[e.From.Node], e.To.Node)
 			g.In[e.To.Node] = append(g.In[e.To.Node], e.From.Node)
 		}
+		g.Relationships = append(g.Relationships, internal.Relationships...)
 
 		// The group's own contracts rode on its internal graph (see resolveUse); splice them into this scope's set like its nodes and edges.
 		if err := mergeContracts(g, internal.Contracts); err != nil {
@@ -213,6 +215,9 @@ func build(bp *blueprint.Blueprint, baseDir, namespace string, ambient *blueprin
 			g.Out[re.From.Node] = append(g.Out[re.From.Node], re.To.Node)
 			g.In[re.To.Node] = append(g.In[re.To.Node], re.From.Node)
 		}
+	}
+	for _, relationship := range bp.Relationships {
+		g.Relationships = append(g.Relationships, blueprint.Relationship{Left: qualify(relationship.Left), Right: qualify(relationship.Right)})
 	}
 
 	return g, uses, nil
@@ -233,7 +238,7 @@ func resolveUse(u blueprint.Use, referencingDir, instancePrefix string, ambient 
 	}
 
 	// def.Nodes/Uses may reference a runtime by name (blueprint.Node.Runtime / blueprint.Use.Runtime); those names resolve against groupRuntimes, the `runtime` blocks declared in this same group source directory, never against whatever the outer scope that wrote u happens to have declared (see blueprint.validateRuntimes, which already enforced this scoping at parse time).
-	innerBP := &blueprint.Blueprint{Nodes: def.Nodes, Edges: def.Edges, Uses: def.Uses, Runtimes: groupRuntimes}
+	innerBP := &blueprint.Blueprint{Nodes: def.Nodes, Edges: def.Edges, Relationships: def.Relationships, Uses: def.Uses, Runtimes: groupRuntimes}
 	internal, innerUses, err := build(innerBP, groupDir, instancePrefix, ambient, ambientEnv, ambientBackendConfig, ambientApprove, rc)
 	if err != nil {
 		return useInfo{}, nil, err

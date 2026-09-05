@@ -91,13 +91,18 @@ func (w *Workspace) Complete(_ context.Context, path string, offset int) []Compl
 	if objectAttribute != "" {
 		return nil
 	}
+	blocks := blockPathAt(text, offset)
 	if strings.HasPrefix(fragment, "runtime") {
 		return runtimeCompletions(model, fragment, start, offset)
 	}
 	if strings.HasPrefix(fragment, "node") || strings.HasPrefix(fragment, "use") {
+		if len(blocks) > 0 && blocks[len(blocks)-1] == "relationship" {
+			if strings.HasPrefix(fragment, "use") || len(strings.Split(fragment, ".")) > 2 {
+				return nil
+			}
+		}
 		return traversalCompletions(model, fragment, directionAt(text, offset), start, offset)
 	}
-	blocks := blockPathAt(text, offset)
 	if labelStart, ok := edgeInputLabelAt(text, offset, blocks); ok {
 		return edgeInputLabelCompletions(model, text, labelStart, offset)
 	}
@@ -317,6 +322,7 @@ var completionSchemas = map[string][]attributeSpec{
 	"": {
 		{name: "node", insert: "node \"name\" {\n  source = \"\"\n}", detail: "Blueprint block", documentation: "Declares one Terraform or OpenTofu module in the graph."},
 		{name: "edge", insert: "edge {\n  from = node.source.output.value\n  to   = node.target.input.value\n}", detail: "Blueprint block", documentation: "Connects a source node output to a target node input."},
+		{name: "relationship", insert: "relationship {\n  between = [node.left, node.right]\n}", detail: "Blueprint block", documentation: "Declares an undirected architectural relationship without changing execution order."},
 		{name: "runtime", insert: "runtime \"name\" {\n  binary = \"tofu\"\n}", detail: "Blueprint block", documentation: "Declares a reusable Terraform or OpenTofu runtime."},
 		{name: "group", insert: "group \"name\" {\n}", detail: "Blueprint block", documentation: "Declares a reusable sub-blueprint."},
 		{name: "use", insert: "use \"group\" {\n  as     = \"name\"\n  source = \"\"\n}", detail: "Blueprint block", documentation: "Instantiates a reusable group."},
@@ -339,6 +345,9 @@ var completionSchemas = map[string][]attributeSpec{
 	},
 	"edge.input": {
 		{name: "from", insert: "from = output.", detail: "required output reference", documentation: "Which output of the edge's own from node feeds this input. Relative: the source node is not repeated here."},
+	},
+	"relationship": {
+		{name: "between", insert: "between = [node.left, node.right]", detail: "required node pair", documentation: "Exactly two distinct leaf nodes. The pair is undirected and does not affect execution."},
 	},
 	"runtime": {
 		{name: "binary", insert: "binary = \"\"", detail: "required string", documentation: "Terraform or OpenTofu binary path, or a command resolved from PATH."},
@@ -581,7 +590,7 @@ func enclosingNamedBlock(text []byte, offset int, name string) (start, end int, 
 	return brace, len(text), true
 }
 
-var blockHeader = regexp.MustCompile(`(?s)(node|edge|runtime|group|use|vendor|tfvars|lock|s3|export|input|output)\s*(?:"[^\"]*")?\s*$`)
+var blockHeader = regexp.MustCompile(`(?s)(node|edge|relationship|runtime|group|use|vendor|tfvars|lock|s3|export|input|output)\s*(?:"[^\"]*")?\s*$`)
 
 // openBlock is one Blueprint block still open at some offset: its keyword (empty
 // for a brace that opens an object rather than a block, e.g. vars or env) and the

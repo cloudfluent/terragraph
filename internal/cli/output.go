@@ -25,6 +25,24 @@ type graphResult struct {
 	Levels [][]string `json:"levels"`
 }
 
+type relationshipDTO struct {
+	Left  string `json:"left"`
+	Right string `json:"right"`
+}
+
+type relationshipGraphResult struct {
+	Relationships []relationshipDTO `json:"relationships"`
+}
+
+func relationshipsToDTO(g *graph.Graph) []relationshipDTO {
+	relationships := graph.SortedRelationships(g)
+	out := make([]relationshipDTO, len(relationships))
+	for i, relationship := range relationships {
+		out[i] = relationshipDTO{Left: relationship.Left, Right: relationship.Right}
+	}
+	return out
+}
+
 // vendorResultDTO is the JSON-facing shape of one vendor.Result. vendor.Result.Err is an error interface, which encoding/json can't marshal usefully; this flattens it to a status string plus an optional message.
 type vendorResultDTO struct {
 	Node   string `json:"node"`

@@ -11,6 +11,10 @@ edge {
   to   = node.app.input.vpc_id
 }
 
+relationship {
+  between = [node.vpc, node.app]
+}
+
 producer "./modules/vpc" {
   output "vpc_id" {
     type     = "string"

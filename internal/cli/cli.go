@@ -173,15 +173,19 @@ func newValidateCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf
 func newGraphCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf func() *slog.Logger) *cobra.Command {
 	var format string
 	var output string
+	var view string
 	cmd := &cobra.Command{
 		Use:   "graph",
-		Short: "Print the resolved execution levels or a Graphviz DOT rendering",
+		Short: "Print execution dependencies or architectural relationships",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if output != "text" && output != "json" {
 				return fmt.Errorf("unknown output %q (want \"text\" or \"json\")", output)
 			}
 			if output == "json" && format == "dot" {
 				return fmt.Errorf("--output json is not supported with --format dot")
+			}
+			if view != "execution" && view != "relationships" {
+				return fmt.Errorf("unknown view %q (want \"execution\" or \"relationships\")", view)
 			}
 
 			e, err := loadEngine(cmd, blueprintPath, binaryOf, loggerOf)
@@ -190,6 +194,23 @@ func newGraphCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fu
 			}
 			if err := checkValidate(cmd, e); err != nil {
 				return err
+			}
+
+			if view == "relationships" {
+				switch format {
+				case "dot":
+					_, _ = fmt.Fprint(cmd.OutOrStdout(), graph.RelationshipDOT(e.Graph))
+				case "list", "":
+					if output == "json" {
+						return writeJSON(cmd.OutOrStdout(), relationshipGraphResult{Relationships: relationshipsToDTO(e.Graph)})
+					}
+					for _, relationship := range graph.SortedRelationships(e.Graph) {
+						_, _ = fmt.Fprintf(cmd.OutOrStdout(), "relationship: %s -- %s\n", relationship.Left, relationship.Right)
+					}
+				default:
+					return fmt.Errorf("unknown format %q (want \"list\" or \"dot\")", format)
+				}
+				return nil
 			}
 
 			switch format {
@@ -214,6 +235,7 @@ func newGraphCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fu
 	}
 	cmd.Flags().StringVar(&format, "format", "list", "output format: list or dot")
 	cmd.Flags().StringVar(&output, "output", "text", "output stream encoding: text or json (json is only supported with --format list)")
+	cmd.Flags().StringVar(&view, "view", "execution", "graph view: execution or relationships")
 	return cmd
 }
 

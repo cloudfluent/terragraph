@@ -20,6 +20,7 @@ var topSchema = &hcl.BodySchema{
 	Blocks: []hcl.BlockHeaderSchema{
 		{Type: "node", LabelNames: []string{"name"}},
 		{Type: "edge"},
+		{Type: "relationship"},
 		{Type: "group", LabelNames: []string{"name"}},
 		{Type: "use", LabelNames: []string{"name"}},
 		{Type: "vendor"},
@@ -94,10 +95,15 @@ var edgeInputSchema = &hcl.BodySchema{
 	Attributes: []hcl.AttributeSchema{{Name: "from", Required: true}},
 }
 
+var relationshipSchema = &hcl.BodySchema{
+	Attributes: []hcl.AttributeSchema{{Name: "between", Required: true}},
+}
+
 var groupBodySchema = &hcl.BodySchema{
 	Blocks: []hcl.BlockHeaderSchema{
 		{Type: "node", LabelNames: []string{"name"}},
 		{Type: "edge"},
+		{Type: "relationship"},
 		{Type: "use", LabelNames: []string{"name"}},
 		{Type: "export"},
 		{Type: "producer", LabelNames: []string{"source"}},
@@ -147,6 +153,9 @@ func ParseFile(path string) (*Blueprint, error) {
 	if err := validateEdges(bp, seenNodes, seenUses); err != nil {
 		return nil, err
 	}
+	if err := validateRelationships(bp.Relationships, seenNodes); err != nil {
+		return nil, err
+	}
 	if err := validateRuntimes(bp); err != nil {
 		return nil, err
 	}
@@ -177,6 +186,9 @@ func ParseDir(dir string) (*Blueprint, error) {
 	}
 
 	if err := validateEdges(bp, seenNodes, seenUses); err != nil {
+		return nil, err
+	}
+	if err := validateRelationships(bp.Relationships, seenNodes); err != nil {
 		return nil, err
 	}
 	if err := validateRuntimes(bp); err != nil {
@@ -240,6 +252,12 @@ func parseOneFile(path string, bp *Blueprint, seenNodes, seenGroups, seenUses, s
 				return err
 			}
 			bp.Edges = append(bp.Edges, edges...)
+		case "relationship":
+			relationship, err := parseRelationshipBlock(block)
+			if err != nil {
+				return err
+			}
+			bp.Relationships = append(bp.Relationships, relationship)
 		case "group":
 			group, err := parseGroupBlock(block, baseDir)
 			if err != nil {
@@ -378,6 +396,57 @@ func validateEdges(bp *Blueprint, seenNodes, seenUses map[string]bool) error {
 		}
 	}
 	return nil
+}
+
+// validateRelationships runs after every file in a scope is merged so relationships can reference nodes declared in sibling files while unordered duplicates remain scope-local.
+func validateRelationships(relationships []Relationship, seenNodes map[string]bool) error {
+	seen := map[string]bool{}
+	for _, relationship := range relationships {
+		if !seenNodes[relationship.Left] {
+			return fmt.Errorf("relationship references unknown node %q; declare it in the same blueprint scope", relationship.Left)
+		}
+		if !seenNodes[relationship.Right] {
+			return fmt.Errorf("relationship references unknown node %q; declare it in the same blueprint scope", relationship.Right)
+		}
+		key := relationship.Left + "\x00" + relationship.Right
+		if seen[key] {
+			return fmt.Errorf("duplicate relationship between node.%s and node.%s; remove one declaration", relationship.Left, relationship.Right)
+		}
+		seen[key] = true
+	}
+	return nil
+}
+
+func parseRelationshipBlock(block *hcl.Block) (Relationship, error) {
+	content, diags := block.Body.Content(relationshipSchema)
+	if diags.HasErrors() {
+		return Relationship{}, fmt.Errorf("%s: %s", block.DefRange, diags.Error())
+	}
+	attr := content.Attributes["between"]
+	expressions, diags := hcl.ExprList(attr.Expr)
+	if diags.HasErrors() || len(expressions) != 2 {
+		return Relationship{}, fmt.Errorf("%s: relationship between must be a literal list of exactly two bare node references", attr.Range)
+	}
+	names := make([]string, 2)
+	for i, expression := range expressions {
+		traversal, traversalDiags := hcl.AbsTraversalForExpr(expression)
+		if traversalDiags.HasErrors() || len(traversal) != 2 {
+			return Relationship{}, fmt.Errorf("%s: relationship endpoint must be a bare node.<name> reference; ports and use instances are not allowed", expression.Range())
+		}
+		root, rootOK := traversal[0].(hcl.TraverseRoot)
+		step, stepOK := traversal[1].(hcl.TraverseAttr)
+		if !rootOK || !stepOK || root.Name != "node" {
+			return Relationship{}, fmt.Errorf("%s: relationship endpoint must be a bare node.<name> reference; ports and use instances are not allowed", expression.Range())
+		}
+		names[i] = step.Name
+	}
+	if names[0] == names[1] {
+		return Relationship{}, fmt.Errorf("%s: relationship endpoints must be distinct; remove the self-relationship on node.%s", attr.Range, names[0])
+	}
+	if names[0] > names[1] {
+		names[0], names[1] = names[1], names[0]
+	}
+	return Relationship{Left: names[0], Right: names[1]}, nil
 }
 
 // validateEndpointKnown checks that a PortRef's referenced entity was actually declared in the same scope: a node reference against declared nodes, a use reference against declared use instances.
@@ -1022,6 +1091,12 @@ func parseGroupBlock(block *hcl.Block, baseDir string) (Group, error) {
 				return Group{}, err
 			}
 			g.Edges = append(g.Edges, edges...)
+		case "relationship":
+			relationship, err := parseRelationshipBlock(b)
+			if err != nil {
+				return Group{}, err
+			}
+			g.Relationships = append(g.Relationships, relationship)
 		case "use":
 			u, err := parseUseBlock(b)
 			if err != nil {
@@ -1059,6 +1134,9 @@ func parseGroupBlock(block *hcl.Block, baseDir string) (Group, error) {
 		if err := validateEndpointKnown(edge.To, seenNodes, seenUses); err != nil {
 			return Group{}, fmt.Errorf("group %q: %w", g.Name, err)
 		}
+	}
+	if err := validateRelationships(g.Relationships, seenNodes); err != nil {
+		return Group{}, fmt.Errorf("group %q: %w", g.Name, err)
 	}
 	for _, in := range g.Export.Inputs {
 		for _, ref := range in.To {

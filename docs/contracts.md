@@ -85,7 +85,7 @@ are the only thing that reviews it.
 
 ## Error classes and codes
 
-`terragraph validate` reports three classes. C001/C002/C006 are existence and
+`terragraph validate` reports four classes. C001/C002/C006 are existence and
 scope: a promise about a port the module never declared, or a scope nothing
 instantiates, is wrong whether or not anything consumes it yet. C003–C005 are
 side-vs-side compatibility, checked for every data edge whose endpoints both
@@ -96,8 +96,9 @@ declaration of record, and a contract claiming a different type or
 sensitivity is simply wrong about the module it describes — fix the contract,
 not the wiring. Reconciliation fires only on explicit claims (an absent
 attribute is no claim, and a variable with no type constraint has nothing to
-contradict), in both directions. Uncontracted endpoints check nothing — that
-is the migration path.
+contradict), in both directions. C010 covers an architectural relationship
+whose endpoint source has no producer or consumer contract. Ordinary
+uncontracted edge endpoints check nothing — that is the migration path.
 
 | Code | Severity | Fires when |
 |---|---|---|
@@ -110,6 +111,7 @@ is the migration path.
 | C007 | warning | consumer's claimed `type` contradicts the module's declared variable type constraint |
 | C008 | warning | consumer's explicit `sensitive` claim contradicts the module's declared variable sensitivity |
 | C009 | warning | producer's explicit `sensitive` claim contradicts the module's declared output sensitivity |
+| C010 | warning | an undirected relationship endpoint's module source has no producer or consumer contract |
 
 Every code is a warning under the default mode; the mode block below is the
 one severity dial, and it moves all of them together — there is no per-code
@@ -119,7 +121,7 @@ severity.
 
 `contracts { mode = "..." }` in the blueprint is reviewed configuration and
 the only severity dial: `warn` (the default when the block is absent) reports
-every C001–C009 as a warning; `enforce` escalates them to errors, which
+every C001–C010 as a warning; `enforce` escalates them to errors, which
 blocks `validate`, `plan`, `apply`, and `destroy` the same way structural
 errors already do. An upgrade never selects a stricter mode on its own.
 

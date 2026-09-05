@@ -82,6 +82,12 @@ type Edge struct {
 	To   PortRef
 }
 
+// Relationship is an undirected architectural link between two leaf node instances; canonical endpoint order makes duplicate detection and output deterministic without implying execution direction.
+type Relationship struct {
+	Left  string
+	Right string
+}
+
 // IsDataEdge reports whether this edge carries a value (explicit) as opposed to only constraining execution order (implicit).
 func (e Edge) IsDataEdge() bool {
 	return e.From.IsPort() && e.To.IsPort()
@@ -124,11 +130,12 @@ type Export struct {
 
 // Group is a reusable sub-blueprint template: a named, self-contained bundle of nodes, edges, and nested group instantiations, with an explicit, encapsulated interface (Export). Instantiated via Use.
 type Group struct {
-	Name   string
-	Nodes  []Node
-	Edges  []Edge
-	Uses   []Use
-	Export Export
+	Name          string
+	Nodes         []Node
+	Edges         []Edge
+	Relationships []Relationship
+	Uses          []Use
+	Export        Export
 	// Contracts is nil when the group body declares no producer/consumer blocks. Scopes resolve against the group definition file's own directory (the same base the group's internal node sources resolve against), and graph.Build merges them into Graph.Contracts alongside the root blueprint's, so a group can carry the contracts for its own internal modules.
 	Contracts *Contracts
 }
@@ -184,12 +191,13 @@ type S3Lock struct {
 	Region string
 }
 
-// Blueprint is the fully parsed graph topology: nodes and the edges between them, plus any group definitions and instantiations. It carries no resource configuration, only wiring.
+// Blueprint is the fully parsed graph topology: nodes, directed edges, undirected relationships, group definitions, and instantiations. It carries no resource configuration.
 type Blueprint struct {
-	Nodes  []Node
-	Edges  []Edge
-	Groups []Group
-	Uses   []Use
+	Nodes         []Node
+	Edges         []Edge
+	Relationships []Relationship
+	Groups        []Group
+	Uses          []Use
 	// Vendor is nil when the blueprint declares no `vendor` block. Use the VendorDirectory/VendorManifestFile accessors, never this field directly, so callers never need to branch on nil.
 	Vendor *VendorConfig
 	// TFVars is nil when the blueprint declares no `tfvars` block. Use the TFVarsLocation accessor, never this field directly, so callers never need to branch on nil.

@@ -114,6 +114,67 @@ func TestGraph_OutputJSON_WithFormatDot_Errors(t *testing.T) {
 	}
 }
 
+func TestGraph_RelationshipViewTextAndJSON(t *testing.T) {
+	dir := t.TempDir()
+	writeFixtureFile(t, filepath.Join(dir, "blueprint.hcl"), `
+node "b" { source = "./b" }
+node "a" { source = "./a" }
+relationship { between = [node.b, node.a] }
+producer "./a" {
+  output "x" {}
+}
+consumer "./b" {
+  input "x" {}
+}
+`)
+	writeFixtureFile(t, filepath.Join(dir, "a/main.tf"), `output "x" { value = "x" }`)
+	writeFixtureFile(t, filepath.Join(dir, "b/main.tf"), `variable "x" { type = string }`)
+
+	run := func(args ...string) (string, error) {
+		root := NewRootCmd("test")
+		var out bytes.Buffer
+		root.SetOut(&out)
+		root.SetErr(&bytes.Buffer{})
+		root.SetArgs(append([]string{"--blueprint", filepath.Join(dir, "blueprint.hcl"), "graph", "--view", "relationships"}, args...))
+		err := root.Execute()
+		return out.String(), err
+	}
+
+	textOutput, err := run()
+	if err != nil {
+		t.Fatalf("graph relationships: %v", err)
+	}
+	if textOutput != "relationship: a -- b\n" {
+		t.Fatalf("stdout = %q, want relationship", textOutput)
+	}
+	jsonOutput, err := run("--output", "json")
+	if err != nil {
+		t.Fatalf("graph relationships JSON: %v", err)
+	}
+	var got relationshipGraphResult
+	if err := json.Unmarshal([]byte(jsonOutput), &got); err != nil {
+		t.Fatalf("unmarshal %q: %v", jsonOutput, err)
+	}
+	if len(got.Relationships) != 1 || got.Relationships[0].Left != "a" || got.Relationships[0].Right != "b" {
+		t.Fatalf("relationships = %+v, want a -- b", got.Relationships)
+	}
+	dotOutput, err := run("--format", "dot")
+	if err != nil {
+		t.Fatalf("graph relationships DOT: %v", err)
+	}
+	wantDOT := "graph terragraph_relationships {\n  rankdir=LR;\n  \"a\";\n  \"b\";\n  \"a\" -- \"b\";\n}\n"
+	if dotOutput != wantDOT {
+		t.Fatalf("DOT = %q, want %q", dotOutput, wantDOT)
+	}
+}
+
+func TestGraph_UnknownViewErrors(t *testing.T) {
+	_, _, err := runCmd(t, "graph", "--view", "unknown")
+	if err == nil || !strings.Contains(err.Error(), "unknown view") {
+		t.Fatalf("error = %v, want unknown view", err)
+	}
+}
+
 func TestValidate_OutputJSON_Valid(t *testing.T) {
 	stdout, _, err := runCmd(t, "validate", "--output", "json")
 	if err != nil {

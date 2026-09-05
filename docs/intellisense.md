@@ -8,7 +8,7 @@ The extension bundles a compatible language server, so nothing here requires ins
 
 Open the completion list with `Ctrl+Space` (`Control+Space` on macOS).
 
-- Top-level blueprint blocks: `node`, `edge`, `runtime`, `group`, `use`, `vendor`, `tfvars`, `lock`
+- Top-level blueprint blocks: `node`, `edge`, `relationship`, `runtime`, `group`, `use`, `vendor`, `tfvars`, `lock`
 - The attributes each block accepts: a node's `source`, `vars`, `env`, `runtime`, `backend_config`; a `use` block's `as`, `source`, `vars`, `env`, `runtime`, `backend_config`, `approve`; and so on
 - A Terraform/OpenTofu module's own input variables and outputs
 - Declared runtime names
@@ -19,6 +19,14 @@ Inside a node's `vars = {}` only the input variables that module declares are su
 edge {
   from = node.vpc.output.vpc_id
   to   = node.eks.input.vpc_id
+}
+```
+
+An undirected [`relationship`](blueprint.md#undirected-architectural-relationships) completes its required node pair:
+
+```hcl
+relationship {
+  between = [node.left, node.right]
 }
 ```
 
