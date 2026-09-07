@@ -99,6 +99,25 @@ attribute is no claim, and a variable with no type constraint has nothing to
 contradict), in both directions. Uncontracted endpoints check nothing — that
 is the migration path.
 
+C007 asks whether the module's type could accept the contract's, not whether
+the two are identical. A contract **narrower** than the variable it describes
+is a stricter promise rather than a contradiction:
+
+```hcl
+# a vendored module, not yours to edit
+variable "tags" { type = map(any) }
+
+consumer "./vendor/thing" {
+  input "tags" { type = "map(string)" }   # allowed: we only ever pass strings
+}
+```
+
+Requiring equality would have left C007 able to say nothing beyond "restate
+the module's type", and would have made a narrowing promise impossible for
+exactly the modules that cannot be changed. A genuine mismatch — `string`
+against a `number` variable — still fires. The distinction is Terraform's own
+safe conversion: narrowing is safe, `string` to `number` is not.
+
 | Code | Severity | Fires when |
 |---|---|---|
 | C001 | warning | producer contract names an output the module does not declare |
@@ -107,7 +126,7 @@ is the migration path.
 | C004 | warning | consumer requires non-null (`nullable = false`) but the producer allows null |
 | C005 | warning | producer is `sensitive = true` but the consumer does not accept sensitive values |
 | C006 | warning | contract scope matches no node in the graph (stale path after a move or rename) |
-| C007 | warning | consumer's claimed `type` contradicts the module's declared variable type constraint |
+| C007 | warning | consumer's claimed `type` is one the module's declared variable type could never accept |
 | C008 | warning | consumer's explicit `sensitive` claim contradicts the module's declared variable sensitivity |
 | C009 | warning | producer's explicit `sensitive` claim contradicts the module's declared output sensitivity |
 
