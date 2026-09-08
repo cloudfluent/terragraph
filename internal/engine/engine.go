@@ -82,6 +82,19 @@ func (e *Engine) logger() *slog.Logger {
 // one lock. See internal/runlock. The returned func releases a lock this call acquired;
 // it is a no-op when LoadLocked already holds one.
 func (e *Engine) lockRun() (func(), error) {
+	// Programmatic graphs can bypass parsing; check every node before acquiring locks or letting upstream output errors fall back to snapshots.
+	if e.Graph != nil {
+		names := make([]string, 0, len(e.Graph.Nodes))
+		for name := range e.Graph.Nodes {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			if err := e.runner(name).ValidateEnv(); err != nil {
+				return nil, fmt.Errorf("node.%s: %w", name, err)
+			}
+		}
+	}
 	if e.runLock != nil {
 		return func() {}, nil
 	}

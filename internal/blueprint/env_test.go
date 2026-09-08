@@ -1,9 +1,28 @@
 package blueprint
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
+
+func TestParseFile_EnvCannotSetManagedDataDir(t *testing.T) {
+	for _, kind := range []string{"node", "use"} {
+		for _, key := range []string{"TF_DATA_DIR", "tf_data_dir", "Tf_Data_Dir", "TF_DATA_DIR=shared"} {
+			t.Run(kind+"/"+key, func(t *testing.T) {
+				attrs := `source = "./module"`
+				if kind == "use" {
+					attrs += "\nas = \"instance\""
+				}
+				path := writeTemp(t, fmt.Sprintf("%s \"a\" {\n%s\nenv = { %q = \"\" }\n}\n", kind, attrs, key))
+				_, err := ParseFile(path)
+				if err == nil || !strings.Contains(err.Error(), "env."+key) || !strings.Contains(err.Error(), "remove") || !strings.Contains(err.Error(), path) {
+					t.Fatalf("error = %v, want reserved env key, source location, and removal remedy", err)
+				}
+			})
+		}
+	}
+}
 
 func TestParseFile_NodeEnv(t *testing.T) {
 	path := writeTemp(t, `
