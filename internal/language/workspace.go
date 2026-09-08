@@ -388,6 +388,7 @@ var completionSchemas = map[string][]attributeSpec{
 		{name: "vendor", insert: "vendor {\n}", detail: "Blueprint block", documentation: "Configures the local vendor directory."},
 		{name: "tfvars", insert: "tfvars {\n}", detail: "Blueprint block", documentation: "Configures where resolved input values are written."},
 		{name: "lock", insert: "lock {\n  s3 {\n    bucket = \"\"\n    key    = \"\"\n    region = \"\"\n  }\n}", detail: "Blueprint block", documentation: "Serializes plan/apply/destroy across machines with a remote lock object."},
+		{name: "execution", insert: "execution {\n}", detail: "Blueprint block", documentation: "Configures execution record storage and retained plan lifetime."},
 		{name: "snapshots", insert: "snapshots { }", detail: "Blueprint block", documentation: "Opts the graph into local output snapshots, consumed as the input source of last resort."},
 	},
 	"group": {
@@ -402,7 +403,14 @@ var completionSchemas = map[string][]attributeSpec{
 	},
 	"export.input":  {{name: "to", insert: "to = node.", detail: "required input reference"}},
 	"export.output": {{name: "from", insert: "from = node.", detail: "required output reference"}},
-	"snapshots":     {},
+	"execution": {
+		{name: "bucket", insert: "bucket = \"\"", detail: "optional string", documentation: "S3 bucket for execution records and retained plans; requires a shared graph lock."},
+		{name: "prefix", insert: "prefix = \"\"", detail: "optional string", documentation: "Dedicated artifact prefix, separate from state and locks."},
+		{name: "region", insert: "region = \"\"", detail: "optional string", documentation: "S3 execution storage region."},
+		{name: "plan_ttl", insert: "plan_ttl = \"24h\"", detail: "optional string", documentation: "Maximum age at which a retained plan may begin applying."},
+		{name: "record_retention", insert: "record_retention = \"720h\"", detail: "optional string", documentation: "Retention after an execution is resolved and finished."},
+	},
+	"snapshots": {},
 	"node": {
 		{name: "source", insert: "source = \"\"", detail: "required string", documentation: "Path or remote source of the Terraform or OpenTofu module."},
 		{name: "vars", insert: "vars = {\n}", detail: "object", documentation: "Literal Terraform input values. Use an edge for another node's output."},
