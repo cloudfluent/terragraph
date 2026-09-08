@@ -32,8 +32,9 @@ Go version is pinned to the `go.mod` value and matched in CI. Don't bump it as a
 | `language`, `lsp` | Editor intelligence |
 | `runlock` | Cross-process advisory lock on a blueprint directory |
 | `module` | Terraform module introspection |
+| `pathidentity` | Read-only filesystem path equality, including known directory case rules |
 
-Dependencies flow one way: `cli` → `engine` → `graph` → `blueprint`, and `lsp` → `language` → `blueprint`. `blueprint`, `exec`, `module`, and `runlock` are leaves: they import nothing else under `internal/`, and keeping them that way is what makes them testable in isolation. Don't add an import that reverses the direction or gives a leaf a dependency, and don't reach into another package to do work it should expose.
+Dependencies flow one way: `cli` → `engine` → `graph` → `blueprint`, and `lsp` → `language` → `blueprint`. `blueprint`, `exec`, `module`, `runlock`, and `pathidentity` are leaves: they import nothing else under `internal/`, and keeping them that way is what makes them testable in isolation. Don't add an import that reverses the direction or gives a leaf a dependency, and don't reach into another package to do work it should expose.
 
 Before adding a package, function, or type, check whether an existing one already covers it. Extend the existing implementation rather than building a parallel one.
 

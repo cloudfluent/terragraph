@@ -3,6 +3,7 @@ package graph
 import (
 	"fmt"
 	"maps"
+	"os"
 	"sort"
 	"strings"
 )
@@ -121,6 +122,7 @@ func Validate(g *Graph) []Problem {
 	}
 
 	problems = append(problems, backendProblems(g)...)
+	problems = append(problems, knownBackendProblems(g)...)
 	problems = append(problems, remoteLockProblems(g)...)
 	problems = append(problems, contractProblems(g)...)
 
@@ -164,13 +166,31 @@ func remoteLockProblems(g *Graph) []Problem {
 				Message:  fmt.Sprintf("node.%s: remote lock requires a remote backend (s3, gcs, azurerm, http, remote, or cloud); %s", name, what),
 			})
 		}
-		// Same key in another bucket or non-s3 backend is not an overwrite risk; empty bucket still flags because key may live only in .tf.
-		if g.Lock.S3 != nil && g.Lock.S3.Key != "" && backend == "s3" &&
+		// Keep the existing conservative check for an explicit partial key, and use complete literal addresses when the module supplies them.
+		collision := g.Lock.S3 != nil && g.Lock.S3.Key != "" && backend == "s3" &&
 			node.BackendConfig["key"] == g.Lock.S3.Key &&
-			(node.BackendConfig["bucket"] == "" || node.BackendConfig["bucket"] == g.Lock.S3.Bucket) {
+			(node.BackendConfig["bucket"] == "" || node.BackendConfig["bucket"] == g.Lock.S3.Bucket)
+		possibleCollision := false
+		if address, known := s3Address(node); g.Lock.S3 != nil {
+			endpoint := os.Getenv("AWS_ENDPOINT_URL_S3")
+			if endpoint == "" {
+				endpoint = os.Getenv("AWS_ENDPOINT_URL")
+			}
+			lockAddress := s3StateAddress{bucket: g.Lock.S3.Bucket, key: g.Lock.S3.Key, endpoint: endpoint, partition: awsPartition(g.Lock.S3.Region)}
+			if known {
+				collision = address == lockAddress
+			}
+			possibleCollision = possibleS3Collision(address, lockAddress)
+		}
+		if collision {
 			problems = append(problems, Problem{
 				Severity: SeverityError,
 				Message:  fmt.Sprintf("node.%s: graph lock key %q must not be a node's state key", name, g.Lock.S3.Key),
+			})
+		} else if possibleCollision {
+			problems = append(problems, Problem{
+				Severity: SeverityWarning,
+				Message:  fmt.Sprintf("node.%s: graph lock may share the node's s3 state because the AWS partition is not statically known; set explicit backend region and endpoint settings where applicable and verify that the resolved lock and state namespaces are distinct", name),
 			})
 		}
 	}

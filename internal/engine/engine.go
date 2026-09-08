@@ -209,6 +209,7 @@ func load(ctx context.Context, blueprintPath string, binary exec.Binary, stdout,
 // Validate returns every structural problem found in the graph (missing ports, two data edges targeting the same input, a data edge and vars both setting the same input, cycles, unresolved required variables, backend_config without a backend block, identical backend_config maps on a shared module directory) plus any tfvars orphan warnings (see tfVarsOrphans), stale local-backend state warnings (see stateOrphans) and shared-source runtime conflict warnings (see runtimeConflicts). Check each Problem's IsError(): only errors should block graph/plan/apply/destroy, warnings are advisory.
 func (e *Engine) Validate() []graph.Problem {
 	problems := graph.Validate(e.Graph)
+	problems = append(problems, e.pathCollisions()...)
 	problems = append(problems, e.tfVarsOrphans()...)
 	problems = append(problems, e.stateOrphans()...)
 	problems = append(problems, e.runtimeConflicts()...)

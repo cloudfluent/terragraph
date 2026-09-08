@@ -153,3 +153,76 @@ func validateLockFixture(t *testing.T, root string) []Problem {
 	}
 	return Validate(g)
 }
+
+func TestValidate_LiteralS3StateKeyCannotBeGraphLock(t *testing.T) {
+	root := t.TempDir()
+	writeBackendModule(t, filepath.Join(root, "module"), `
+terraform {
+  backend "s3" {
+    bucket = "shared-bucket"
+    key = "shared-object"
+    region = "us-east-1"
+  }
+}
+`)
+	writeFixtureFile(t, filepath.Join(root, "blueprint.hcl"), `
+lock {
+  s3 {
+    bucket = "shared-bucket"
+    key = "shared-object"
+    region = "us-east-1"
+  }
+}
+node "a" { source = "./module" }
+`)
+	bp, err := blueprint.ParseFile(filepath.Join(root, "blueprint.hcl"))
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	g, err := Build(bp, root)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if problems := Validate(g); !hasErrorContaining(problems, "must not be a node's state key") {
+		t.Fatalf("got = %v, want graph lock collision error", problems)
+	}
+}
+
+func TestValidate_LiteralS3AddressHonorsNodeOverrides(t *testing.T) {
+	root := t.TempDir()
+	writeBackendModule(t, filepath.Join(root, "module"), `
+terraform {
+  backend "s3" {
+    bucket = "acme-tfstate"
+    key = "terragraph/prod.lock"
+    region = "ap-northeast-2"
+  }
+}
+`)
+	writeFixtureFile(t, filepath.Join(root, "blueprint.hcl"), graphLockS3+`
+node "a" {
+  source = "./module"
+  backend_config = { key = "separate-state" }
+}
+`)
+	if problems := validateLockFixture(t, root); len(problems) != 0 {
+		t.Fatalf("got = %v, want node key override to separate state from lock", problems)
+	}
+}
+
+func TestValidate_LiteralS3AddressDifferentBucketIsAllowed(t *testing.T) {
+	root := t.TempDir()
+	writeBackendModule(t, filepath.Join(root, "module"), `
+terraform {
+  backend "s3" {
+    bucket = "other-bucket"
+    key = "terragraph/prod.lock"
+    region = "ap-northeast-2"
+  }
+}
+`)
+	writeFixtureFile(t, filepath.Join(root, "blueprint.hcl"), graphLockS3+`node "a" { source = "./module" }`)
+	if problems := validateLockFixture(t, root); len(problems) != 0 {
+		t.Fatalf("got = %v, want different bucket to stay valid", problems)
+	}
+}
