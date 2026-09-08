@@ -11,6 +11,7 @@ terragraph plan [flags]
 ```
   -h, --help              help for plan
       --node string       restrict to a single node
+      --output string     output format: text or json (default "text")
       --parallelism int   max nodes to run concurrently within one execution level (default 1)
 ```
 

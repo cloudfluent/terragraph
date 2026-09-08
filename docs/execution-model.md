@@ -158,6 +158,14 @@ It asks about the plan you were just shown, and applies exactly that plan — a 
 
 `terragraph destroy` is confirmed the same way, except the question comes from Terraform itself: there is no saved plan for terragraph to ask about on its behalf.
 
+### JSON run reports
+
+`terragraph plan`, `apply`, and `destroy` accept `--output json`. Stdout carries a JSON run report, and Terraform's own output and terragraph's progress messages move to stderr alongside diagnostics. The report lists each selected node's name, execution level, and status (`planned`, `applied`, `unchanged`, `destroyed`, `failed`, or `not run`), with an error message for a failed node. Entries are ordered by execution level, then node name; destroy numbers levels in reverse dependency order.
+
+`apply` and `destroy` require `--auto-approve` with `--output json`, even when running sequentially. Stdout is the payload, so a question there would corrupt it. Stderr is diagnostics that an automation consumer is not watching for an interactive question, so moving the prompt there would leave it unanswered. The combination is refused before execution; use text mode for interactive approval, or pass `--auto-approve`. The node's `approve` policy still applies. `plan` needs no approval and can use `--output json` on its own.
+
+A run that fails after starting a node still emits its report and exits non-zero; nodes in unreached levels appear as `not run`. If the command fails before any node runs, for example while parsing or validating the blueprint or acquiring a lock, stdout may be empty. Automation must check the exit status and allow for an absent JSON payload on failure; stderr carries the diagnostic.
+
 ### There is no local cache
 
 Earlier versions kept a content-addressed cache at `<blueprint dir>/.terragraph/cache.json`, hashing each node's source files, resolved inputs, runtime and `env` to decide whether it could skip apply. Hashing local files is a proxy for a remote fact, and the gap between the two produced a series of bugs: a backend or inherited `env` change that the key never modelled, remote drift that no local hash could see, and files consumed through `file()`/`templatefile()` that never invalidated anything.

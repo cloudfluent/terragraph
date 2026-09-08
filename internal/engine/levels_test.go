@@ -48,7 +48,7 @@ func TestRunLevels_RespectsParallelismCap(t *testing.T) {
 	e := newTestEngine([]string{"a", "b", "c", "d"}, nil)
 
 	var current, max int64
-	action := func(name string, applied map[string]map[string]any, out io.Writer) (map[string]any, error) {
+	action := func(name string, applied map[string]map[string]any, out io.Writer) (map[string]any, string, error) {
 		n := atomic.AddInt64(&current, 1)
 		for {
 			m := atomic.LoadInt64(&max)
@@ -58,10 +58,10 @@ func TestRunLevels_RespectsParallelismCap(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 		atomic.AddInt64(&current, -1)
-		return nil, nil
+		return nil, "", nil
 	}
 
-	if err := e.runLevels(Options{Parallelism: 2}, false, action, nil); err != nil {
+	if _, err := e.runLevels(Options{Parallelism: 2}, false, action, nil); err != nil {
 		t.Fatalf("runLevels: %v", err)
 	}
 	if max > 2 {
@@ -77,19 +77,19 @@ func TestRunLevels_LevelIsABarrier(t *testing.T) {
 	e := newTestEngine([]string{"a", "b"}, []blueprint.Edge{orderEdge("a", "b")})
 
 	var aFinished atomic.Bool
-	action := func(name string, applied map[string]map[string]any, out io.Writer) (map[string]any, error) {
+	action := func(name string, applied map[string]map[string]any, out io.Writer) (map[string]any, string, error) {
 		if name == "a" {
 			time.Sleep(30 * time.Millisecond)
 			aFinished.Store(true)
-			return nil, nil
+			return nil, "", nil
 		}
 		if name == "b" && !aFinished.Load() {
-			return nil, fmt.Errorf("b started before a finished")
+			return nil, "", fmt.Errorf("b started before a finished")
 		}
-		return nil, nil
+		return nil, "", nil
 	}
 
-	if err := e.runLevels(Options{Parallelism: 4}, false, action, nil); err != nil {
+	if _, err := e.runLevels(Options{Parallelism: 4}, false, action, nil); err != nil {
 		t.Fatalf("runLevels: %v", err)
 	}
 }
@@ -99,17 +99,17 @@ func TestRunLevels_ErrorInLevelStopsNextLevel(t *testing.T) {
 	e := newTestEngine([]string{"a", "b", "c"}, []blueprint.Edge{orderEdge("a", "b")})
 
 	var bRan atomic.Bool
-	action := func(name string, applied map[string]map[string]any, out io.Writer) (map[string]any, error) {
+	action := func(name string, applied map[string]map[string]any, out io.Writer) (map[string]any, string, error) {
 		switch name {
 		case "c":
-			return nil, fmt.Errorf("boom")
+			return nil, "", fmt.Errorf("boom")
 		case "b":
 			bRan.Store(true)
 		}
-		return nil, nil
+		return nil, "", nil
 	}
 
-	err := e.runLevels(Options{}, false, action, nil)
+	_, err := e.runLevels(Options{}, false, action, nil)
 	if err == nil {
 		t.Fatalf("expected an error")
 	}
@@ -121,17 +121,17 @@ func TestRunLevels_ErrorInLevelStopsNextLevel(t *testing.T) {
 func TestRunLevels_AppliedSnapshotPropagatesAcrossLevels(t *testing.T) {
 	e := newTestEngine([]string{"a", "b"}, []blueprint.Edge{orderEdge("a", "b")})
 
-	action := func(name string, applied map[string]map[string]any, out io.Writer) (map[string]any, error) {
+	action := func(name string, applied map[string]map[string]any, out io.Writer) (map[string]any, string, error) {
 		if name == "a" {
-			return map[string]any{"x": "from-a"}, nil
+			return map[string]any{"x": "from-a"}, "", nil
 		}
 		if applied["a"]["x"] != "from-a" {
-			return nil, fmt.Errorf("expected b to see a's output, got %v", applied["a"])
+			return nil, "", fmt.Errorf("expected b to see a's output, got %v", applied["a"])
 		}
-		return nil, nil
+		return nil, "", nil
 	}
 
-	if err := e.runLevels(Options{}, false, action, nil); err != nil {
+	if _, err := e.runLevels(Options{}, false, action, nil); err != nil {
 		t.Fatalf("runLevels: %v", err)
 	}
 }
@@ -141,15 +141,15 @@ func TestRunLevels_AfterLevelRunsOncePerLevel(t *testing.T) {
 	// levels: [a, c], [b] -> afterLevel should fire twice.
 
 	var calls int64
-	action := func(name string, applied map[string]map[string]any, out io.Writer) (map[string]any, error) {
-		return nil, nil
+	action := func(name string, applied map[string]map[string]any, out io.Writer) (map[string]any, string, error) {
+		return nil, "", nil
 	}
 	afterLevel := func() error {
 		atomic.AddInt64(&calls, 1)
 		return nil
 	}
 
-	if err := e.runLevels(Options{}, false, action, afterLevel); err != nil {
+	if _, err := e.runLevels(Options{}, false, action, afterLevel); err != nil {
 		t.Fatalf("runLevels: %v", err)
 	}
 	if calls != 2 {
@@ -161,15 +161,15 @@ func TestRunLevels_AfterLevelErrorAbortsRun(t *testing.T) {
 	e := newTestEngine([]string{"a", "b"}, []blueprint.Edge{orderEdge("a", "b")})
 
 	var bRan atomic.Bool
-	action := func(name string, applied map[string]map[string]any, out io.Writer) (map[string]any, error) {
+	action := func(name string, applied map[string]map[string]any, out io.Writer) (map[string]any, string, error) {
 		if name == "b" {
 			bRan.Store(true)
 		}
-		return nil, nil
+		return nil, "", nil
 	}
 	afterLevel := func() error { return fmt.Errorf("save failed") }
 
-	if err := e.runLevels(Options{}, false, action, afterLevel); err == nil {
+	if _, err := e.runLevels(Options{}, false, action, afterLevel); err == nil {
 		t.Fatalf("expected an error from afterLevel to abort the run")
 	}
 	if bRan.Load() {

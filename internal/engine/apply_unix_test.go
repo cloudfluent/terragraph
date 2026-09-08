@@ -142,16 +142,16 @@ func loadApplyTestEngine(t *testing.T) (*Engine, string, string) {
 func TestApply_PlanDecidesWhetherToApply(t *testing.T) {
 	e, moduleDir, commandLog := loadApplyTestEngine(t)
 
-	if err := e.Apply(Options{AutoApprove: true}); err != nil {
+	if _, err := e.Apply(Options{AutoApprove: true}); err != nil {
 		t.Fatalf("first Apply: %v", err)
 	}
-	if err := e.Apply(Options{AutoApprove: true}); err != nil {
+	if _, err := e.Apply(Options{AutoApprove: true}); err != nil {
 		t.Fatalf("unchanged Apply: %v", err)
 	}
 	if err := os.Remove(filepath.Join(moduleDir, "managed.out")); err != nil {
 		t.Fatalf("removing managed output: %v", err)
 	}
-	if err := e.Apply(Options{AutoApprove: true}); err != nil {
+	if _, err := e.Apply(Options{AutoApprove: true}); err != nil {
 		t.Fatalf("drifted Apply: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(moduleDir, "managed.out")); err != nil {
@@ -173,13 +173,13 @@ func TestApply_PlanDecidesWhetherToApply(t *testing.T) {
 func TestApply_PlanDetectsNonTerraformDependencyChange(t *testing.T) {
 	e, moduleDir, _ := loadApplyTestEngine(t)
 
-	if err := e.Apply(Options{AutoApprove: true}); err != nil {
+	if _, err := e.Apply(Options{AutoApprove: true}); err != nil {
 		t.Fatalf("first Apply: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(moduleDir, "payload.txt"), []byte("version-two\n"), 0o644); err != nil {
 		t.Fatalf("changing payload: %v", err)
 	}
-	if err := e.Apply(Options{AutoApprove: true}); err != nil {
+	if _, err := e.Apply(Options{AutoApprove: true}); err != nil {
 		t.Fatalf("Apply after dependency change: %v", err)
 	}
 
@@ -195,13 +195,13 @@ func TestApply_PlanDetectsNonTerraformDependencyChange(t *testing.T) {
 func TestApply_PlanErrorFailsWithoutApplying(t *testing.T) {
 	e, _, commandLog := loadApplyTestEngine(t)
 
-	if err := e.Apply(Options{AutoApprove: true}); err != nil {
+	if _, err := e.Apply(Options{AutoApprove: true}); err != nil {
 		t.Fatalf("first Apply: %v", err)
 	}
 	if err := os.WriteFile(os.Getenv("TG_PLAN_ERROR"), nil, 0o644); err != nil {
 		t.Fatalf("creating plan error marker: %v", err)
 	}
-	if err := e.Apply(Options{AutoApprove: true}); err == nil {
+	if _, err := e.Apply(Options{AutoApprove: true}); err == nil {
 		t.Fatal("expected a plan error to fail the node instead of applying it")
 	}
 
@@ -218,14 +218,14 @@ func TestApply_PlanErrorFailsWithoutApplying(t *testing.T) {
 func TestApply_VerificationPlanRefreshesDespiteAmbientOverride(t *testing.T) {
 	e, moduleDir, commandLog := loadApplyTestEngine(t)
 
-	if err := e.Apply(Options{AutoApprove: true}); err != nil {
+	if _, err := e.Apply(Options{AutoApprove: true}); err != nil {
 		t.Fatalf("first Apply: %v", err)
 	}
 	if err := os.Remove(filepath.Join(moduleDir, "managed.out")); err != nil {
 		t.Fatalf("removing managed output: %v", err)
 	}
 	t.Setenv("TF_CLI_ARGS_plan", "-refresh=false")
-	if err := e.Apply(Options{AutoApprove: true}); err != nil {
+	if _, err := e.Apply(Options{AutoApprove: true}); err != nil {
 		t.Fatalf("Apply with ambient refresh override: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(moduleDir, "managed.out")); err != nil {
@@ -245,14 +245,14 @@ func TestApply_VerificationPlanRefreshesDespiteAmbientOverride(t *testing.T) {
 func TestApply_SavedPlanIgnoresAmbientApplyArguments(t *testing.T) {
 	e, moduleDir, commandLog := loadApplyTestEngine(t)
 
-	if err := e.Apply(Options{AutoApprove: true}); err != nil {
+	if _, err := e.Apply(Options{AutoApprove: true}); err != nil {
 		t.Fatalf("first Apply: %v", err)
 	}
 	if err := os.Remove(filepath.Join(moduleDir, "managed.out")); err != nil {
 		t.Fatalf("removing managed output: %v", err)
 	}
 	t.Setenv("TF_CLI_ARGS_apply", "-var=payload=version-two")
-	if err := e.Apply(Options{AutoApprove: true}); err != nil {
+	if _, err := e.Apply(Options{AutoApprove: true}); err != nil {
 		t.Fatalf("Apply with ambient apply arguments: %v", err)
 	}
 
@@ -276,13 +276,13 @@ func TestApply_SavedPlanIgnoresAmbientApplyArguments(t *testing.T) {
 func TestApply_DriftedNodeAppliesTheVerificationPlan(t *testing.T) {
 	e, moduleDir, commandLog := loadApplyTestEngine(t)
 
-	if err := e.Apply(Options{AutoApprove: true}); err != nil {
+	if _, err := e.Apply(Options{AutoApprove: true}); err != nil {
 		t.Fatalf("first Apply: %v", err)
 	}
 	if err := os.Remove(filepath.Join(moduleDir, "managed.out")); err != nil {
 		t.Fatalf("removing managed output: %v", err)
 	}
-	if err := e.Apply(Options{AutoApprove: true}); err != nil {
+	if _, err := e.Apply(Options{AutoApprove: true}); err != nil {
 		t.Fatalf("drifted Apply: %v", err)
 	}
 
@@ -303,13 +303,13 @@ func TestApply_DriftedNodeAppliesTheVerificationPlan(t *testing.T) {
 func TestApply_SavedPlanIsRemovedAfterTheRun(t *testing.T) {
 	e, moduleDir, _ := loadApplyTestEngine(t)
 
-	if err := e.Apply(Options{AutoApprove: true}); err != nil {
+	if _, err := e.Apply(Options{AutoApprove: true}); err != nil {
 		t.Fatalf("first Apply: %v", err)
 	}
 	if err := os.Remove(filepath.Join(moduleDir, "managed.out")); err != nil {
 		t.Fatalf("removing managed output: %v", err)
 	}
-	if err := e.Apply(Options{AutoApprove: true}); err != nil {
+	if _, err := e.Apply(Options{AutoApprove: true}); err != nil {
 		t.Fatalf("drifted Apply: %v", err)
 	}
 
@@ -325,7 +325,7 @@ func TestApply_EnhancedBackendIsRefused(t *testing.T) {
 			e, moduleDir, commandLog := loadApplyTestEngine(t)
 			t.Setenv("TG_BACKEND_TYPE", backend)
 
-			err := e.Apply(Options{AutoApprove: true})
+			_, err := e.Apply(Options{AutoApprove: true})
 			if err == nil {
 				t.Fatal("expected apply to refuse an enhanced backend")
 			}
@@ -357,7 +357,7 @@ func TestApply_EnhancedBackendIsRefused(t *testing.T) {
 func TestApply_WithoutAutoApprovePromptsAndApplies(t *testing.T) {
 	e, moduleDir, commandLog := loadApplyTestEngine(t)
 
-	if err := e.Apply(Options{AutoApprove: true}); err != nil {
+	if _, err := e.Apply(Options{AutoApprove: true}); err != nil {
 		t.Fatalf("first Apply: %v", err)
 	}
 	if err := os.Remove(filepath.Join(moduleDir, "managed.out")); err != nil {
@@ -370,7 +370,7 @@ func TestApply_WithoutAutoApprovePromptsAndApplies(t *testing.T) {
 	out := &bytes.Buffer{}
 	e.Stdout = out
 	e.Stdin = strings.NewReader("yes\n")
-	if err := e.Apply(Options{}); err != nil {
+	if _, err := e.Apply(Options{}); err != nil {
 		t.Fatalf("approved Apply: %v", err)
 	}
 
@@ -393,7 +393,7 @@ func TestApply_WithoutAutoApprovePromptsAndApplies(t *testing.T) {
 func TestApply_WithoutAutoApproveDeclineStopsTheRun(t *testing.T) {
 	e, moduleDir, commandLog := loadApplyTestEngine(t)
 
-	if err := e.Apply(Options{AutoApprove: true}); err != nil {
+	if _, err := e.Apply(Options{AutoApprove: true}); err != nil {
 		t.Fatalf("first Apply: %v", err)
 	}
 	if err := os.Remove(filepath.Join(moduleDir, "managed.out")); err != nil {
@@ -405,7 +405,7 @@ func TestApply_WithoutAutoApproveDeclineStopsTheRun(t *testing.T) {
 
 	e.Stdout = &bytes.Buffer{}
 	e.Stdin = strings.NewReader("n\n")
-	err := e.Apply(Options{})
+	_, err := e.Apply(Options{})
 	if err == nil {
 		t.Fatal("expected a declined approval to fail the run")
 	}
@@ -428,11 +428,11 @@ func TestApply_WithoutAutoApproveDeclineStopsTheRun(t *testing.T) {
 func TestApply_UnchangedNodeNeverAsksForApproval(t *testing.T) {
 	e, _, _ := loadApplyTestEngine(t)
 
-	if err := e.Apply(Options{AutoApprove: true}); err != nil {
+	if _, err := e.Apply(Options{AutoApprove: true}); err != nil {
 		t.Fatalf("first Apply: %v", err)
 	}
 	e.Stdin = nil
-	if err := e.Apply(Options{}); err != nil {
+	if _, err := e.Apply(Options{}); err != nil {
 		t.Fatalf("unchanged Apply without auto-approve: %v", err)
 	}
 }
@@ -441,7 +441,7 @@ func TestApply_UnchangedNodeNeverAsksForApproval(t *testing.T) {
 func TestApply_WithoutAutoApproveAndNoInputFails(t *testing.T) {
 	e, moduleDir, _ := loadApplyTestEngine(t)
 
-	if err := e.Apply(Options{AutoApprove: true}); err != nil {
+	if _, err := e.Apply(Options{AutoApprove: true}); err != nil {
 		t.Fatalf("first Apply: %v", err)
 	}
 	if err := os.Remove(filepath.Join(moduleDir, "managed.out")); err != nil {
@@ -449,7 +449,7 @@ func TestApply_WithoutAutoApproveAndNoInputFails(t *testing.T) {
 	}
 	e.Stdin = nil
 
-	err := e.Apply(Options{})
+	_, err := e.Apply(Options{})
 	if err == nil {
 		t.Fatal("expected Apply to fail when it cannot ask for approval")
 	}
@@ -564,7 +564,7 @@ node "b" {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if err := e.Apply(Options{AutoApprove: true, Parallelism: 2}); err != nil {
+	if _, err := e.Apply(Options{AutoApprove: true, Parallelism: 2}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if _, err := os.Stat(overlap); err != nil {
@@ -579,7 +579,7 @@ func runApplyChild(t *testing.T) {
 		t.Fatalf("LoadLocked: %v", err)
 	}
 	defer unlock()
-	if err := e.Apply(Options{Node: os.Getenv(applyChildNodeEnv), AutoApprove: true}); err != nil {
+	if _, err := e.Apply(Options{Node: os.Getenv(applyChildNodeEnv), AutoApprove: true}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 }
@@ -686,7 +686,7 @@ exit 1
 func TestApply_ParallelismRequiresAutoApprove(t *testing.T) {
 	e, _, _ := loadApplyTestEngine(t)
 
-	err := e.Apply(Options{Parallelism: 2})
+	_, err := e.Apply(Options{Parallelism: 2})
 	if err == nil {
 		t.Fatal("expected --parallelism without --auto-approve to be refused")
 	}

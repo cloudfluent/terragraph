@@ -12,48 +12,48 @@ import (
 // Destroy tears down the selected nodes in reverse topological order (downstream first) so a node is never destroyed while something still depends on its outputs.
 //
 // Nothing has to be invalidated afterwards. Destroy once had to drop the incremental-apply cache entry for everything it tore down, because a stale "unchanged" hit against infrastructure that no longer exists would have been a correctness bug rather than a missed optimization; a later apply now asks Terraform, which plans against real state and sees the resources are gone.
-func (e *Engine) Destroy(opts Options) error {
+func (e *Engine) Destroy(opts Options) ([]NodeRun, error) {
 	// Same reason Apply refuses it: concurrent nodes have their output buffered and flushed a node at a time, so terraform's confirmation prompt would be invisible until long after the answer was needed. Checked before taking the run lock, so an unrunnable combination fails immediately instead of after waiting for whatever else holds it.
 	if !opts.AutoApprove && opts.parallelism() > 1 {
-		return fmt.Errorf("--parallelism %d needs --auto-approve: output from concurrent nodes is buffered, so there is nowhere to ask for approval", opts.parallelism())
+		return nil, fmt.Errorf("--parallelism %d needs --auto-approve: output from concurrent nodes is buffered, so there is nowhere to ask for approval", opts.parallelism())
 	}
 
 	// Teardown is delete-only, so a node that declared anything short of approve = "all" has already said it must not be torn down unattended. This reads the declaration (graph.Node.Approve, "" when neither the node nor an enclosing use ever spoke) rather than approveFor's resolved level, which fills blanks down to ApproveSafe and would therefore refuse every node in an ordinary blueprint while a node that explicitly declared "none" still slipped through interactively — the inverse of the point. A declaration holds whether or not someone is watching, the same rule apply's gate follows. Checked before any lock is taken, so a refusal fails immediately rather than after waiting on whatever holds it.
 	levels, err := e.executionLevels(opts, true)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for _, level := range levels {
 		for _, name := range level {
 			if a := e.Graph.Nodes[name].Approve; a != "" && a != blueprint.ApproveAll {
-				return fmt.Errorf("destroy: node %s declares approve = %q, which does not permit teardown; change it to %q on that node (or its enclosing use) if tearing it down is intended", name, a, blueprint.ApproveAll)
+				return nil, fmt.Errorf("destroy: node %s declares approve = %q, which does not permit teardown; change it to %q on that node (or its enclosing use) if tearing it down is intended", name, a, blueprint.ApproveAll)
 			}
 		}
 	}
 
 	unlock, err := e.lockRun()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer unlock()
 
 	unlockGraph, err := e.lockGraph()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer unlockGraph()
 
 	e.logger().Info("destroy starting", "node", opts.Node, "parallelism", opts.parallelism(), "autoApprove", opts.AutoApprove)
 
-	return e.runLevels(opts, true, func(name string, applied map[string]map[string]any, out io.Writer) (map[string]any, error) {
+	return e.runLevels(opts, true, func(name string, applied map[string]map[string]any, out io.Writer) (map[string]any, string, error) {
 		// A destroy plan needs the same resolved input values an apply would have used (e.g. a variable feeding a resource's count or for_each), so it's evaluated identically here: every upstream dependency is still standing at this point, since destroy walks the graph in reverse topological order (downstream first).
 		vars, err := e.resolveInputs(name, applied)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		varsPath := e.tfVarsPath(name)
 		if _, err := exec.WriteTFVars(varsPath, vars); err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		// Removed however this node exits: the file holds resolved input values in cleartext, and the next run rewrites it from scratch anyway.
 		defer func() { _ = os.Remove(varsPath) }()
@@ -70,11 +70,11 @@ func (e *Engine) Destroy(opts Options) error {
 			//
 			// "Was there an answer to be had?" is not the same question as "is Stdin nil?": a CLI run always has one (cmd.InOrStdin()), and redirecting from /dev/null still produces a perfectly good reader that yields nothing. What separates the two is whether terraform got any bytes out of it, which is why this counts them rather than testing for nil.
 			if !opts.AutoApprove && (answered == nil || answered.n == 0) {
-				return nil, fmt.Errorf("destroy: %w (nothing was available to read approval from; pass --auto-approve to destroy without asking)", err)
+				return nil, "", fmt.Errorf("destroy: %w (nothing was available to read approval from; pass --auto-approve to destroy without asking)", err)
 			}
-			return nil, fmt.Errorf("destroy: %w", err)
+			return nil, "", fmt.Errorf("destroy: %w", err)
 		}
-		return nil, nil
+		return nil, StatusDestroyed, nil
 	}, nil)
 }
 

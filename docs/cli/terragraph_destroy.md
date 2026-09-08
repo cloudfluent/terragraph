@@ -12,6 +12,7 @@ terragraph destroy [flags]
       --auto-approve      skip interactive approval
   -h, --help              help for destroy
       --node string       restrict to a single node
+      --output string     output format: text or json (default "text")
       --parallelism int   max nodes to run concurrently within one execution level (default 1)
 ```
 

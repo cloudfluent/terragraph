@@ -156,6 +156,16 @@ func TestRootCmd_LogLevel_RejectsUnknownValue(t *testing.T) {
 	}
 }
 
+// TestRunCommands_OutputFlagRejectsUnknownValue proves plan/apply/destroy reject an unknown --output value up front, before any engine is loaded, matching validate/graph/vendor.
+func TestRunCommands_OutputFlagRejectsUnknownValue(t *testing.T) {
+	for _, cmd := range []string{"plan", "apply", "destroy"} {
+		_, _, err := runCmd(t, cmd, "--output", "bogus")
+		if err == nil || !strings.Contains(err.Error(), `unknown output "bogus"`) {
+			t.Fatalf("%s --output bogus: got = %v, want unknown-output error", cmd, err)
+		}
+	}
+}
+
 func TestRootCmd_LogLevel_DebugSurfacesInternalTracing(t *testing.T) {
 	_, stderr, err := runCmd(t, "--log-level", "debug", "graph")
 	if err != nil {
@@ -209,5 +219,15 @@ func TestGraph_DoesNotTakeBlueprintLock(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, ".terragraph", "lock")); !os.IsNotExist(err) {
 		t.Fatalf("graph should not take the blueprint lock, stat error = %v", err)
+	}
+}
+
+// TestRunCommands_OutputJSONNeedsAutoApprove proves the #49 stream conflict is refused rather than half-resolved: under --output json the approval/confirmation prompts have nowhere to appear without corrupting the payload, so apply and destroy demand --auto-approve up front, exactly as --parallelism already does.
+func TestRunCommands_OutputJSONNeedsAutoApprove(t *testing.T) {
+	for _, c := range []string{"apply", "destroy"} {
+		_, _, err := runCmd(t, c, "--output", "json")
+		if err == nil || !strings.Contains(err.Error(), "needs --auto-approve") {
+			t.Fatalf("%s --output json: got = %v, want needs-auto-approve refusal", c, err)
+		}
 	}
 }

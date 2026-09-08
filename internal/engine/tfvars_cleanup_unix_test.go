@@ -64,7 +64,7 @@ func assertNoTFVars(t *testing.T, e *Engine, node string) {
 func TestPlan_RemovesTFVarsWhenRunEnds(t *testing.T) {
 	e := loadTFVarsCleanupEngine(t)
 
-	if err := e.Plan(Options{}); err != nil {
+	if _, err := e.Plan(Options{}); err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
 	assertNoTFVars(t, e, "app")
@@ -73,7 +73,7 @@ func TestPlan_RemovesTFVarsWhenRunEnds(t *testing.T) {
 func TestApply_RemovesTFVarsWhenRunEnds(t *testing.T) {
 	e := loadTFVarsCleanupEngine(t)
 
-	if err := e.Apply(Options{AutoApprove: true}); err != nil {
+	if _, err := e.Apply(Options{AutoApprove: true}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	assertNoTFVars(t, e, "app")
@@ -83,7 +83,7 @@ func TestApply_RemovesTFVarsWhenRunEnds(t *testing.T) {
 func TestDestroy_RemovesTFVarsWhenRunEnds(t *testing.T) {
 	e := loadTFVarsCleanupEngine(t)
 
-	if err := e.Destroy(Options{AutoApprove: true}); err != nil {
+	if _, err := e.Destroy(Options{AutoApprove: true}); err != nil {
 		t.Fatalf("Destroy: %v", err)
 	}
 	assertNoTFVars(t, e, "app")
