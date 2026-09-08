@@ -158,8 +158,8 @@ func TestBuild_SameGroupDirectoryUsedTwice_InstancesDontShareState(t *testing.T)
 		t.Fatalf("expected distinct filled backend paths, got %+v / %+v", first.BackendConfig, second.BackendConfig)
 	}
 	if first.BackendConfig != nil {
-		first.BackendConfig["path"] = "mutated"
-		if second.BackendConfig["path"] == "mutated" {
+		first.BackendConfig["path"] = filepath.Join(root, "mutated.tfstate")
+		if second.BackendConfig["path"] == first.BackendConfig["path"] {
 			t.Fatalf("mutating the first instance's BackendConfig affected the second: %+v", second.BackendConfig)
 		}
 	}
