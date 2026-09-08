@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 
 	"github.com/cloudfluent/terragraph/internal/exec"
 )
@@ -60,11 +59,11 @@ func (e *Engine) Apply(opts Options) ([]NodeRun, error) {
 		}
 
 		savedPlan := e.planPath(name)
-		if err := os.MkdirAll(filepath.Dir(savedPlan), 0o755); err != nil {
-			return nil, "", fmt.Errorf("creating plan directory: %w", err)
+		removePlan, err := prepareSavedPlan(savedPlan)
+		if err != nil {
+			return nil, "", err
 		}
-		// Removed however this node exits: the file holds resolved input values in cleartext, and a plan left behind is only ever stale by the next run.
-		defer func() { _ = os.Remove(savedPlan) }()
+		defer removePlan()
 
 		changes, err := r.PlanChanges(savedPlan, varFileArgs...)
 		if err != nil {

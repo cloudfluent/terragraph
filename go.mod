@@ -15,6 +15,7 @@ require (
 	go.lsp.dev/jsonrpc2 v1.0.1
 	go.lsp.dev/protocol v1.0.1
 	go.lsp.dev/uri v1.0.1
+	golang.org/x/sys v0.45.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
