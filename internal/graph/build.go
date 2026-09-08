@@ -146,6 +146,11 @@ func build(bp *blueprint.Blueprint, baseDir, namespace string, ambient *blueprin
 					n.Name, n.Source, n.Name,
 				)
 			}
+			var err error
+			dir, err = vendoredModuleDir(dir)
+			if err != nil {
+				return nil, nil, fmt.Errorf("node %q: %w", n.Name, err)
+			}
 		}
 		schema, err := rc.inspect(dir)
 		if err != nil {

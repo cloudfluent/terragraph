@@ -65,11 +65,17 @@ func All(nodes []blueprint.Node, baseDir, vendorDir, manifestPath string, opts O
 		dstExists := statErr == nil
 
 		sourceChanged := hasEntry && existing.Source != n.Source
-		if dstExists && !sourceChanged && !opts.Force {
+		if dstExists && !sourceChanged && !opts.Force && !needsPackageLayout(n.Source, dst) {
 			results = append(results, Result{Node: n.Name, Skipped: true})
 			continue
 		}
 
+		if dstExists && needsPackageLayout(n.Source, dst) {
+			if err := checkSourceRelocation(n, dst); err != nil {
+				results = append(results, Result{Node: n.Name, Err: err})
+				continue
+			}
+		}
 		entry, err := vendorOne(context.Background(), n, dst, existing)
 		if err != nil {
 			results = append(results, Result{Node: n.Name, Err: err})
@@ -109,7 +115,7 @@ func vendorOne(ctx context.Context, n blueprint.Node, dst string, existing Entry
 		return Entry{}, fmt.Errorf("fetching: %w", err)
 	}
 
-	if err := prune(fetched, existing.Exclude); err != nil {
+	if err := pruneSource(fetched, existing.Exclude); err != nil {
 		return Entry{}, fmt.Errorf("pruning: %w", err)
 	}
 
@@ -137,4 +143,27 @@ func vendorOne(ctx context.Context, n blueprint.Node, dst string, existing Entry
 		Source:  n.Source,
 		Exclude: existing.Exclude,
 	}, nil
+}
+
+// pruneSource keeps exclusion paths relative to the selected module while retaining sibling modules from its original package.
+func pruneSource(dir string, patterns []string) error {
+	source, err := blueprint.ReadVendoredSource(dir)
+	if err != nil {
+		return err
+	}
+	if source == nil {
+		return prune(dir, patterns)
+	}
+	moduleDir, err := source.Directory(dir)
+	if err != nil {
+		return err
+	}
+	if err := prune(dir, nil); err != nil {
+		return err
+	}
+	if err := prune(moduleDir, patterns); err != nil {
+		return err
+	}
+	_, err = source.Directory(dir)
+	return err
 }

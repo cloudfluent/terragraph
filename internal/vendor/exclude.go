@@ -1,6 +1,7 @@
 package vendor
 
 import (
+	"github.com/cloudfluent/terragraph/internal/blueprint"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -28,6 +29,10 @@ func prune(dir string, patterns []string) error {
 			return relErr
 		}
 		rel = filepath.ToSlash(rel)
+		// Losing generated package metadata would silently run a different module after pruning.
+		if rel == blueprint.VendoredSourceFilename {
+			return nil
+		}
 
 		if matchExclude(all, rel) {
 			if err := os.RemoveAll(path); err != nil {
