@@ -169,7 +169,7 @@ func TestRunCommands_SensitiveInputErrorsStayRedacted(t *testing.T) {
 func TestPlan_NonSensitiveInputRetainsDetailedError(t *testing.T) {
 	bp := writeSensitiveInputFixture(t, false)
 	_, _, err := runCmdAt(t, bp, "plan", "--output", "json")
-	if err == nil || !strings.Contains(err.Error(), "unsupported attribute") || !strings.Contains(err.Error(), "PRIVATE_PAYLOAD_KEY") {
+	if err == nil || !strings.Contains(err.Error(), `attribute "count"`) || !strings.Contains(err.Error(), "number required") {
 		t.Fatalf("error = %v, want detailed non-sensitive type error", err)
 	}
 	if errors.Unwrap(err) == nil {

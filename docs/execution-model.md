@@ -12,7 +12,7 @@
 
 Cycle detection reports every independent cyclic cluster in one pass (Tarjan's SCC algorithm), not just the first one found.
 
-Type checking is a runtime check, not static inference: a standard root module's `output` blocks don't declare a type, so there's nothing to infer statically. Instead, by the time an edge is about to be wired the concrete value is already known: it's decoded directly against the target variable's declared type (the same mechanism Terraform itself uses to load `*.tfvars.json`), which is exact rather than a guess.
+Type checking runs when inputs are resolved for execution. terragraph decodes each concrete value and uses cty's type conversion and optional attribute defaults to check whether the target variable's declared type can accept it. This accepts `any`, convertible `map(any)` values, optional object attributes with defaults, and additional object attributes. The original input is passed unchanged in the tfvars file: Terraform/OpenTofu performs the final conversion, applies variable defaults and nullability rules, and evaluates variable validation blocks.
 
 ## How values are passed
 

@@ -8,6 +8,7 @@ import (
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/ext/typeexpr"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
+	"github.com/zclconf/go-cty/cty/convert"
 	ctyjson "github.com/zclconf/go-cty/cty/json"
 
 	"github.com/cloudfluent/terragraph/internal/blueprint"
@@ -86,7 +87,7 @@ func (e *Engine) checkType(edge blueprint.Edge, val any) error {
 	return nil
 }
 
-// checkVarType verifies val against the type constraint node.varName declares, if any. This is an exact runtime check, not static inference: by the time either a data edge or a literal Vars entry supplies a value it's already concrete, so it's decoded straight against the target's cty.Type using the same mechanism Terraform itself uses to load *.tfvars.json. A variable with no declared type constraint is skipped (nothing to check against).
+// checkVarType checks concrete input convertibility with cty and optional attribute defaults; the original value is still passed to Terraform so its variable handling owns the final conversion.
 func (e *Engine) checkVarType(nodeName, varName string, val any, sourceSensitive bool) (err error) {
 	v, ok := e.Graph.Nodes[nodeName].Schema.Variables[varName]
 	if !ok || v.Type == "" {
@@ -97,7 +98,7 @@ func (e *Engine) checkVarType(nodeName, varName string, val any, sourceSensitive
 	if diags.HasErrors() {
 		return fmt.Errorf("node.%s.input.%s: internal error parsing declared type %q: %s", nodeName, varName, v.Type, diags.Error())
 	}
-	ctyType, diags := typeexpr.TypeConstraint(typeExpr)
+	ctyType, defaults, diags := typeexpr.TypeConstraintWithDefaults(typeExpr)
 	if diags.HasErrors() {
 		return fmt.Errorf("node.%s.input.%s: internal error resolving declared type %q: %s", nodeName, varName, v.Type, diags.Error())
 	}
@@ -115,7 +116,16 @@ func (e *Engine) checkVarType(nodeName, varName string, val any, sourceSensitive
 	if err != nil {
 		return fmt.Errorf("node.%s.input.%s: encoding value for type check: %w", nodeName, varName, err)
 	}
-	if _, err := ctyjson.Unmarshal(data, ctyType); err != nil {
+	// Decode the JSON's actual shape first: decoding against the constraint mistakes any for cty's typed JSON wrapper and rejects extra object attributes before conversion can discard them.
+	var concrete ctyjson.SimpleJSONValue
+	if err := json.Unmarshal(data, &concrete); err != nil {
+		return fmt.Errorf("node.%s.input.%s: decoding value for type check: %w", nodeName, varName, err)
+	}
+	value := concrete.Value
+	if defaults != nil {
+		value = defaults.Apply(value)
+	}
+	if _, err := convert.Convert(value, ctyType); err != nil {
 		return fmt.Errorf("node.%s.input.%s: does not match declared type %s: %w", nodeName, varName, v.Type, err)
 	}
 	return nil
