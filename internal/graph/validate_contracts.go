@@ -3,6 +3,7 @@ package graph
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/ext/typeexpr"
@@ -26,7 +27,7 @@ func contractProblems(g *Graph) []Problem {
 	if g.Contracts == nil {
 		return nil
 	}
-	// Nodes are grouped by contract key and sorted by name so the schema a contract is judged against never depends on map iteration order. It matters only for remote sources: nodes sharing a local directory share one cached *module.Schema, but two instances of one remote module live in vendor/<node-name> and are inspected separately, so re-vendoring a single node (vendor --node) can leave the two copies disagreeing. Picking by name makes the answer stable; the second copy still goes uninspected, which is a gap worth its own diagnostic rather than a silent tiebreak.
+	// A source contract covers every actual schema, including independently updated vendor copies and one local source inspected under different runtimes.
 	byKey := map[string][]*Node{}
 	for _, n := range g.Nodes {
 		key := contractKey(n)
@@ -54,45 +55,58 @@ func contractProblems(g *Graph) []Problem {
 			report("contract.[C006] %s: no node in this graph uses source %q; update the scope path or remove the contract", dc.Scope, dc.Scope)
 			continue
 		}
-		schemaOwner := owners[0]
-		for _, name := range sortedPorts(dc.Producer) {
-			if !schemaOwner.Schema.HasOutput(name) {
-				report("contract.[C001] producer %s.output.%s: module declares no such output; remove the promise or add the output", dc.Scope, name)
-				continue
+		var messages []string
+		affected := map[string][]string{}
+		for _, schemaOwner := range owners {
+			reportForNode := func(format string, args ...any) {
+				message := fmt.Sprintf(format, args...)
+				if _, seen := affected[message]; !seen {
+					messages = append(messages, message)
+				}
+				affected[message] = append(affected[message], "node."+schemaOwner.Name)
 			}
-			// C009: the module's own sensitive flag is a fact Terraform already declares; a producer claiming the opposite is wrong about its own module. Only an explicit claim can contradict (absent stays no-claim).
-			if p := dc.Producer[name]; p.Sensitive != nil && *p.Sensitive != schemaOwner.Schema.OutputDetails[name].Sensitive {
-				report("contract.[C009] producer %s.output.%s claims sensitive = %t but the module declares sensitive = %t; fix the contract — the module is the declaration of record", dc.Scope, name, *p.Sensitive, schemaOwner.Schema.OutputDetails[name].Sensitive)
+			for _, name := range sortedPorts(dc.Producer) {
+				if !schemaOwner.Schema.HasOutput(name) {
+					reportForNode("contract.[C001] producer %s.output.%s: module declares no such output; remove the promise or add the output", dc.Scope, name)
+					continue
+				}
+				// C009: the module's own sensitive flag is a fact Terraform already declares; a producer claiming the opposite is wrong about its own module. Only an explicit claim can contradict (absent stays no-claim).
+				if p := dc.Producer[name]; p.Sensitive != nil && *p.Sensitive != schemaOwner.Schema.OutputDetails[name].Sensitive {
+					reportForNode("contract.[C009] producer %s.output.%s claims sensitive = %t but the module declares sensitive = %t; fix the contract — the module is the declaration of record", dc.Scope, name, *p.Sensitive, schemaOwner.Schema.OutputDetails[name].Sensitive)
+				}
+			}
+			for _, name := range sortedPorts(dc.Consumer) {
+				if !schemaOwner.Schema.HasVariable(name) {
+					reportForNode("contract.[C002] consumer %s.input.%s: module declares no such variable; remove the requirement or add the variable", dc.Scope, name)
+					continue
+				}
+				v := schemaOwner.Schema.Variables[name]
+				c := dc.Consumer[name]
+				// C007: a consumer contract that its own module could never satisfy. Convertibility, not equality — a contract narrower than the variable (map(string) against map(any)) is a stricter promise, not a contradiction, and it is the only way to say so about a vendored module whose declaration cannot be edited. What stays an error is a genuine mismatch like string against number. Both sides are parsed rather than string-compared, so spellings that normalize to one cty type agree, and a variable with no constraint has nothing to contradict.
+				if c.Type != "" && v.Type != "" {
+					ct, err := parseCtyType(c.Type)
+					if err != nil {
+						reportForNode("contract.[C007] consumer %s.input.%s: %v", dc.Scope, name, err)
+						continue
+					}
+					mt, err := parseCtyType(v.Type)
+					if err != nil {
+						reportForNode("contract.[C007] consumer %s.input.%s: module type %v", dc.Scope, name, err)
+						continue
+					}
+					// Safe conversion, not unsafe: cty will coerce string to number unsafely, which is exactly the mismatch this code exists to catch, while map(string) into map(any) is safe and is the narrowing to allow. Identical types need no conversion at all, so Equals still has to be asked first.
+					if !ct.Equals(mt) && convert.GetConversion(ct, mt) == nil {
+						reportForNode("contract.[C007] consumer %s.input.%s claims type %s, which the module's declared %s can never accept; fix the contract — the module is the declaration of record", dc.Scope, name, c.Type, v.Type)
+					}
+				}
+				// C008: the input-side twin of C009 — explicit sensitive claim, either direction, against the variable's declared flag.
+				if c.Sensitive != nil && *c.Sensitive != v.Sensitive {
+					reportForNode("contract.[C008] consumer %s.input.%s claims sensitive = %t but the module declares sensitive = %t; fix the contract — the module is the declaration of record", dc.Scope, name, *c.Sensitive, v.Sensitive)
+				}
 			}
 		}
-		for _, name := range sortedPorts(dc.Consumer) {
-			if !schemaOwner.Schema.HasVariable(name) {
-				report("contract.[C002] consumer %s.input.%s: module declares no such variable; remove the requirement or add the variable", dc.Scope, name)
-				continue
-			}
-			v := schemaOwner.Schema.Variables[name]
-			c := dc.Consumer[name]
-			// C007: a consumer contract that its own module could never satisfy. Convertibility, not equality — a contract narrower than the variable (map(string) against map(any)) is a stricter promise, not a contradiction, and it is the only way to say so about a vendored module whose declaration cannot be edited. What stays an error is a genuine mismatch like string against number. Both sides are parsed rather than string-compared, so spellings that normalize to one cty type agree, and a variable with no constraint has nothing to contradict.
-			if c.Type != "" && v.Type != "" {
-				ct, err := parseCtyType(c.Type)
-				if err != nil {
-					report("contract.[C007] consumer %s.input.%s: %v", dc.Scope, name, err)
-					continue
-				}
-				mt, err := parseCtyType(v.Type)
-				if err != nil {
-					report("contract.[C007] consumer %s.input.%s: module type %v", dc.Scope, name, err)
-					continue
-				}
-				// Safe conversion, not unsafe: cty will coerce string to number unsafely, which is exactly the mismatch this code exists to catch, while map(string) into map(any) is safe and is the narrowing to allow. Identical types need no conversion at all, so Equals still has to be asked first.
-				if !ct.Equals(mt) && convert.GetConversion(ct, mt) == nil {
-					report("contract.[C007] consumer %s.input.%s claims type %s, which the module's declared %s can never accept; fix the contract — the module is the declaration of record", dc.Scope, name, c.Type, v.Type)
-				}
-			}
-			// C008: the input-side twin of C009 — explicit sensitive claim, either direction, against the variable's declared flag.
-			if c.Sensitive != nil && *c.Sensitive != v.Sensitive {
-				report("contract.[C008] consumer %s.input.%s claims sensitive = %t but the module declares sensitive = %t; fix the contract — the module is the declaration of record", dc.Scope, name, *c.Sensitive, v.Sensitive)
-			}
+		for _, message := range messages {
+			report("%s [%s]", message, strings.Join(affected[message], ", "))
 		}
 	}
 
