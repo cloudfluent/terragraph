@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+
+	"github.com/cloudfluent/terragraph/internal/exec"
 )
 
 // snapshotPath returns where apply publishes name's output snapshot: <BaseDir>/.terragraph/outputs/<name>.json, beside the engine's other managed per-node state (plans, tfdata, state). Local and regenerable by every apply, so it is gitignored output, never committed evidence.
@@ -31,7 +33,7 @@ func (e *Engine) snapshotOutputAllowed(node, output string) bool {
 }
 
 // writeSnapshot persists only consumed non-sensitive outputs when opted in; withheld port names explain omissions, and a write failure fails the node rather than silently weakening later fallback.
-func (e *Engine) writeSnapshot(name string, outputs map[string]any) error {
+func (e *Engine) writeSnapshot(name string, outputs exec.Outputs) error {
 	if !e.Graph.Snapshots {
 		return nil
 	}
@@ -46,13 +48,12 @@ func (e *Engine) writeSnapshot(name string, outputs map[string]any) error {
 	published := make(map[string]any, len(consumed))
 	var withheld []string
 	for out := range consumed {
-		if !e.snapshotOutputAllowed(name, out) {
+		output, present := outputs[out]
+		if !e.snapshotOutputAllowed(name, out) || !present || output.Sensitive == nil || *output.Sensitive {
 			withheld = append(withheld, out)
 			continue
 		}
-		if val, ok := outputs[out]; ok {
-			published[out] = val
-		}
+		published[out] = output.Value
 	}
 	if len(published) == 0 && len(withheld) == 0 {
 		// The edge set can change between applies (an edge removed, a rename): a prior file whose consumers are all gone is a stale secret with no reader, so "no consumers → no file" must hold on re-apply too, not only on first write.
@@ -68,7 +69,7 @@ func (e *Engine) writeSnapshot(name string, outputs map[string]any) error {
 	}
 	// encoding/json sorts map keys; sorting port names keeps withheld-only snapshots deterministic too.
 	sort.Strings(withheld)
-	data, err := json.MarshalIndent(snapshotFile{Schema: 1, Node: name, Outputs: published, Withheld: withheld}, "", "  ")
+	data, err := json.MarshalIndent(snapshotFile{Schema: 2, Node: name, Outputs: published, Withheld: withheld}, "", "  ")
 	if err != nil {
 		return fmt.Errorf("node %s: encoding output snapshot: %w", name, err)
 	}
@@ -94,7 +95,7 @@ func (e *Engine) readSnapshot(name string) (snapshotFile, bool) {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
 	// Every writer emits an outputs object, even when empty; a missing or null object is corruption, not an output lookup miss.
-	if err := decoder.Decode(&f); err != nil || f.Schema != 1 || f.Node != name || f.Outputs == nil {
+	if err := decoder.Decode(&f); err != nil || (f.Schema != 1 && f.Schema != 2) || f.Node != name || f.Outputs == nil {
 		e.logger().Debug("output snapshot present but unreadable, ignoring it", "node", name, "err", err)
 		return snapshotFile{}, false
 	}
@@ -102,9 +103,9 @@ func (e *Engine) readSnapshot(name string) (snapshotFile, bool) {
 		e.logger().Debug("output snapshot has trailing data, ignoring it", "node", name)
 		return snapshotFile{}, false
 	}
-	// The current module declaration also governs legacy files, including values published before an output became sensitive.
+	// Version 1 never checked runtime sensitivity, so its values cannot be trusted even when the current static declaration says public.
 	for out := range f.Outputs {
-		if !e.snapshotOutputAllowed(name, out) {
+		if f.Schema == 1 || !e.snapshotOutputAllowed(name, out) {
 			delete(f.Outputs, out)
 			f.Withheld = append(f.Withheld, out)
 		}

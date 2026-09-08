@@ -123,7 +123,7 @@ edge {
   from = node.a.output.payload
   to = node.b.input.payload
 }`)
-	if err := osWriteFile(filepath.Join(e.BaseDir, "producer", "output.json"), []byte(`{"payload":{"value":{
+	if err := osWriteFile(filepath.Join(e.BaseDir, "producer", "output.json"), []byte(`{"payload":{"sensitive":false,"value":{
   "large":9007199254740993,
   "negative":-9007199254740993,
   "decimal":0.1234567890123456789,

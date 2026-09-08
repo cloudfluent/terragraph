@@ -79,9 +79,9 @@ case "$1" in
     fi
     echo $((n+1)) > "$TF_DATA_DIR/output-calls"
     if [ "$n" -eq 0 ]; then
-      printf '{"consumed":{"value":"%s"}}' "${TG_OUTPUT_FIRST:-first}"
+      printf '{"consumed":{"sensitive":false,"value":"%s"}}' "${TG_OUTPUT_FIRST:-first}"
     else
-      printf '{"consumed":{"value":"%s"}}' "${TG_OUTPUT_LATER:-second}"
+      printf '{"consumed":{"sensitive":false,"value":"%s"}}' "${TG_OUTPUT_LATER:-second}"
     fi
     exit 0
     ;;
@@ -125,7 +125,7 @@ func writeFallbackSnapshot(t *testing.T, e *Engine, name, value string) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatalf("creating snapshot dir: %v", err)
 	}
-	body := `{"schema":1,"node":"` + name + `","outputs":{"consumed":"` + value + `"}}` + "\n"
+	body := `{"schema":2,"node":"` + name + `","outputs":{"consumed":"` + value + `"}}` + "\n"
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("writing snapshot: %v", err)
 	}
@@ -220,7 +220,7 @@ func TestResolveInputs_CorruptSnapshotIsNotAnError(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatalf("creating snapshot dir: %v", err)
 	}
-	if err := os.WriteFile(path, []byte(`{"schema":1,"node":"a","outputs":{`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"schema":2,"node":"a","outputs":{`), 0o600); err != nil {
 		t.Fatalf("writing corrupt snapshot: %v", err)
 	}
 	t.Setenv("TG_OUTPUT_FAIL_NODE", "a")
