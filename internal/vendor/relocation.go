@@ -84,9 +84,22 @@ func pathWithin(dir, path string) bool {
 	}
 	resolvedDir, dirErr := filepath.EvalSymlinks(dir)
 	resolvedPath, pathErr := filepath.EvalSymlinks(path)
-	if dirErr != nil || pathErr != nil {
+	if dirErr == nil && pathErr == nil {
+		rel, err = filepath.Rel(resolvedDir, resolvedPath)
+		if err == nil && filepath.IsLocal(rel) {
+			return true
+		}
+	}
+	rootInfo, err := os.Stat(dir)
+	if err != nil {
 		return false
 	}
-	rel, err = filepath.Rel(resolvedDir, resolvedPath)
-	return err == nil && filepath.IsLocal(rel)
+	for parent := filepath.Dir(path); ; parent = filepath.Dir(parent) {
+		if info, err := os.Stat(parent); err == nil && os.SameFile(rootInfo, info) {
+			return true
+		}
+		if filepath.Dir(parent) == parent {
+			return false
+		}
+	}
 }
