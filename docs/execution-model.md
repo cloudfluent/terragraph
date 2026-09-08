@@ -1,5 +1,9 @@
 # Execution model
 
+## Selecting nodes
+
+`plan`, `apply`, and `destroy` select the whole graph by default. Use `--node <name>` to select exactly one node, including a dotted group node name. This does not automatically select its dependencies or downstream nodes. Positional arguments such as `terragraph apply app` are rejected before loading or locking the graph; use `terragraph apply --node app` instead.
+
 ## Validation
 
 `terragraph validate` (and `graph`/`plan`/`apply`/`destroy`, which run it first) reports two severities:
