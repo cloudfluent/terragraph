@@ -52,6 +52,11 @@ func (e *Engine) RunNode(name string, args []string) (resultErr error) {
 	if err := e.checkRuntimeFiles(Options{Node: name}); err != nil {
 		return err
 	}
+	if !op.init {
+		if err := e.verifyBackendContext(name, r); err != nil {
+			return err
+		}
+	}
 	unlockGraph, err := e.lockGraph()
 	if err != nil {
 		return err
@@ -110,6 +115,9 @@ func (e *Engine) RunNode(name string, args []string) (resultErr error) {
 	if op.init {
 		// The explicit init command cannot migrate state or rewrite a provider lockfile inside the source directory.
 		resultErr = r.InitRead(node.BackendConfig, args[1:]...)
+		if resultErr == nil {
+			resultErr = e.rememberBackendContext(name, r)
+		}
 	} else {
 		resultErr = r.RunOperation(native...)
 	}

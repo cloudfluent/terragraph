@@ -91,7 +91,7 @@ func (e *Engine) plan(opts Options, inspect, allowTextFallback bool) (runs []Nod
 		if err := session.transition(name, "initializing", "", ""); err != nil {
 			return fail("journal_failed", "init", err)
 		}
-		if err := r.Init(e.Graph.Nodes[name].BackendConfig); err != nil {
+		if err := e.initNode(name, r); err != nil {
 			return fail("initialization_failed", "init", session.fail(name, "indeterminate", fmt.Errorf("init: %w", err)))
 		}
 

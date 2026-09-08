@@ -67,7 +67,7 @@ func (e *Engine) Apply(opts Options) (runs []NodeRun, resultErr error) {
 		if err := session.transition(name, "initializing", "", ""); err != nil {
 			return nil, "", err
 		}
-		if err := r.Init(e.Graph.Nodes[name].BackendConfig); err != nil {
+		if err := e.initNode(name, r); err != nil {
 			return nil, "", session.fail(name, "indeterminate", fmt.Errorf("init: %w", err))
 		}
 

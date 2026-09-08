@@ -28,6 +28,14 @@ exit "${TG_NATIVE_EXIT:-0}"
 	if err := os.WriteFile(string(e.Binary), []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}
+	if err := e.RunNode("cached", []string{"init"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(log); err != nil {
+		t.Fatal(err)
+	}
+	e.Stdout.(*bytes.Buffer).Reset()
+	e.Stderr.(*bytes.Buffer).Reset()
 	return e, log
 }
 
@@ -54,7 +62,7 @@ func TestRunNode_MutationArchivesBackupAndPreservesExitCode(t *testing.T) {
 		t.Fatalf("got = %v", err)
 	}
 	records, err := e.ListExecutions()
-	if err != nil || len(records) != 1 || !records[0].Backup || records[0].Status != "needs_recovery" {
+	if err != nil || len(records) != 2 || !records[0].Backup || records[0].Status != "needs_recovery" {
 		t.Fatalf("got = %+v, %v", records, err)
 	}
 	var backup bytes.Buffer
@@ -105,5 +113,29 @@ func TestRunNode_RejectsScopeAndLockBypasses(t *testing.T) {
 	t.Setenv("TF_CLI_ARGS_state", "-state=other")
 	if err := e.RunNode("cached", []string{"state", "list"}); err == nil {
 		t.Fatal("ambient override accepted")
+	}
+}
+
+func TestRunNode_RefusesChangedBackendDeclaration(t *testing.T) {
+	e, log := operationTestEngine(t)
+	e.Graph.Nodes["cached"].BackendConfig["path"] = filepath.Join(e.BaseDir, "other.tfstate")
+	if err := e.RunNode("cached", []string{"state", "rm", "terraform_data.old"}); err == nil {
+		t.Fatal("changed target accepted")
+	}
+	if _, err := os.Stat(log); !os.IsNotExist(err) {
+		t.Fatal("changed target reached native runtime")
+	}
+}
+
+func TestRunNode_RefusesExternallyReconfiguredCache(t *testing.T) {
+	e, log := operationTestEngine(t)
+	if err := os.WriteFile(filepath.Join(e.dataDir("cached"), "terraform.tfstate"), []byte(`{"backend":{"type":"http"}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.RunNode("cached", []string{"state", "list"}); err == nil {
+		t.Fatal("changed native cache accepted")
+	}
+	if _, err := os.Stat(log); !os.IsNotExist(err) {
+		t.Fatal("changed cache reached native runtime")
 	}
 }

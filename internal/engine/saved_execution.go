@@ -104,7 +104,7 @@ func (e *Engine) saveFrontierNode(s *executionSession, name string, opts Options
 	if err := s.transition(name, "initializing", "", ""); err != nil {
 		return err
 	}
-	if err := r.Init(e.Graph.Nodes[name].BackendConfig); err != nil {
+	if err := e.initNode(name, r); err != nil {
 		return s.fail(name, "indeterminate", err)
 	}
 	if err := s.transition(name, "preparing", "", ""); err != nil {
@@ -246,7 +246,7 @@ func (e *Engine) applySavedNode(s *executionSession, node ExecutionNode, opts Op
 	if err := s.transition(node.Name, "initializing", "", ""); err != nil {
 		return "", err
 	}
-	if err := r.Init(e.Graph.Nodes[node.Name].BackendConfig); err != nil {
+	if err := e.initNode(node.Name, r); err != nil {
 		return "", s.fail(node.Name, "indeterminate", err)
 	}
 	if err := s.transition(node.Name, "planned", "", ""); err != nil {
