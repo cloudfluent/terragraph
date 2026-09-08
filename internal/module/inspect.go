@@ -10,6 +10,8 @@ import (
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclparse"
 	"github.com/hashicorp/terraform-config-inspect/tfconfig"
+	"github.com/zclconf/go-cty/cty"
+	"github.com/zclconf/go-cty/cty/convert"
 )
 
 // Variable is one declared input variable of a root module.
@@ -37,8 +39,12 @@ type Schema struct {
 	Variables     map[string]Variable
 	Outputs       map[string]bool
 	OutputDetails map[string]Output
-	// Backend is the type label of terraform { backend "TYPE" {} }, or "cloud" if the module declared a cloud block and no backend block. Empty means neither was declared (Terraform's implicit local backend). Attributes inside the block are not captured.
+	// Backend is the type label of terraform { backend "TYPE" {} }, or "cloud" if the module declared a cloud block and no backend block. Empty means neither was declared (Terraform's implicit local backend). Known scalar attributes are captured separately so callers can compare configured state addresses.
 	Backend string
+	// BackendConfig contains only statically known scalar attributes, so graph validation never evaluates backend expressions.
+	BackendConfig map[string]string
+	// BackendConfigKnown distinguishes a complete literal configuration from a projection that omitted expressions, nulls, or compound values.
+	BackendConfigKnown bool
 }
 
 // Inspect statically parses the root module at dir and returns its variable/output schema.
@@ -67,7 +73,7 @@ func Inspect(dir string) (*Schema, error) {
 		schema.Outputs[name] = true
 		schema.OutputDetails[name] = Output{Name: name, Type: output.Type, Description: output.Description, Sensitive: output.Sensitive, Deprecated: output.Deprecated}
 	}
-	schema.Backend = inspectBackend(dir)
+	schema.Backend, schema.BackendConfig, schema.BackendConfigKnown = inspectBackend(dir)
 	return schema, nil
 }
 
@@ -82,14 +88,16 @@ var terraformBackendSchema = &hcl.BodySchema{
 	},
 }
 
-// inspectBackend returns the module's backend type label, "cloud" if only a cloud block is present, or "" if neither was declared. terraform-config-inspect does not expose this; we scan .tf / .tf.json ourselves and ignore backend attributes.
-func inspectBackend(dir string) string {
+// inspectBackend returns the module's backend type label, "cloud" if only a cloud block is present, or "" if neither was declared. terraform-config-inspect does not expose this; the same scan also collects known scalar attributes for state-address validation.
+func inspectBackend(dir string) (string, map[string]string, bool) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return ""
+		return "", nil, false
 	}
 	parser := hclparse.NewParser()
 	backend := ""
+	var config map[string]string
+	known := true
 	cloud := false
 	for _, entry := range entries {
 		if entry.IsDir() {
@@ -125,6 +133,7 @@ func inspectBackend(dir string) string {
 				case "backend":
 					if len(b.Labels) > 0 && b.Labels[0] != "" {
 						backend = b.Labels[0]
+						config, known = literalBackendConfig(b.Body)
 					}
 				case "cloud":
 					cloud = true
@@ -133,12 +142,12 @@ func inspectBackend(dir string) string {
 		}
 	}
 	if backend != "" {
-		return backend
+		return backend, config, known
 	}
 	if cloud {
-		return "cloud"
+		return "cloud", nil, true
 	}
-	return ""
+	return "", nil, true
 }
 
 // HasOutput reports whether the module declares an output with this name.
@@ -148,4 +157,25 @@ func (s *Schema) HasOutput(name string) bool { return s.Outputs[name] }
 func (s *Schema) HasVariable(name string) bool {
 	_, ok := s.Variables[name]
 	return ok
+}
+
+// literalBackendConfig marks incomplete projections so absent address fields are never confused with expressions that could resolve elsewhere.
+func literalBackendConfig(body hcl.Body) (map[string]string, bool) {
+	attrs, diags := body.JustAttributes()
+	known := !diags.HasErrors()
+	config := make(map[string]string, len(attrs))
+	for name, attr := range attrs {
+		value, diags := attr.Expr.Value(nil)
+		if diags.HasErrors() || !value.IsKnown() || value.IsNull() || !value.Type().IsPrimitiveType() {
+			known = false
+			continue
+		}
+		value, err := convert.Convert(value, cty.String)
+		if err != nil {
+			known = false
+			continue
+		}
+		config[name] = value.AsString()
+	}
+	return config, known
 }
