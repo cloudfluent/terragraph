@@ -14,6 +14,8 @@ import (
 type Node struct {
 	blueprint.Node
 	Schema *module.Schema
+	// ObservationError preserves an unreadable leaf without hiding readable siblings.
+	ObservationError error
 	// Dir is the resolved, absolute directory this node's Terraform files live in. For a node expanded from a group instance, this is relative to the group definition's own directory, not the outer blueprint's, so callers must use Dir directly rather than re-joining Node.Source against the outer blueprint directory.
 	Dir string
 	// Runtime is this node's fully resolved runtime declaration (see blueprint.Runtime), already following the blueprint.Node.Runtime -> enclosing blueprint.Use.Runtime cascade (see build). Nil means neither this node nor anything it's nested under ever named a runtime; engine.Engine.runtimeFor applies the remaining CLI/built-in fallback layers on top of that, and Build uses those same fallbacks to select the static module files.
@@ -83,6 +85,15 @@ func mergeEnv(base, override map[string]string) map[string]string {
 
 // Build resolves a blueprint into a Graph, recursively expanding any group instantiations (`use` blocks). baseDir is the directory the blueprint file lives in and must be absolute: it becomes the root every relative node/group source resolves against, directly or (for a node inside a group) transitively. cliBinary supplies the execution fallback (Terraform when omitted), below node/use/root-default choices, so static inspection reads the same declarations as execution. Build fails fast if a node's source directory cannot be inspected (e.g. it doesn't exist); that is a structural problem, not something validate can usefully report alongside others.
 func Build(bp *blueprint.Blueprint, baseDir string, cliBinary ...string) (*Graph, error) {
+	return buildRoot(bp, baseDir, false, cliBinary...)
+}
+
+// BuildObservation resolves leaf contexts without requiring executable wiring or input values.
+func BuildObservation(bp *blueprint.Blueprint, baseDir string, cliBinary ...string) (*Graph, error) {
+	return buildRoot(bp, baseDir, true, cliBinary...)
+}
+
+func buildRoot(bp *blueprint.Blueprint, baseDir string, observation bool, cliBinary ...string) (*Graph, error) {
 	fallback := "terraform"
 	if len(cliBinary) > 0 && cliBinary[0] != "" {
 		fallback = cliBinary[0]
@@ -90,7 +101,7 @@ func Build(bp *blueprint.Blueprint, baseDir string, cliBinary ...string) (*Graph
 	if rt, ok := bp.DefaultRuntime(); ok {
 		fallback = rt.Binary
 	}
-	g, _, err := build(bp, baseDir, "", nil, nil, nil, "", &resolveContext{rootDir: baseDir, rootVendorDir: filepath.Join(baseDir, bp.VendorDirectory()), fallbackBinary: fallback})
+	g, _, err := build(bp, baseDir, "", nil, nil, nil, "", &resolveContext{observation: observation, rootDir: baseDir, rootVendorDir: filepath.Join(baseDir, bp.VendorDirectory()), fallbackBinary: fallback})
 	if g != nil {
 		g.Lock = bp.Lock
 		g.Snapshots = bp.Snapshots != nil && bp.Snapshots.Enabled
@@ -139,11 +150,15 @@ func build(bp *blueprint.Blueprint, baseDir, namespace string, ambient *blueprin
 
 	for _, n := range bp.Nodes {
 		dir := filepath.Join(baseDir, n.Source)
+		var observationError error
 		if blueprint.IsRemote(n.Source) {
 			var err error
 			dir, err = remoteModuleDir(rc.rootVendorDir, baseDir, bp.VendorDirectory(), qualify(n.Name), n.Name)
 			if err != nil {
-				return nil, nil, fmt.Errorf("node %q: %w", qualify(n.Name), err)
+				if !rc.observation {
+					return nil, nil, fmt.Errorf("node %q: %w", qualify(n.Name), err)
+				}
+				observationError = err
 			}
 		}
 		resolved := ambient
@@ -157,7 +172,10 @@ func build(bp *blueprint.Blueprint, baseDir, namespace string, ambient *blueprin
 		}
 		schema, err := rc.inspect(dir, module.FileModeForBinary(binary))
 		if err != nil {
-			return nil, nil, fmt.Errorf("node %q: %w", n.Name, err)
+			if !rc.observation {
+				return nil, nil, fmt.Errorf("node %q: %w", n.Name, err)
+			}
+			observationError = err
 		}
 		qn := cloneNode(n)
 		qn.Name = qualify(n.Name)
@@ -171,7 +189,7 @@ func build(bp *blueprint.Blueprint, baseDir, namespace string, ambient *blueprin
 			approve = n.Approve
 		}
 
-		g.Nodes[qn.Name] = &Node{Node: qn, Schema: schema, Dir: dir, Runtime: resolved, Env: env, Approve: approve}
+		g.Nodes[qn.Name] = &Node{Node: qn, ObservationError: observationError, Schema: schema, Dir: dir, Runtime: resolved, Env: env, Approve: approve}
 	}
 
 	uses := map[string]useInfo{}
@@ -209,6 +227,10 @@ func build(bp *blueprint.Blueprint, baseDir, namespace string, ambient *blueprin
 		}
 	}
 
+	if rc.observation {
+		return g, uses, nil
+	}
+
 	for _, e := range bp.Edges {
 		rewritten, err := rewriteEdge(e, uses, qualify)
 		if err != nil {
@@ -243,6 +265,10 @@ func resolveUse(u blueprint.Use, referencingDir, instancePrefix string, ambient 
 	internal, innerUses, err := build(innerBP, groupDir, instancePrefix, ambient, ambientEnv, ambientBackendConfig, ambientApprove, rc)
 	if err != nil {
 		return useInfo{}, nil, err
+	}
+
+	if rc.observation {
+		return useInfo{}, internal, nil
 	}
 
 	// The group's own contracts — declared inside its group block, plus any producer/consumer blocks at the top level of its source directory — ride on the internal graph, so claims about the group's internal modules are validated with it and merged upward by the caller.

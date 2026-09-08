@@ -145,3 +145,6 @@ func knownBackendProblems(g *Graph) []Problem {
 	}
 	return problems
 }
+
+// LocalStatePath exposes the same local address execution validates, avoiding a second workspace/path interpretation.
+func LocalStatePath(n *Node) (string, bool) { return localStatePath(n) }

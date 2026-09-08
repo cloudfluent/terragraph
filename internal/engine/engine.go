@@ -163,7 +163,7 @@ func LoadLockedContext(ctx context.Context, blueprintPath string, binary exec.Bi
 	}, nil
 }
 
-func load(ctx context.Context, blueprintPath string, binary exec.Binary, stdout, stderr io.Writer, takeLock bool) (*Engine, *runlock.Lock, error) {
+func load(ctx context.Context, blueprintPath string, binary exec.Binary, stdout, stderr io.Writer, takeLock bool, observation ...bool) (*Engine, *runlock.Lock, error) {
 	bp, dir, err := blueprint.LoadPath(blueprintPath)
 	if err != nil {
 		return nil, nil, err
@@ -183,7 +183,11 @@ func load(ctx context.Context, blueprintPath string, binary exec.Binary, stdout,
 		}
 	}
 
-	g, err := graph.Build(bp, baseDir, string(binary))
+	build := graph.Build
+	if len(observation) > 0 && observation[0] {
+		build = graph.BuildObservation
+	}
+	g, err := build(bp, baseDir, string(binary))
 	if err != nil {
 		if lock != nil {
 			_ = lock.Close()
