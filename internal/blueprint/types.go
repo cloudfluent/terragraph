@@ -177,6 +177,14 @@ type Lock struct {
 	S3 *S3Lock
 }
 
+// Snapshots is the `snapshots { }` block's parsed form: the opt-in gate for
+// output snapshots. v1's whole configuration is the block's presence, hence a
+// lone Enabled; a real knob arrives by widening the block's (deliberately
+// empty) body schema, not by adding fields nobody sets differently.
+type Snapshots struct {
+	Enabled bool
+}
+
 // S3Lock is the s3 nested backend. Bucket, Key, and Region are required non-empty literals.
 type S3Lock struct {
 	Bucket string
@@ -202,6 +210,8 @@ type Blueprint struct {
 	ContractMode string
 	// Contracts holds every producer/consumer block declared in this parse scope, nil when none (the ordinary uncontracted graph). Local scopes are keyed by the absolute directory they resolve to against the declaring file's directory; remote scopes by the declared source string. graph.Build merges this set with every instantiated group's own contracts onto Graph.Contracts.
 	Contracts *Contracts
+	// Snapshots is nil when the blueprint declares no `snapshots` block: the graph has not opted in, input resolution and apply keep byte-identical live-output behavior, and nothing is written under .terragraph/outputs. graph.Build copies it onto Graph.Snapshots, the one place the engine reads that intent.
+	Snapshots *Snapshots
 }
 
 // RuntimeByName returns the runtime declared with this name in this parse scope, or false if none matches.

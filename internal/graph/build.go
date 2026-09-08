@@ -37,6 +37,8 @@ type Graph struct {
 	Contracts *blueprint.Contracts
 	// ContractMode is the blueprint's `contracts { mode = ... }` value, set by engine load after Build; graph reads it only to pick contract-problem severity (enforce escalates every C0xx to an error), never to change what is checked.
 	ContractMode string
+	// Snapshots reports whether the blueprint opted into output snapshots via its `snapshots { }` block, set by Build from bp.Snapshots. The engine reads this, not the blueprint, so the Graph stays the single place blueprint intent lands; false keeps apply and input resolution byte-identical to a snapshot-unaware graph.
+	Snapshots bool
 }
 
 // cloneNode returns a value copy of n with its BackendConfig/Vars/Env maps deep-copied. n.Nodes for a group instantiation come from a group definition that resolveContext.parseGroupDir may hand back to more than one `use` site (see loadGroupDef); without this, every instance of the same group would share the exact same underlying BackendConfig/Vars/Env map objects, since a plain struct copy only copies the map header, not its contents.
@@ -85,6 +87,7 @@ func Build(bp *blueprint.Blueprint, baseDir string) (*Graph, error) {
 	g, _, err := build(bp, baseDir, "", nil, nil, nil, "", &resolveContext{rootDir: baseDir})
 	if g != nil {
 		g.Lock = bp.Lock
+		g.Snapshots = bp.Snapshots != nil && bp.Snapshots.Enabled
 	}
 	return g, err
 }

@@ -77,6 +77,9 @@ func (e *Engine) Apply(opts Options) ([]NodeRun, error) {
 			if err != nil {
 				return nil, "", fmt.Errorf("plan says unchanged but outputs are unreadable: %w", err)
 			}
+			if err := e.writeSnapshot(name, outputs); err != nil {
+				return nil, "", err
+			}
 			return outputs, StatusUnchanged, nil
 		}
 
@@ -110,6 +113,10 @@ func (e *Engine) Apply(opts Options) ([]NodeRun, error) {
 		outputs, err := r.Outputs()
 		if err != nil {
 			return nil, "", fmt.Errorf("reading outputs after apply: %w", err)
+		}
+		// Both exits that produce current reality publish the same snapshot so the file does not depend on whether apply changed the node.
+		if err := e.writeSnapshot(name, outputs); err != nil {
+			return nil, "", err
 		}
 		return outputs, StatusApplied, nil
 	}, nil)
