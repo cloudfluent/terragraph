@@ -23,7 +23,7 @@ tfvars {
 ```
 
 - **`workdir`** (default): `<blueprint dir>/.terragraph/vars/<node>.tfvars.json`, next to the node's other engine-managed state (`tfdata/`, `plans/`, and for `backend "local"` modules that do not set `path`, `state/<node>.tfstate`). Never touches a module's own directory, so nothing needs adding to any module's `.gitignore`, and two nodes sharing a `source` never collide on a filename. This is the right choice for a vendored module (not yours to add a `.gitignore` entry to) or one reused across many near-identical instances. If a module already declared `backend "local"` and kept `terraform.tfstate` in the module directory, the next `plan`/`apply` points state at `.terragraph/state/<node>.tfstate` instead; migrate with `terraform init -migrate-state` per node if you need the old state. `destroy` still uses the backend last cached in `TF_DATA_DIR` (it does not re-run `init`).
-- **`module`**: `<node source>/.terragraph.<node>.tfvars.json`, alongside the module's own `.tf` files, for a resolved input value visible next to its source while debugging. Add the pattern below to each module's `.gitignore`:
+- **`module`**: `<node source>/.terragraph.<node>.tfvars.json`, alongside the module's own `.tf` files, for a resolved input value that sits next to its source while the node runs. **The file does not survive the run in either location** — it holds resolved inputs in cleartext, so `plan`, `apply` and `destroy` each remove it however the node exits, and it is written owner-only while it exists. That leaves this setting choosing only *where* the file lives during the run, so most projects want the default. Add the pattern below to each module's `.gitignore`:
 
   ```
   .terragraph.*.tfvars.json

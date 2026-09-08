@@ -622,3 +622,18 @@ func TestSortedContracts_BreaksScopeTiesOnDir(t *testing.T) {
 		}
 	}
 }
+
+// A contract stricter than the module's own declaration is a promise, not a contradiction — and for a vendored module whose variables cannot be edited it is the only way to state one. Equality would have refused it, which turned C007 into "restate the module's type or say nothing".
+func TestValidate_ContractNarrowerThanTheModuleIsAllowed(t *testing.T) {
+	g := writeReconcileFixture(t,
+		`output "vpc_id" { value = "x" }`,
+		`variable "vpc_id" { type = map(any) }`,
+		`
+consumer "./modules/app" {
+  input "vpc_id" { type = "map(string)" }
+}
+`)
+	if problems := Validate(g); len(problems) != 0 {
+		t.Fatalf("got = %v, want a narrowing contract to pass", problems)
+	}
+}
