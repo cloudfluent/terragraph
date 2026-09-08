@@ -12,7 +12,15 @@ import (
 var version = "dev"
 
 func main() {
-	if err := cli.NewRootCmd(version).Execute(); err != nil {
+	root := cli.NewRootCmd(version)
+	command, _, _ := root.Find(os.Args[1:])
+	name := ""
+	if command != nil {
+		name = command.Name()
+	}
+	ctx, stop := executionContext(name)
+	defer stop()
+	if err := root.ExecuteContext(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}

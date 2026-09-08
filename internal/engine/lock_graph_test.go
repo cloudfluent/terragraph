@@ -143,3 +143,33 @@ lock {
 		t.Fatalf("stderr = %q, want Close error", stderr.String())
 	}
 }
+
+func TestLockGraph_CancellationReachesAcquireAndStillReleasesHeldLock(t *testing.T) {
+	orig := acquireRemoteLock
+	t.Cleanup(func() { acquireRemoteLock = orig })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	closed := 0
+	acquireRemoteLock = func(got context.Context, lock *blueprint.Lock) (graphlock.Held, error) {
+		if got != ctx {
+			t.Fatal("graph lock did not receive execution context")
+		}
+		if err := got.Err(); err != nil {
+			return nil, err
+		}
+		return spyHeld{closed: &closed}, nil
+	}
+	e := &Engine{Context: ctx, Blueprint: &blueprint.Blueprint{Lock: &blueprint.Lock{}}}
+	unlock, err := e.lockGraph()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	unlock()
+	if closed != 1 {
+		t.Fatalf("close calls = %d, want 1 after cancellation", closed)
+	}
+	if _, err := e.lockGraph(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context canceled", err)
+	}
+}

@@ -4,6 +4,8 @@ package engine
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -231,5 +233,17 @@ func TestResolveInputs_CorruptSnapshotIsNotAnError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), `upstream node "a" has not been applied yet`) {
 		t.Fatalf("Apply error = %q, want the original upstream-not-applied failure, not a parse error", err)
+	}
+}
+
+func TestResolveInputs_CancellationDoesNotUseSnapshot(t *testing.T) {
+	e := loadFallbackEngine(t, true)
+	writeFallbackSnapshot(t, e, "a", "stale")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	e.Context = ctx
+	vars, err := e.resolveInputs("b", nil)
+	if !errors.Is(err, context.Canceled) || vars != nil {
+		t.Fatalf("inputs = %v, error = %v, want cancellation without snapshot values", vars, err)
 	}
 }
