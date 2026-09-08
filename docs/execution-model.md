@@ -1,272 +1,219 @@
 # Execution model
 
+terragraph runs independent root modules in dependency order. `plan` and `apply` visit upstream nodes first; `destroy` reverses that order. Each module keeps its own state.
+
+## Inspecting the graph
+
+Start with validation and a view of the execution order:
+
+```sh
+terragraph validate
+terragraph graph
+terragraph graph --format dot > graph.dot
+```
+
+The default graph output lists execution levels. DOT output can be rendered with Graphviz; solid edges carry data and dashed edges express ordering only. See [JSON run reports](#json-run-reports) for automation-friendly output.
+
 ## Selecting nodes
 
-`plan`, `apply`, and `destroy` select the whole graph by default. Use `--node <name>` to select exactly one node, including a dotted group node name. This does not automatically select its dependencies or downstream nodes. Positional arguments such as `terragraph apply app` are rejected before loading or locking the graph; use `terragraph apply --node app` instead.
+`plan`, `apply`, and `destroy` select the whole graph by default. Use `--node <name>` to select exactly one leaf, including a dotted name such as `checkout.cluster`. Its dependencies and downstream nodes are **not** selected automatically; a group instance name does not select all its members.
+
+```sh
+terragraph apply --node checkout.cluster
+```
+
+Positional node names such as `terragraph apply checkout.cluster` are not supported.
 
 ## Validation
 
-`terragraph validate` (and `graph`/`plan`/`apply`/`destroy`, which run it first) reports two severities:
-- **Error**: blocks the command (a `from`/`to` referencing a port that doesn't exist, two data edges targeting the same input after group expansion even when they are exact duplicates, a data edge and `vars` both setting the same input, a cycle, `backend_config` set on a module with no `backend` block, two nodes sharing a module directory with identical `backend_config` maps).
-- **Warning**: printed but never blocks. A required variable with no edge feeding it may legitimately come from that module's own `terraform.tfvars` or the environment, outside the blueprint entirely; so may a `.terragraph/state/<name>.tfstate` file left behind by a node that's since been renamed or removed (see below).
+`terragraph validate` checks the blueprint and local module declarations without running Terraform/OpenTofu. `graph`, `plan`, `apply`, and `destroy` perform the same validation first:
 
-Cycle detection reports every independent cyclic cluster in one pass (Tarjan's SCC algorithm), not just the first one found.
+- **Errors** block the command: missing ports, conflicting input sources after group expansion, cycles, or invalid backend configuration. All independent cycles are reported in one pass.
+- **Warnings** allow execution: for example, a required input may come from the module's own tfvars or environment, and state may remain after a node is renamed. [Contract checks](contracts.md) also warn by default; `contracts { mode = "enforce" }` makes contract violations block the command.
 
-Concrete values from both `vars` and data edges are type-checked while resolving a node's inputs for `plan`, `apply`, or `destroy`, not by `terragraph validate`.
+Concrete values from `vars` and data edges are checked against the destination module's variable type when resolving inputs for `plan`, `apply`, or `destroy`. This accepts compatible conversions, optional object attributes and their defaults, and additional object attributes. The original value is still passed unchanged to Terraform/OpenTofu, which performs the final conversion and enforces variable defaults, nullability, and validation blocks. Static validation does not prove that real infrastructure or output values satisfy those declarations.
 
-terragraph decodes each concrete value and uses cty's type conversion and optional attribute defaults to check whether the target variable's declared type can accept it. This accepts `any`, convertible `map(any)` values, optional object attributes with defaults, and additional object attributes. The original input is passed unchanged in the tfvars file: Terraform/OpenTofu performs the final conversion, applies variable defaults and nullability rules, and evaluates variable validation blocks.
+## Known limitation
 
-## How values are passed
+A whole-graph `plan` uses **existing upstream outputs**, not values proposed by upstream plans. If an upstream change would alter an output, a downstream plan still receives the old value. It may therefore differ from the plan shown later during `apply`.
 
-A node resolving multiple inputs from the same upstream reuses one successful live output read for those inputs, so they cannot mix different state revisions. A subsequent input resolution reads live outputs again.
+On a fresh graph, a consumer cannot be planned if a data edge needs an upstream output that is not yet available. Ordering-only edges do not have this restriction. `terragraph apply` handles bootstrap by applying upstream nodes first and passing their real outputs forward in the same run.
 
-Input validation errors omit value-derived details, including object and map keys, when the destination variable or the inspected upstream output is declared `sensitive`, or when the runtime output is sensitive or omits sensitivity metadata. Runtime sensitivity is preserved both for live reads and for outputs produced earlier in the same run. The error still names the node, input, and declared type so you can check the value against the module's variable declaration. This applies to terragraph's encoding and type-checking errors, including their JSON run reports; it does not redact arbitrary Terraform/OpenTofu subprocess output.
-
-terragraph never writes or modifies `.tf` files. Before running a node, it writes the values resolved from its incoming data edges (and its own `vars`, including literals a `use.vars` rewrote onto that node; see [blueprint.md](blueprint.md#literal-input-values-vars)) to an ephemeral, engine-managed tfvars file, then passes it to Terraform explicitly via `-var-file`. Terraform's own `*.auto.tfvars.json` auto-loading is never relied on: two nodes can share a module directory (see `backend_config` in [blueprint.md](blueprint.md#reusing-the-same-module-across-instances)), and auto-loading by a fixed filename would let them clobber each other's values.
-
-Where that file is written is controlled by an optional `tfvars` block:
-
-```hcl
-tfvars {
-  location = "workdir"   # default
-}
-```
-
-- **`workdir`** (default): `<blueprint dir>/.terragraph/vars/<node>.tfvars.json`, next to the node's other engine-managed state (`tfdata/`, `plans/`, and for `backend "local"` modules that do not set `path`, `state/<node>.tfstate`). Never touches a module's own directory, so nothing needs adding to any module's `.gitignore`, and two nodes sharing a `source` never collide on a filename. This is the right choice for a vendored module (not yours to add a `.gitignore` entry to) or one reused across many near-identical instances. If a module already declared `backend "local"` and kept `terraform.tfstate` in the module directory, the next `plan`/`apply` points state at `.terragraph/state/<node>.tfstate` instead; migrate with `terraform init -migrate-state` per node if you need the old state. `destroy` still uses the backend last cached in `TF_DATA_DIR` (it does not re-run `init`).
-- **`module`**: `<node source>/.terragraph.<node>.tfvars.json`, alongside the module's own `.tf` files, for a resolved input value that sits next to its source while the node runs. **The file does not survive the run in either location** — it holds resolved inputs in cleartext, so `plan`, `apply` and `destroy` each remove it however the node exits, and it is written owner-only while it exists. That leaves this setting choosing only *where* the file lives during the run, so most projects want the default. Add the pattern below to each module's `.gitignore`:
-
-  ```
-  .terragraph.*.tfvars.json
-  ```
-
-  `terragraph validate` warns (never deletes) about a stale file left behind in a shared module directory by a node that's since been renamed or removed from the blueprint.
-
-  `terragraph validate` likewise warns (never deletes) about a stale `state/<name>.tfstate` under the blueprint's `.terragraph/state/` — where the local backend parks state for nodes that don't set an explicit `path`. Files are matched by the backend path each current node resolves to, so a renamed or removed node's state is flagged for you to rename back, remove, or re-import.
-
-## Execution levels and parallelism
-
-Nodes are grouped into levels: every node in level *i* only depends on nodes in levels `< i`, so nodes within one level have no edge between them and are safe to run concurrently. `terragraph graph` prints these levels directly. Execution defaults to sequential (`--parallelism 1`); pass `--parallelism N` to `plan`/`apply`/`destroy` to run up to `N` nodes within a level concurrently. Output from concurrent nodes is buffered and flushed as one `=== node <name> ===` block per node so it never interleaves; with the default `--parallelism 1` it streams live as before.
-
-## Concurrent CLI processes
-
-`--parallelism` is in-process. Two separate `terragraph` invocations against the same blueprint are a different boundary: they would otherwise share `.terragraph/` (tfvars, `TF_DATA_DIR`, saved plans) and, for nodes that reuse a module `source`, that directory's `.terraform.lock.hcl`.
-
-`plan`, `apply`, `destroy` and `vendor` take an exclusive lock at `<blueprint dir>/.terragraph/lock` before they read or write module files, and hold it until the command exits. A second process targeting the same blueprint prints a one-line wait notice and blocks until the first exits; the lock is released on process exit, so a crash cannot leave it stuck. `validate`, `graph` and `language-server` do not take it, so they stay usable while a long apply is running. One process that already holds the lock can still use `--parallelism` inside the run.
-
-## Interrupting an execution
-
-On Linux and macOS, Ctrl-C or SIGTERM during `plan`, `apply`, or `destroy` cancels a pending local-lock wait and stops dispatching queued and downstream nodes. Each active runtime process group receives an interrupt and has five seconds to finish before terragraph sends SIGKILL. terragraph waits for the direct subprocess and any living members of its group before removing managed tfvars and saved plans and releasing locks. A wrapper exiting first does not shorten that grace period or release the lock while its children still run. The run fails with a cancellation error; JSON reports retain the selected nodes, including `not run` nodes.
-
-Interactive terminal reads stay in terragraph's foreground group so Ctrl-C also cancels the graph. Apply approval reads and terminal input forwarded to destroy stop on cancellation; ordinary files and pipes are passed directly to the runtime. A runtime that exits without reading stdin does not keep the command waiting for input.
-
-This cleanup cannot run if terragraph itself receives SIGKILL or crashes. Descendants that detach into another process group or session are outside its ownership. Process-state inspection failures or a process stuck in an uninterruptible kernel wait can keep terragraph waiting with its locks held, even after SIGKILL. Windows retains native console behavior and is outside this cancellation guarantee. Other commands, including `vendor` and `language-server`, retain their existing signal behavior.
-
-## Graph remote lock
-
-Flock is same-checkout only. Two machines never see `<blueprint dir>/.terragraph/lock`.
-
-An optional top-level `lock` block serializes **the graph run** across machines. Terraform still locks each node's state; this lock is the vpc-then-eks run, because per-node locks do not preserve graph order.
-
-Activation is the block, not a CLI flag. No `lock` block means current behavior (examples, solo local state).
-
-The mechanism is an S3 lock **object** via conditional writes (the same idea as Terraform 1.10+ `use_lockfile`). It is not S3 Object Lock (WORM). terragraph owns the object; it does not borrow a node's Terraform backend. The graph lock must not share an S3 object with a node: same `key` on the same bucket (or when `backend_config.bucket` is omitted and may live only in `.tf`). A matching key on another bucket or a non-s3 backend is fine.
-
-`plan` / `apply` / `destroy` take the local flock, then the graph remote lock, then per-node terraform. `validate` / `graph` / `language-server` do not take the remote lock; `validate` still rejects `lock` plus a local or missing backend.
-
-If the object already exists, the command **fails immediately** (it does not wait the way flock does).
-
-On Linux and macOS, Ctrl-C and SIGTERM during an execution wait for runtime shutdown and attempt to delete the S3 lock object. SIGKILL, crashes, and Windows console termination can leave the object because cleanup does not run (the local flock still drops with the fd). A failed `DeleteObject` after a successful run does the same: the command prints the error to stderr and still reports success. Recover with `terragraph force-unlock --yes`: it deletes the configured lock object. `--yes` is required because releasing is unconditional and could break a lock that is genuinely held; without it the command names the object and, when the object can still be read, who wrote it and when — the one thing you need to decide whether breaking it is safe.
-
-It only parses the blueprint, so it works on a checkout with nothing vendored yet, which is the usual shape of a recovery. It does refuse while another `terragraph` process on the same checkout is running, since that process is the likeliest legitimate holder; it cannot see processes on other machines, which is what `--yes` is for.
-
-IAM on the lock key needs `s3:GetObject`, `s3:PutObject`, and `s3:DeleteObject`. Conditional delete uses `If-Match`, which AWS evaluates as a Get; `s3:DeleteObject` alone is not enough.
-
-Every node must use a remote backend (`s3` / `gcs` / `azurerm` / `http` / `remote` / `cloud`). See [blueprint.md](blueprint.md#graph-remote-lock-lock) for the block.
+`terragraph apply` also currently rejects nodes using the `remote` backend or a `cloud` block, because its inspected saved-plan workflow does not support them. Both remote operations and [HCP's local execution mode](https://developer.hashicorp.com/terraform/language/backend/remote) are outside terragraph's current apply support. Use a supported backend such as `s3`, `gcs`, `azurerm`, `http`, or `local`.
 
 ## Deciding whether a node needs applying
 
-Terraform decides, every run. `terragraph apply` plans each node with `-refresh=true -detailed-exitcode`; a plan reporting no changes skips the apply, and nothing local is consulted first.
+Every `terragraph apply` starts each selected node with a fresh plan using `-refresh=true -detailed-exitcode`. A node with no changes skips apply. A changed node's plan is saved, inspected against its approval policy, shown for confirmation when required, and then applied **from that same saved plan**. A downstream node is planned when execution reaches it, using outputs available at that point.
 
-If the plan reports changes, **that same plan is what gets applied** — it is written with `-out` and handed to `apply` — so the node refreshes once rather than twice, and the change that gets made is provably the change that was planned. An argument injected into apply alone (`TF_CLI_ARGS_apply`) can no longer make apply do something the plan never described: Terraform ignores scope arguments when applying a saved plan and rejects `-var` outright. `-refresh=true` is always passed explicitly, and a command-line flag beats the same flag arriving through `TF_CLI_ARGS_plan`, so an ambient `-refresh=false` cannot turn the check into a stale-state one.
+The saved plan lives at `<blueprint dir>/.terragraph/plans/<node>.tfplan` and is removed when the node finishes, including on failure. It contains input values in cleartext. Keep `.terragraph/` out of version control.
 
-The plan file lives at `<blueprint dir>/.terragraph/plans/<node>.tfplan` and is removed when the run ends. Like the tfvars file, it holds resolved input values in cleartext, so the same "keep `.terragraph/` out of version control" rule applies.
+Saved plans are protected with directory mode `0700` and file mode `0600` on Unix, and a protected current-user DACL on Windows. Unsafe parent permissions or ownership are refused; existing plan-directory permissions are tightened where safe. Plan symlinks, and symlinks or Windows reparse points at `.terragraph` or `plans/`, are also refused. Use a private checkout or correct the permissions named in the error; on macOS, an extended ACL may require the suggested `chmod -N` remedy. These checks protect against access by other ordinary users, not administrators or processes running as you.
 
-Before Terraform writes any plan bytes, terragraph restricts `plans/` to its current user and creates an empty protected plan file. On Unix this means directory mode `0700` and file mode `0600`; on Windows both receive a protected DACL granting only the current user access. Existing broad directory permissions are tightened, and a stale regular plan is unlinked before a new file is created exclusively. A plan symlink or other non-regular file is refused instead of being followed. Symlinks and Windows reparse points at `.terragraph` or `plans/` are also refused.
-
-This requires a trusted blueprint checkout: `.terragraph` must not let other ordinary users replace the plan directory. If its ownership or write permissions are unsafe, terragraph refuses and asks for a private checkout or corrected permissions; it does not silently change `.terragraph` permissions. On macOS, an extended ACL on either directory is refused with a `chmod -N` remedy, because such ACLs can grant access despite mode `0700`. Windows ACLs on either directory permitting another ordinary user to replace children or change permissions are likewise refused, since a permission change cannot revoke rights already held by an open Windows handle. New Windows directories and files receive their protected ACL at creation without an inheritance window. This boundary protects against other ordinary users reading plan values, not administrators, a malicious process running as the same user, or replacement of the trusted checkout itself. Filesystem permission or ACL checks must succeed before a saved plan is created.
-
-A node on the `remote` or `cloud` backend cannot produce a local plan file: those backends run the plan on HCP rather than locally. `terragraph apply` refuses that node rather than applying without inspecting the plan. Every backend that runs operations locally — `s3`, `gcs`, `azurerm`, `http`, `local`, ... — can write a plan file and is unaffected. (`s3`/`gcs`/`azurerm`/`http` keep state remote; `local` keeps it on disk.) HCP support is left for later; until then, use one of those backends.
+`--force` is deprecated and has no effect; every apply already checks current state with a refreshed plan.
 
 ## What a node may do: `approve`
 
-Walking the graph and committing changes are two different things. terragraph automates the first — it runs nodes in dependency order and feeds each one's real outputs into the next. The second is a decision, and in a graph it is one nobody can make up front: a downstream node's plan cannot exist until its upstream has actually been applied (see the known limitation below). So it is delegated in advance, per node, in terms of what the plan turns out to contain.
+The `approve` policy limits resource actions before a changed node is applied. It applies to both interactive runs and runs using `--auto-approve`.
 
-That matters here more than it does for a single `terraform apply`, because a change propagates: node A's output changes, node B's input changes with it, and node B may replace its resources. Nobody saw B's plan before the run started, and nobody could have.
+| Policy | Permitted resource changes |
+| --- | --- |
+| `none` | No create, update, replace, or delete |
+| `safe` | Create and update; the default |
+| `all` | Create, update, replace, and delete |
 
-Each node resolves to one of three levels, defined by which of Terraform's planned actions they permit:
+Replacement is treated like deletion. `safe` describes permitted action categories; an in-place update can still affect a running service.
 
-| level | permits | |
-| --- | --- | --- |
-| `none` | — | planned, never applied |
-| `safe` | `create`, `update` | **default** |
-| `all` | `create`, `update`, `replace`, `delete` | |
+**`none` is not a preview mode.** Plans containing only output changes or reads can still be applied and write state. Use `terragraph plan` when you want a preview without apply.
 
-`replace` is gated as tightly as `delete`, because destroy-and-recreate is what an upstream change most often causes downstream and is just as irreversible.
-
-`safe` is a workable default rather than an obstacle. A first-ever bootstrap is all creates; ordinary steady-state work is updates; and **reconciling drift is a create too** — a resource that has vanished remotely is dropped from state by the refresh, so the plan rebuilds it rather than deleting anything. Only a genuinely destructive plan stops.
-
-Say it on the node where a destructive plan is by design:
+Declare a standing policy on a node or [group instance](groups.md):
 
 ```hcl
 node "db" {
   source  = "./stacks/db"
-  approve = "all"   # recreation is normal here
+  approve = "all"
 }
 ```
 
-...or for one run:
+For nodes without a declared policy, choose one for the run:
 
-```
-terragraph apply                    # approve = safe
-terragraph apply --approve=all      # this run, on the operator's judgement
-```
-
-Resolution follows the same layering as [`runtime`](blueprint.md#choosing-a-runtime-per-node-runtime) and [`env`](blueprint.md#extra-environment-variables-per-node-env):
-
-```
-node's own approve  >  enclosing use block  >  --approve  >  safe
+```sh
+terragraph apply --approve all
 ```
 
-...including the rule that a CLI flag only ever fills a gap nothing else spoke to. `--approve=all` does not override a node that declared `approve = "safe"`; a node that declared `approve = "all"` is not reined in by `--approve=none`. The blueprint is where a standing decision lives, and it goes through review.
+Resolution is `node's own approve > enclosing use > --approve > safe`. Nested groups use the nearest declaration. The CLI flag fills an unset policy: `--approve all` cannot override an explicit `approve = "safe"`, and `--approve none` cannot restrict an explicit `approve = "all"`.
 
-When a node's plan exceeds its level, the run stops **before that node is applied**. Levels execute in order, so nothing downstream runs either — the cascade is cut at its source rather than audited afterwards. For a node using the run's default policy:
+When a plan exceeds its policy, that node fails before apply and later execution levels do not run. The error identifies the disallowed actions and the declaration or flag to change. Other nodes in the same level can still finish; see [failure and retry](#failure-and-retry).
 
-```
-node vpc: 3 to add, 1 to change, 0 to destroy
-node eks: 0 to add, 2 to change, 0 to destroy
-node api: 0 to add, 1 to change, 2 to destroy
-error: node "api" plans 2 change(s) its approve level (safe) does not permit:
-  aws_instance.web[0]   delete
-  aws_db_instance.main  replace
-
-Stopped before applying, so no later level ran.
-If this is intended, declare approve = "all" on that node, or re-run with --approve=all.
-```
-
-If a node or enclosing `use` declares its policy, the error instead asks you to set `approve = "all"` on the declaration that sets it. `--approve=all` cannot override that declaration. The policy is checked whether or not anyone is watching; an interactive `yes` only approves a plan already permitted by the resolved policy.
-
-`destroy` is held to the same policy without a plan to read. Teardown is delete-only, so a node that **declared** anything short of `approve = "all"` has already said it must not be torn down, and destroy refuses before anything runs — with or without `--auto-approve`, for the same reason apply's check does not care whether anyone is watching. A node that declared nothing is unaffected: `terragraph destroy` on an ordinary blueprint behaves exactly as it always has, gated by Terraform's own confirmation prompt.
-
-There is deliberately no `--approve` flag on `destroy`. The layering rule is that a run-wide flag only fills a gap nothing else spoke to, so it could never permit a teardown the blueprint refused; changing the node's own `approve` is the only route, and that goes through review.
-
-The check reads the saved plan file, so it cannot run on the `remote`/`cloud` backends, which have none. Apply stops on those nodes with an error rather than applying uninspected.
+`destroy` checks the selected nodes before running any of them. An explicit `approve = "none"` or `"safe"`, including one inherited from `use`, blocks teardown. Nodes without a declared policy are allowed to reach Terraform's own confirmation prompt. `destroy` has no `--approve` flag: change the declaration if teardown is intended. `--auto-approve` does not bypass this policy.
 
 ## Approval
 
-`approve` decides what *may* happen unattended. This decides *whether someone is asked*; the two are independent.
+The `approve` policy controls allowed actions; `--auto-approve` controls confirmation questions.
 
-Without `--auto-approve`, terragraph asks before applying each node that has changes:
+Without `--auto-approve`, terragraph asks before applying each node that has changes and passes its policy:
 
-```
+```text
 Apply these changes to node eks? [y/N]:
 ```
 
-It asks about the plan you were just shown, and applies exactly that plan — a downstream node's plan cannot be produced ahead of time (see the known limitation below), so approval necessarily happens node by node, as the run reaches each one.
+- Only `y` or `yes` approves. A refusal fails that node and prevents later levels from running.
+- Unchanged nodes need no confirmation.
+- Piped input is supported, but each changed node needs an answer. If no input is available, the command fails with a remedy to use `--auto-approve`.
+- Both `--parallelism N` with N greater than 1 and `--output json` require `--auto-approve` for `apply` and `destroy`. `plan` needs no confirmation.
 
-- Only `y` or `yes` approves. Declining stops the run: every later level consumes this node's outputs, so continuing past it would be applying against values that were never produced.
-- A node with **no** changes is never asked about, so `terragraph apply` with no flags remains a usable "is everything still applied?" check with no terminal attached.
-- Input may be piped (`echo yes | terragraph apply`). If a node needs approving and there is nothing to read — a CI runner, `</dev/null` — the run stops and says to pass `--auto-approve`, rather than reporting a refusal nobody made.
-- `--parallelism N` (N > 1) requires `--auto-approve`: output from concurrent nodes is buffered and flushed a node at a time, so there is nowhere to put a prompt.
+For `destroy`, the confirmation comes from Terraform/OpenTofu itself. It does not use a terragraph saved plan and does not rerun `init`; it uses the backend configuration already cached in the node's `TF_DATA_DIR`.
 
-`terragraph destroy` is confirmed the same way, except the question comes from Terraform itself: there is no saved plan for terragraph to ask about on its behalf.
+## Execution levels and parallelism
 
-### JSON run reports
+Nodes in the same execution level have no dependency edge between them. The default `--parallelism 1` runs them sequentially and streams output live. `--parallelism N` runs up to N nodes in a level concurrently, buffering output into a separate `=== node <name> ===` block per node. terragraph completes a level before starting the next one.
 
-`terragraph plan`, `apply`, and `destroy` accept `--output json`. Stdout carries a JSON run report, and Terraform's own output and terragraph's progress messages move to stderr alongside diagnostics. The report lists each selected node's name, execution level, and status (`planned`, `applied`, `unchanged`, `destroyed`, `failed`, or `not run`), with an error message for a failed node. Entries are ordered by execution level, then node name; destroy numbers levels in reverse dependency order.
+```sh
+terragraph apply --parallelism 4 --auto-approve
+```
 
-`apply` and `destroy` require `--auto-approve` with `--output json`, even when running sequentially. Stdout is the payload, so a question there would corrupt it. Stderr is diagnostics that an automation consumer is not watching for an interactive question, so moving the prompt there would leave it unanswered. The combination is refused before execution; use text mode for interactive approval, or pass `--auto-approve`. The node's `approve` policy still applies. `plan` needs no approval and can use `--output json` on its own.
+This limit controls concurrent **nodes**; each Terraform/OpenTofu process still manages concurrency within its own module.
 
-A run that fails after starting a node still emits its report and exits non-zero; nodes in unreached levels appear as `not run`. If the command fails before any node runs, for example while parsing or validating the blueprint or acquiring a lock, stdout may be empty. Automation must check the exit status and allow for an absent JSON payload on failure; stderr carries the diagnostic.
+## Failure and retry
 
-### There is no local cache
+An ordinary node failure, policy rejection, or declined confirmation does not cancel its siblings: **the other nodes in that level continue, even with `--parallelism 1`**. No later level starts. Interrupting the command has different behavior, described [below](#interrupting-an-execution).
 
-Earlier versions kept a content-addressed cache at `<blueprint dir>/.terragraph/cache.json`, hashing each node's source files, resolved inputs, runtime and `env` to decide whether it could skip apply. Hashing local files is a proxy for a remote fact, and the gap between the two produced a series of bugs: a backend or inherited `env` change that the key never modelled, remote drift that no local hash could see, and files consumed through `file()`/`templatefile()` that never invalidated anything.
+terragraph does not roll back completed changes. A failed apply may also have changed some resources before failing, or may have succeeded before a subsequent output read failed. Inspect the reported error and current state, fix the cause, and rerun `terragraph apply`. It plans again against current state and skips unchanged nodes. Use `--node` only when you intend to retry that leaf alone; it will not update consumers afterward.
 
-Once every cache *hit* had to be confirmed by a refreshed plan anyway, the only thing the cache still did was send every *miss* straight to apply without one — so a genuinely unchanged node was re-applied on any fresh checkout, any CI runner without a warm `.terragraph/`, and every run after a `destroy`. Removing it puts every node behind the plan, which is both correct and skips more.
+## How values are passed
 
-`--force` existed to bypass that cache. It is accepted and ignored, and will be removed in a later release. `terragraph destroy` no longer has to invalidate anything either.
+terragraph never generates or edits `.tf` files. It resolves incoming data edges and [literal `vars`](blueprint.md#literal-input-values-vars), writes an ephemeral JSON tfvars file, and passes it explicitly with `-var-file`. Each node also has an isolated `TF_DATA_DIR`, including nodes that share the same source directory, so backend initialization is separate for every node.
 
-## Known limitation
+A node resolving multiple inputs from the same upstream reuses one successful live output read for those inputs, so they cannot mix different state revisions. A subsequent input resolution reads live outputs again.
 
-Planning a node whose upstream has never been applied is inherently impossible: its output value doesn't exist yet, and each node has its own independent state (there's no shared unknown-value mechanism to borrow, the way a single Terraform run has for values within one plan). `terragraph plan` reports this clearly instead of guessing. `terragraph apply` handles the full bootstrap by applying in topological order and feeding real values forward as they're produced.
+The optional `tfvars` block chooses where resolved values live while the node runs:
+
+```hcl
+tfvars {
+  location = "workdir" # default
+}
+```
+
+| Location | Temporary file |
+| --- | --- |
+| `workdir` (default) | `<blueprint dir>/.terragraph/vars/<node>.tfvars.json` |
+| `module` | `<node source>/.terragraph.<node>.tfvars.json` |
+
+The default avoids writing tfvars into module directories and works well for shared or vendored sources. With `module`, add `.terragraph.*.tfvars.json` to each module's `.gitignore`. Both locations contain cleartext inputs and are removed when the node finishes, including on failure. Unix files use mode `0600`; Windows tfvars use inherited filesystem permissions, without an explicit owner-only ACL. A crash or forced termination can leave files behind.
+
+terragraph's input encoding and type-checking errors omit value-derived details, including object and map keys, when the destination variable or inspected upstream output is declared sensitive, or when the runtime output is sensitive or has missing or null sensitivity metadata. Runtime sensitivity is preserved both for live reads and for outputs produced earlier in the same run. Errors still identify the node, input, and expected type so you can check the value against the module's variable declaration. This also applies to JSON reports, but does not redact arbitrary Terraform/OpenTofu subprocess output.
+
+For a module declaring `backend "local"`, terragraph supplies an absolute state path at `<blueprint dir>/.terragraph/state/<node>.tfstate` unless the node or an enclosing `use` sets `backend_config.path`. A path written only in the module's backend block is overridden. Terraform writes the state there. When adopting terragraph for an existing local state, plan the backend migration per node before applying; pointing at a new empty state can propose recreating existing resources. `destroy` uses the last initialized backend, as described [above](#approval).
+
+`validate` warns about orphaned managed local state and stale module-location tfvars after a node is renamed or removed. It never deletes those files. Recover or migrate the state before removing it.
+
+## Concurrent CLI processes
+
+`plan`, `apply`, `destroy`, and `vendor` hold one exclusive local lock at `<blueprint dir>/.terragraph/lock` for the run. A second process on the same blueprint prints a wait notice and waits for the first to exit. The operating system releases this lock on exit, including a crash.
+
+The lock coordinates processes in the same checkout; it does not limit `--parallelism` within a run or coordinate different machines. `validate`, `graph`, and `language-server` do not acquire it.
+
+## Graph remote lock
+
+An optional [top-level `lock` block](blueprint.md#graph-remote-lock-lock) serializes graph execution across machines. Per-node Terraform state locks still apply, but cannot by themselves protect the order of an entire graph run.
+
+The graph lock is an S3 object created with conditional writes, not S3 Object Lock (WORM). Use a distinct object from every node's state and grant `s3:GetObject`, `s3:PutObject`, and `s3:DeleteObject` on the lock key. Every node must use a remote backend; validation rejects local or missing backends. The `remote`/`cloud` apply limitation still applies.
+
+`plan`, `apply`, and `destroy` acquire the local lock, then the remote lock, then execute nodes. An existing remote lock **fails immediately**, rather than waiting. `validate`, `graph`, and `language-server` do not acquire it; `vendor` uses only the local lock.
+
+A normal exit releases the object. Crashes, forced termination, or a failed S3 deletion can leave it behind. A release error is printed to stderr but does not turn an otherwise successful run into a failure.
+
+To inspect a configured lock, run `terragraph force-unlock` without `--yes`; it refuses deletion and reports the object and, when readable, its holder. After verifying that the holder is no longer running, delete it with:
+
+```sh
+terragraph force-unlock --yes
+```
+
+Deletion is unconditional. The command refuses while another terragraph process holds the same checkout's local lock, but cannot detect a legitimate holder on another machine. It only parses the blueprint, so recovery also works before vendoring.
+
+## Interrupting an execution
+
+On Linux and macOS, Ctrl-C or SIGTERM during `plan`, `apply`, or `destroy` cancels local-lock waits and stops queued and downstream nodes. Active runtime process groups receive an interrupt, then SIGKILL after a five-second grace period. terragraph waits for them to stop before removing managed tfvars and saved plans and releasing locks. JSON reports retain selected nodes, including those `not run`.
+
+Cleanup cannot run if terragraph itself crashes or receives SIGKILL. Descendants that detach into another process group are outside this guarantee; failed process inspection or an uninterruptible kernel wait can delay cleanup with locks held. Windows retains native console behavior and is outside this cancellation guarantee. It also does not cover `vendor` or `language-server`.
+
+## JSON run reports
+
+Use `--output json` for automation. Stdout carries the result; diagnostics, execution progress, and Terraform/OpenTofu output go to stderr.
+
+```sh
+terragraph validate --output json
+terragraph graph --output json
+terragraph vendor --output json
+terragraph plan --output json
+terragraph apply --output json --auto-approve
+terragraph destroy --output json --auto-approve
+```
+
+| Command | JSON result |
+| --- | --- |
+| `validate` | Object with `valid` and `problems`; each problem has `severity` and `message`. Warnings can coexist with `valid: true`. |
+| `graph` | Object with `levels`, an array of arrays of node names. Cannot combine JSON with `--format dot`. |
+| `vendor` | Array of results with `node`, `status` (`vendored`, `skipped`, or `error`), and an optional `error`. |
+| `plan`, `apply`, `destroy` | Object with `nodes`; each entry has `node`, `level`, `status`, and an optional `error`. |
+
+Run statuses are `planned`, `applied`, `unchanged`, `destroyed`, `failed`, or `not run`. Entries are ordered by execution level, then node name; destroy numbers levels in reverse dependency order.
+
+A run that fails after starting a node still emits its report and exits nonzero. A failure before execution, such as parsing, validation, or lock acquisition, may leave stdout empty. Check the exit status and allow for an absent JSON payload on failure. JSON `apply` and `destroy` require `--auto-approve` even when sequential; the `approve` policy still applies.
 
 ## Output snapshots
 
-A blueprint opts in with an empty `snapshots { }` block. Without it, nothing
-is written and input resolution is byte-for-byte what it always was.
+Add `snapshots {}` to opt in to local output snapshots. They can help resolve downstream inputs when an upstream output read fails, for example during teardown. Without the block, terragraph neither writes nor reads snapshots.
 
-With it, `apply` writes `.terragraph/outputs/<node>.json` (gitignored,
-owner-only, deterministic bytes) containing **only the non-sensitive outputs
-that a data edge consumes from that node**. An output is stored only when its
-current module schema includes sensitivity metadata and does not mark it
-`sensitive`, **and** the actual `terraform/tofu output -json` result explicitly
-reports `sensitive: false`. Runtime sensitivity takes precedence over a static
-public declaration. Missing or null runtime sensitivity is treated as unknown,
-so wrappers must preserve that metadata to enable snapshot storage. Both of
-apply's branches write it: a node that just changed and a node that plans clean
-describe the same current reality.
+Input resolution prefers this run's applied outputs, then live `terraform/tofu output`, then a snapshot **only if the live read failed**. A successful live read that lacks a particular output does not trigger fallback. A missing, corrupt, or incompatible snapshot leaves the live-read error intact.
 
-Sensitive outputs and outputs without sensitivity metadata are never stored.
-Only their port names appear in the snapshot's `withheld` list, so a node whose
-consumed outputs are all withheld still gets a file containing those names and
-an empty `outputs` object. A node with no consumed outputs gets no file, and
-reapplying it removes a prior snapshot. A successful opted-in apply rewrites
-older snapshots, removing any previously stored values now marked sensitive.
-Existing files remain on disk until that upstream node is reapplied or the
-files are manually removed; opting out does not clean them up.
+Snapshots can be stale: they do not prove that upstream infrastructure still exists. Values useful for tearing down a consumer may point to nonexistent resources during apply. Restore live outputs when possible.
 
-New snapshots use schema version 2, which records only values that passed both
-checks. Version 1 snapshots did not verify runtime sensitivity: their values
-are treated as withheld, even if the static declaration says public. Restore
-live upstream outputs or run `terragraph apply --node <producer>` to republish
-under the normal approval policy; a no-change apply also regenerates snapshots.
-Reading a legacy file does not modify or delete it. Older terragraph versions
-cannot use version 2 snapshots.
+An opted-in apply writes `.terragraph/outputs/<node>.json`, including for unchanged nodes, with only outputs consumed by data edges. A value is stored only when both the current module schema marks it non-sensitive and the runtime output explicitly reports `sensitive: false`. Missing or null sensitivity metadata is treated as unknown. Sensitive or unknown outputs contribute only their names to a `withheld` list. Wrappers must preserve runtime sensitivity metadata.
 
-A snapshot read also checks the current module schema, so a stored value cannot
-supply an output now declared sensitive or lacking sensitivity metadata. If a
-fallback needs a withheld output, resolution names the producer output and
-consumer input, explains the omission, and asks you to restore live upstream
-outputs or apply the upstream in the same run. Live outputs and this run's
-applied outputs can still carry sensitive values normally. If an output becomes
-non-sensitive, reapply the upstream before expecting it in a snapshot; its old
-withheld entry remains in effect until then.
+Reads check the current module schema again. A now-sensitive output cannot come from a snapshot; live and same-run outputs can still carry sensitive values normally. If a needed value is withheld, restore live upstream outputs or apply the upstream in the same run. Changing an output back to non-sensitive also requires reapplying its producer before a snapshot can supply it.
 
-On the read side a snapshot is a **fallback, never a preference**. Input
-resolution order is: this run's applied outputs, then live `terraform
-output`, then — only if the live read failed — the snapshot, and only when
-the blueprint opted in. The snapshot can never sit ahead of the live read:
-that is the removed incremental-apply cache returning under a new name, and
-it is worst on `destroy`, where a stale value feeding `count`/`for_each`
-changes what gets torn down. A missing, corrupt, or incompatible snapshot
-leaves the original live-read error intact.
+Reapplying a producer rewrites its snapshot, removing values that became sensitive; if it has no consumed outputs, its old snapshot is removed. Opting out does not delete existing files, and old values remain on disk until rewritten or manually removed. Keep `.terragraph/` out of version control. Snapshot files use mode `0600` on Unix; Windows uses inherited filesystem permissions without an explicit owner-only ACL. Snapshots are local to each machine.
 
-The fallback cannot distinguish a temporarily unreadable upstream from a
-permanently destroyed one. Keeping the last applied values can help `destroy`
-resolve the inputs that created downstream resources, but `apply` may use those
-same old values to reference resources that no longer exist. A snapshot does
-not prove that the upstream infrastructure still exists or is current.
+New snapshots use schema version 2. Version 1 values did not verify runtime sensitivity and are treated as withheld. Restore live outputs or run `terragraph apply --node <producer>` to republish under the normal approval policy; a no-change apply also upgrades the snapshot. Reading an old file does not rewrite it. terragraph versions supporting only schema 1 cannot consume schema 2.
 
-Static inspection selects files for the node's resolved runtime. Changing only
-`.tofu` or `.tofu.json` to mark an output sensitive therefore also blocks a prior
-public snapshot on the next run. If an arbitrary runtime wrapper leaves the
-file-selection mode ambiguous and the two modes' declarations differ, graph
-loading fails before a snapshot can be consumed. See [runtime selection](blueprint.md#choosing-a-runtime-per-node-runtime).
-Recognized OpenTofu runtimes selecting these files must also pass an execution-only
-version check (1.8.0 or newer) before any input validation or snapshot read,
-including upstream reads during a node-scoped run. Older OpenTofu modules using
-only `.tf` / `.tf.json` do not need this check. Runtime sensitivity metadata still
-protects publication, and an offline read cannot refresh that metadata.
-
-Snapshots are local and per-machine. They are regenerated by `apply`, so
-there is no freshness gate to maintain and nothing to commit.
+Module inspection and compatibility checks follow the producer's [resolved runtime](blueprint.md#choosing-a-runtime-per-node-runtime), including upstream reads in a node-scoped run. Runtime-specific sensitivity declarations therefore apply to snapshot reads too; offline reads cannot refresh runtime output metadata.

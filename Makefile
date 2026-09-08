@@ -39,11 +39,12 @@ docs-check: docs ## Fail if docs/cli/*.md is stale (what CI runs)
 	  (echo "docs/cli/*.md is stale, run 'make docs' and commit the result" >&2; exit 1)
 
 .PHONY: vscode-check
-vscode-check: ## Type-check, lint, and format-check the VS Code extension
+vscode-check: build ## Type-check, lint, format-check, and integration-test the VS Code extension
 	cd editors/vscode && npm ci
 	cd editors/vscode && npm run check
 	cd editors/vscode && npm run lint
 	cd editors/vscode && npm run format:check
+	cd editors/vscode && npm test
 
 .PHONY: check
 check: fmt-check lint docs-check build test vscode-check ## Everything CI runs, in the same order

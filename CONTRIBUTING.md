@@ -12,6 +12,8 @@ External contributors: fork the repo and branch from `main`. Maintainers: branch
 
 Before opening a PR: `make check` (fmt, lint, docs, build, test, the same thing CI runs) should pass locally. If the change touches blueprint semantics, a CLI flag, or an example's expected output, update the relevant `docs/*.md` or example `README.md` in the same PR.
 
+On headless Linux, install Xvfb and run `xvfb-run -a make check`, as CI does.
+
 ## What the PR body needs
 
 Two things, and neither one is long.

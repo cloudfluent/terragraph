@@ -41,6 +41,7 @@
   "scripts": {
     "compile": "tsc -p .",
     "check": "tsc -p . --noEmit",
+    "test": "npm run compile && node out/test/runTest.js",
     "lint": "eslint . --max-warnings=0",
     "lint:fix": "npm run lint -- --fix",
     "format": "prettier --write .",
@@ -53,6 +54,7 @@
     "@eslint/js": "^9.0.0",
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.85.0",
+    "@vscode/test-electron": "3.1.0",
     "@vscode/vsce": "^3.7.1",
     "esbuild": "^0.28.1",
     "eslint": "^9.0.0",

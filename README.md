@@ -2,6 +2,9 @@
 
 [![Release](https://img.shields.io/github/v/release/cloudfluent/terragraph)](https://github.com/cloudfluent/terragraph/releases) [![CI](https://github.com/cloudfluent/terragraph/actions/workflows/ci.yml/badge.svg)](https://github.com/cloudfluent/terragraph/actions/workflows/ci.yml) [![Go Reference](https://pkg.go.dev/badge/github.com/cloudfluent/terragraph.svg)](https://pkg.go.dev/github.com/cloudfluent/terragraph) [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
+> [!WARNING]
+> terragraph is under active development and is not yet production-ready. Use it at your own risk. Breaking changes may occur frequently until the first stable release.
+
 Split infrastructure into independent Terraform modules and you lose the one thing a single workspace gives you for free: one module's outputs feeding straight into another's inputs. That gap gets closed one of three ways. By hand: `apply`, copy a value, paste it into the next module's tfvars, repeat. With `terraform_remote_state`, which trades the copying for a dependency written into the consumer's code: it names the producer's backend and needs read access to its entire state file, so the module no longer stands on its own. Or by giving up the isolation and merging everything back into one giant workspace.
 
 terragraph closes that gap without any of the three tradeoffs. Every root module stays completely standalone, with its own backend, providers, and resources, and no reference to any other module. A separate file declares the **wiring**: which output feeds which input. terragraph reads that file, works out the dependency order, and passes the real values through automatically as it applies each module, with no generated code and no shared state.
@@ -24,11 +27,11 @@ Requires Go 1.27.1+ to build, and `terraform` or `tofu` on `PATH` to run.
 
 ## VS Code
 
-Install **Terragraph Blueprint** from the VS Code Marketplace to get completion, definition navigation, hover metadata, and validation for `blueprint.hcl` and `group.hcl`. The extension contains a matching language server, so editor features do not require a separate CLI installation. See [`editors/vscode`](editors/vscode) for source-development and override details.
+Install **Terragraph Blueprint** from the VS Code Marketplace to get completion with port metadata, definition navigation, and validation for Terragraph `.hcl` files opened as HCL, whatever their filenames. The extension contains a matching language server, so editor features do not require a separate CLI installation. See [`editors/vscode`](editors/vscode) for source-development and override details.
 
 ## Quick look
 
-A blueprint (`blueprint.hcl`) is a flat list of `node` and `edge` facts:
+A blueprint is a flat list of `node` and `edge` facts. Save this example as `blueprint.hcl`, the CLI's default path:
 
 ```hcl
 node "vpc" { source = "./stacks/vpc" }
@@ -45,6 +48,8 @@ terragraph apply --parallelism 2 --auto-approve
 ```
 
 `terragraph` resolves the graph, runs `terraform`/`tofu` for each node in dependency order, and passes `vpc`'s real `vpc_id` output into `eks`'s input at runtime. See [`examples/basic`](examples/basic) for this exact setup running end to end.
+
+Filenames are flexible: `--blueprint topology.hcl` reads that file alone, while `--blueprint .` merges every `.hcl` file directly in the current directory. Without the flag, only `blueprint.hcl` is read. A group's `group.hcl` filename is also a convention; groups are selected by their block names. See [file loading and a split blueprint example](docs/blueprint.md#files-and-loading) and [group source directories](docs/groups.md#source-directories-and-filenames).
 
 ## Documentation
 

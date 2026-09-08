@@ -1,6 +1,10 @@
 # Vendoring third-party module sources
 
-`node.source` can point at a remote git address instead of a local path, the same rule Terraform's own `module.source` uses: anything not starting with `./` or `../` is remote:
+Vendoring lets you review and commit third-party module code with your blueprint. `terragraph vendor` fetches remote `node.source` addresses into local copies; later runs use those copies. Only Git sources are supported, not Terraform/OpenTofu Registry addresses. Sources starting with `./` or `../` are local; other addresses require vendoring.
+
+## First fetch
+
+Declare the Git source and select a revision with `ref`:
 
 ```hcl
 node "vpc" {
@@ -8,9 +12,14 @@ node "vpc" {
 }
 ```
 
-Nothing fetches it live. `terragraph vendor [--node NAME] [--force]` is a separate, explicit step that downloads it once into `vendor/<name>/`, meant to be **committed**, so a version bump shows the actual `.tf` content change in `git diff`, not just a one-line ref bump the way a live `module { source = "...", version = "..." }` wrapper would. `validate`/`graph`/`plan`/`apply`/`destroy` never fetch anything; an unvendored remote node fails clearly, telling you to run `terragraph vendor` first.
+The fetched module runs directly as an independent root module. It must have the provider and backend configuration needed for that use; terragraph does not generate a wrapper or provider/backend blocks. Supply inputs and environment settings through the [node configuration](blueprint.md).
 
-Each vendored node gets an entry in `vendor.yaml` (also committed):
+```sh
+terragraph vendor
+terragraph validate
+```
+
+This creates `vendor/vpc/` and records its source in `vendor.yaml`:
 
 ```yaml
 modules:
@@ -18,33 +27,70 @@ modules:
     source: git::https://github.com/terraform-aws-modules/terraform-aws-vpc.git?ref=v5.1.0
 ```
 
-That's deliberately all that's tracked: the `ref` in `source` is already the version pin, so there's no separate resolved-commit/fetched-at/content-hash bookkeeping to keep in sync with it. Instead, `vendor.yaml` is compared against the blueprint's *current* `node.source` on every vendor run: if they differ (a `ref` bump, or any other source change), that node is re-fetched automatically; no `--force` needed, the same way `git pull` notices you're behind without being told which commit to compare against. `--force` is only for re-fetching a node whose `source` *hasn't* changed (e.g. to pick up new commits on a moving branch ref). `.git` is always stripped from the fetch, so it never ends up committed as a nested repo.
+Commit both the fetched sources and the manifest. `.git` metadata is stripped from fetched copies, so they are not nested repositories. To fetch just one node, use `terragraph vendor --node vpc`.
 
-**`exclude` is per node, not project-wide**, because different upstream repos need different files pruned. It's the one field in the manifest entry the tool never computes: it starts empty, and a vendor run only ever reads it (to prune with) and writes it back unchanged. To prune something from one specific vendored module: vendor it once, hand-edit its `exclude` list in `vendor.yaml` (patterns with `/` anchor to the full path; patterns without match the basename at any depth, e.g. `*.md`), then `terragraph vendor --node <name> --force` to re-fetch with it applied.
+`validate`, `graph`, `plan`, `apply`, and `destroy` do not fetch or update `node.source`; a missing copy tells you to run `vendor`. This does not make execution offline: Terraform/OpenTofu `init` can still download providers and remote modules referenced inside the fetched code.
 
-Project-wide layout is configurable via an optional `vendor { }` block:
+An optional top-level block changes the default storage paths:
 
 ```hcl
 vendor {
-  directory     = "vendor"       # default
-  manifest_file = "vendor.yaml"  # default
+  directory     = "vendor"
+  manifest_file = "vendor.yaml"
 }
 ```
 
-Only git sources are supported today; the fetch mechanism is an interface so a Terraform/OpenTofu Registry backend can be added later without changing anything above it.
+See [`examples/vendored`](../examples/vendored) for a runnable walkthrough.
 
-See it end to end in [`examples/vendored`](../examples/vendored).
+## Updating sources
 
-A fetch is prepared and pruned in a temporary directory before replacing the existing vendored copy. A failed fetch leaves the previous copy and manifest intact; a failed first fetch leaves no runnable node directory. Existing manually populated directories without a manifest entry are still left alone unless `--force` is requested.
+Change the node's `source` or `ref`, then run `terragraph vendor` again. A difference from the manifest triggers a fresh fetch without `--force`. Review the source diff and commit it with the updated blueprint and manifest. Changing the blueprint alone does not update the copy used by execution.
 
-For a git source selecting `//modules/app`, the vendor directory retains the **whole repository package** and `.terragraph-source.json` records `modules/app` as its execution directory. This keeps paths such as `../common` inside the original package; terragraph never rewrites `.tf` files. The metadata is engine-managed and committed with the package. An upstream repository containing a root file with this reserved name is rejected. Invalid metadata or a subdirectory escaping the package is an error, not a fallback to another module.
+If the source string is unchanged, existing copies are left alone. Use `terragraph vendor --node vpc --force` to refresh a moving branch ref or reapply exclusions. A refresh replaces the copy rather than merging local edits, so preserve any changes you need first.
 
-If metadata is damaged or its selected directory is missing, `--force` also refuses the copy because its execution directory and state paths cannot be checked safely. First inspect the affected copy and its local backend state paths, including workspace state and backups. Recover or migrate any affected state outside that copy and verify it is safe before removing **only the affected vendored copy**. Then run `terragraph vendor --node <qualified-name>` again. Keep the metadata with its package while recovering state; deleting only the marker would make the tree look like a legacy root-source copy.
+Manually populated copies without a manifest entry are also left alone unless forced, except for the legacy subdirectory upgrade described below.
 
-Older versions stored only the selected subdirectory. The next `terragraph vendor` refreshes these legacy subdirectory copies into the package layout even without `--force`; a failed refresh preserves the old copy. Existing root-source directories, including manually populated ones without a manifest, keep their previous behavior. Until refreshed, an existing flat copy is still read as before. Per-node `exclude` patterns remain relative to the selected module, while `.git` is stripped throughout the retained package. The package-layout metadata is never removed by an exclusion pattern.
+## Excluding files
 
-Before replacing any existing copy or changing its execution directory, vendoring checks its implicit or declared local backend state paths, node `backend_config` overrides, and local workspace state, including backups. Existing state at a relative path or inside the old vendor tree stops the refresh and leaves the tree and manifest unchanged. Move or migrate that state outside the vendor tree and configure a stable absolute backend path before retrying; terragraph does not move state automatically. Because vendoring does not choose an execution runtime, differing Terraform and OpenTofu declarations require review before changing directories. An unknown local backend path also requires review instead of an assumed-safe upgrade. Absolute state paths outside the tree are unaffected. These checks also apply to ordinary root-source `--force` and source/ref changes, and include state elsewhere inside a retained package. Existing copies with no local state can still be refreshed normally.
+After the first fetch, add an `exclude` list to that node's manifest entry, then refresh it:
 
-`vendor` also discovers remote leaves inside local groups without inspecting missing modules. Group leaves use qualified names in the root vendor directory and manifest: `prod.vpc` or `prod.inner.vpc`, selected with `--node prod.inner.vpc`. Each group instance receives its own copy; the group's source directory stays unchanged. Nested groups use the same expansion and cycle rules as graph building.
+```yaml
+modules:
+  - name: vpc
+    source: git::https://github.com/terraform-aws-modules/terraform-aws-vpc.git?ref=v5.1.0
+    exclude:
+      - "*.md"
+      - "examples"
+```
 
-An existing group-local copy remains the compatibility fallback while no root qualified entry exists. To retain the directory older versions actually executed, `group/vendor/<leaf>` takes priority over a declared custom group directory when both copies exist; the custom directory is used only if the default-path entry is absent. A regular vendor run preserves it, including a manually populated copy without a root manifest entry. Refreshing with `--force`, a recorded source change, or a legacy subdirectory-layout upgrade publishes into the root vendor directory only after the directory-change checks above pass. The old group-local tree is never removed. Once a root entry exists it takes precedence; a broken entry fails clearly rather than executing the legacy fallback.
+```sh
+terragraph vendor --node vpc --force
+```
+
+Exclusions are per node and preserved on later vendor runs. Patterns without `/` match a basename at any depth; patterns with `/` match the full relative path. `**` is not a recursive glob. Exclude only files the module does not need to execute. `.git` is always removed.
+
+## Groups and subdirectories
+
+Remote nodes inside [local groups](groups.md) use qualified names in the root vendor directory and manifest. For example, `prod.inner.vpc` is fetched into `vendor/prod.inner.vpc/` and selected with `--node prod.inner.vpc`. Each instance receives its own copy; the group's source directory stays unchanged.
+
+A source can select a repository subdirectory; replace the example repository below with your own:
+
+```hcl
+node "app" {
+  source = "git::https://github.com/example/modules.git//modules/app?ref=v1.0.0"
+}
+```
+
+The copy retains the whole repository package, while `.terragraph-source.json` identifies the selected execution directory. This preserves relative references such as `../common` without rewriting `.tf` files. Commit this metadata with the package; its filename is reserved and must not already exist at the upstream repository root. Exclusions are relative to the selected module, while `.git` is removed throughout the package. Exclusions cannot remove the package metadata.
+
+Older flat subdirectory copies remain readable, but the next vendor run upgrades them to the package layout, even without `--force`. The state checks below apply before replacing them.
+
+For older group layouts, an existing group-local copy is used until a root qualified copy exists. `group/vendor/<leaf>` takes priority over a custom group vendor directory when both exist. A normal vendor run preserves this fallback; a forced refresh, recorded source change, or subdirectory upgrade publishes a root copy after the state checks pass. The old group-local tree is retained. A present but broken root copy fails rather than falling back.
+
+## Recovering a failed refresh
+
+A failed fetch preserves that node's previous copy and manifest entry. A failed first fetch leaves no runnable copy. Other nodes may still finish and update their entries; a vendor run is not an all-or-nothing operation.
+
+Before replacing an existing copy, vendoring checks local backend state, including `backend_config` overrides, workspace state, and backups. Existing state at a relative path or inside the vendor tree blocks the refresh. Migrate that state outside the tree and configure a stable absolute backend path before retrying; terragraph does not move state. Absolute state paths outside the tree are unaffected. Unknown local backend paths and differing Terraform/OpenTofu declarations also require review. These checks apply to source/ref changes, `--force`, and layout upgrades.
+
+Invalid metadata or a selected directory that is missing or escapes the package is an error. `--force` cannot bypass it. Inspect the affected copy and its state paths, recover or migrate state outside it, and verify that removal is safe. Then remove only that copy and run `terragraph vendor --node <qualified-name>` again. Keep the metadata with the package during recovery; deleting only the marker can make terragraph mistake it for an older root-source copy.
