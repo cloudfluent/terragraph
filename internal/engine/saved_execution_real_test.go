@@ -131,3 +131,20 @@ func TestApply_RealRetainedOptionDoesNotPause(t *testing.T) {
 		t.Fatalf("got = %+v, %v", outputs, err)
 	}
 }
+
+func TestSavedExecution_RealContinuationRejectsChangedUpstreamSource(t *testing.T) {
+	e := savedRuntimeFixture(t)
+	record, err := e.SavePlans(Options{}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.ApplySavedPlans(record.ID, Options{AutoApprove: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(e.nodeDir("upstream"), "changed.txt"), []byte("changed after apply"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.SavePlans(Options{}, record.ID); err == nil {
+		t.Fatal("continuation accepted changed upstream source")
+	}
+}

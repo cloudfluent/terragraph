@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -113,7 +114,24 @@ func (e *Engine) pruneExecutions(store executionStore) ([]string, error) {
 		if err != nil {
 			return removed, err
 		}
-		if record.Scope != scope || executionNeedsRecovery(record) || record.FinishedAt == nil {
+		if record.Scope != scope || executionNeedsRecovery(record) {
+			continue
+		}
+		if record.Status == "waiting_for_apply" {
+			expired, err := e.frontierExpired(store, record, now)
+			if err != nil {
+				return removed, err
+			}
+			if expired {
+				record.Status, record.UpdatedAt, record.FinishedAt = "expired", now, &now
+				s := &executionSession{engine: e, store: store, record: record, revision: revision}
+				if err := s.publish(record); err != nil {
+					return removed, err
+				}
+				revision = s.revision
+			}
+		}
+		if record.FinishedAt == nil {
 			continue
 		}
 		if err := e.cleanupExecution(store, record); err != nil {
@@ -128,4 +146,27 @@ func (e *Engine) pruneExecutions(store executionStore) ([]string, error) {
 		removed = append(removed, record.ID)
 	}
 	return removed, nil
+}
+
+func (e *Engine) frontierExpired(store executionStore, record ExecutionRecord, now time.Time) (bool, error) {
+	for _, node := range record.Nodes {
+		if node.Phase != "planned" {
+			continue
+		}
+		object, err := store.read(e.context(), node.PlanID+".bin")
+		if err != nil {
+			return false, err
+		}
+		var bundle planBundle
+		if err := json.Unmarshal(object.Data, &bundle); err != nil {
+			return false, err
+		}
+		if bundle.ID != node.PlanID || bundle.ExecutionID != record.ID || bundle.ExpiresAt.IsZero() {
+			return false, fmt.Errorf("execution %s has an invalid plan reference; inspect the stored artifacts", record.ID)
+		}
+		if !now.Before(bundle.ExpiresAt) {
+			return true, nil
+		}
+	}
+	return false, nil
 }

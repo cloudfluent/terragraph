@@ -359,3 +359,6 @@ preview and clearly reports that structured evidence is unavailable. Runtime
 plan streams go to stderr in both formats; concise Terragraph summaries go to
 stdout. A policy block is a successful assessment and does not itself fail plan;
 preparation, input, provider, inspection, and cancellation errors exit nonzero.
+
+
+Execution attempts now have protected [execution records](executions.md), including unknown-outcome recovery. Ordinary apply does not retain a plan bundle unless `--retain-plan` is selected. `plan --save` and `apply --plan <run-id>` expose separate review of one ready graph frontier at a time; continuation plans downstream nodes only after real upstream outputs exist. See the execution record reference for compatibility checks, shared storage, expiry, and cleanup.

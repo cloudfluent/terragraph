@@ -259,9 +259,12 @@ func newPlanCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fun
 		Short: "Review node plans, actions, approval policy, and evidence limitations",
 		RunE: func(cmd *cobra.Command, args []string) (resultErr error) {
 			var runs []engine.NodeRun
+			var savedRecord engine.ExecutionRecord
 			phase := "arguments"
 			defer func() {
-				if !save {
+				if save {
+					resultErr = finishSavedExecution(cmd, output, savedRecord, resultErr)
+				} else {
 					resultErr = finishPlan(cmd, output, runs, phase, resultErr)
 				}
 			}()
@@ -291,8 +294,8 @@ func newPlanCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fun
 			e.Stdout = cmd.ErrOrStderr()
 			phase = "prepare"
 			if save {
-				record, err := e.SavePlans(engine.Options{Node: node, Parallelism: parallelism, Approve: policy}, continueID)
-				return finishSavedExecution(cmd, output, record, err)
+				savedRecord, err = e.SavePlans(engine.Options{Node: node, Parallelism: parallelism, Approve: policy}, continueID)
+				return err
 			}
 			runs, err = e.ReviewPlan(engine.Options{Node: node, Parallelism: parallelism, Approve: policy}, output == "text")
 			return err

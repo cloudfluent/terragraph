@@ -306,7 +306,20 @@ func (e *Engine) savedGraphBinding(record ExecutionRecord) (string, error) {
 		if actual == nil {
 			return "", fmt.Errorf("node.%s: removed from graph; create a fresh plan", node.Name)
 		}
-		nodes[node.Name] = actual.Node
+		files, err := e.planSourceFiles(node.Name)
+		if err != nil {
+			return "", err
+		}
+		// Pending nodes may acquire their provider lockfile during their first init; each published bundle binds that lockfile separately.
+		delete(files, ".terraform.lock.hcl")
+		nodes[node.Name] = struct {
+			Declaration any
+			Runtime     any
+			Env         any
+			Approve     any
+			Binary      exec.Binary
+			Files       map[string]string
+		}{actual.Node, actual.Runtime, actual.Env, actual.Approve, e.runtimeFor(node.Name), files}
 	}
 	return executionDigest(struct {
 		Nodes map[string]any

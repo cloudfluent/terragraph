@@ -82,3 +82,49 @@ terragraph plan recover <run-id> --confirm-stopped --state-reviewed --replan
 ```
 
 The command preserves the original node outcome, records recovery separately, and requires a fresh plan. It does not label an unknown operation successful, roll back changes, release native state locks, or prove what an external writer did. The acknowledgements are operator assertions, not automated verification. The replan path remains available with missing module sources so damaged checkouts cannot permanently hide recovery metadata.
+
+## Saved graph plans
+
+Use the same execution mechanism in two ways:
+
+```sh
+terragraph apply --auto-approve
+terragraph apply --auto-approve --retain-plan
+```
+
+Both commands plan each node, inspect its policy, apply the same native plan, and use real outputs for downstream nodes. The first keeps only the execution record. The second additionally persists private plan artifacts while the run is in progress; it does not pause for a separate review. Resolved terminal runs immediately attempt artifact cleanup, so retention is not a long-term plan archive.
+
+For a separate approval step:
+
+```sh
+terragraph plan --save --output json
+terragraph plan show <run-id> --output json
+terragraph apply --plan <run-id> --auto-approve
+terragraph plan --save --continue <run-id> --output json
+terragraph apply --plan <run-id> --auto-approve
+```
+
+The first command saves only the ready frontier. A downstream node whose selected predecessor has not completed stays `pending`. Applying consumes that frontier once and stops. `--continue` plans the next frontier using live upstream outputs; snapshots cannot replace those reads. Repeat until the record says `completed`. Use `--node` only when starting an explicitly restricted selection; continuation and saved apply inherit the stored selection. Parallelism is an upper bound; saved frontiers currently execute sequentially, while ordinary apply retains its existing concurrent scheduler.
+
+Saved-plan JSON includes action metadata and the policy assessment without input or output values. Review is not approval: saved apply checks the current approval policy again and asks for confirmation unless `--auto-approve` is set. A saved no-change plan still goes through native application validation, so it cannot silently bypass the runtime's stale-plan checks.
+
+The private bundle contains the native plan, an immutable plan ID, its execution and node association, creation and expiry times, and a compatibility fingerprint. It may contain secrets, including values that Terraform marks sensitive. Keep store access restricted; do not put these artifacts in Git or general-purpose logs.
+
+Before applying, terragraph compares backend/workspace identity, runtime version and platform, provider selections, absolute module and data-directory paths, source files, resolved inputs, and `TF_VAR_*` inputs. Runtime argument overrides via `TF_CLI_ARGS*` are refused for retained plans. The runtime itself validates the state revision embedded in its native plan while holding its state lock. Terragraph does not replace that check with a local state cache or silently generate a replacement plan.
+
+Transporting a bundle through S3 does not make native plans universally portable. Supply the same source files and provider lockfile at the same absolute paths, select the same runtime, and provide valid backend/provider credentials. Backend preparation is journaled and may reconstruct the native cache; it never replans. Source-tree symlinks and oversized source trees are refused for retained plans. Native plans can reference files outside the source tree, executable helpers, or apply-time provisioner inputs: reproduce those dependencies in the runner environment. Terragraph does not package that environment or prove arbitrary external dependencies unchanged. This follows [Terraform's automation requirements](https://developer.hashicorp.com/terraform/tutorials/automation/automate-terraform). Terraform and OpenTofu plans are not interchangeable.
+
+A common graph lock and execution store are required for shared coordination. Git-only teams can keep local records for independent Terraform states. Teams sharing infrastructure should configure the same lock and S3 execution prefix, whether commands run on developer machines, a central CI runner, or a custom pipeline. Separate lock/store namespaces cannot automatically discover each other. Terraform backend locking remains necessary, including for writers outside terragraph.
+
+## Expiry and cleanup
+
+```sh
+terragraph plan cancel <run-id>
+terragraph plan prune --output json
+```
+
+The default start window is 24 hours. Expiry prevents a stored plan from beginning; it does not terminate an operation already running. Under the coordination locks, pruning expires paused frontiers whose plan window has elapsed, marks the execution terminal, and removes their bundles. Completed, cancelled, expired, or otherwise resolved terminal executions also attempt immediate bundle cleanup. Failed cleanup can be retried by the next ordinary plan/apply/destroy invocation or by `plan prune`.
+
+Resolved records remain for 30 days after their terminal timestamp by default. Active records, unresolved mutations, uncertain backend preparation, and orphan objects without trustworthy ownership are never deleted merely because they are old. Cancellation cannot resolve an unknown mutation; use the recovery procedure first. There is no background daemon, so an idle local checkout keeps eligible files until another relevant command runs.
+
+S3 deletion affects the current object view. A versioned bucket can retain older versions and delete markers, and Object Lock can prevent physical removal. Configure and audit any noncurrent-version policy separately; do not apply blanket Lifecycle expiration to the execution prefix or graph lock. A bucket policy that independently deletes active or unknown evidence defeats these recovery guarantees. The CLI does not install or change bucket Lifecycle rules.
