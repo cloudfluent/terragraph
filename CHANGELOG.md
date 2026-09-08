@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.3](https://github.com/cloudfluent/terragraph/compare/v0.2.2...v0.2.3) (2026-09-08)
+
+
+### Features
+
+* add isolated node output observation ([#90](https://github.com/cloudfluent/terragraph/issues/90)) ([b502b92](https://github.com/cloudfluent/terragraph/commit/b502b92d82114e2551aef15ea2c77b9a0ad904e9))
+* expose safe node state status ([#91](https://github.com/cloudfluent/terragraph/issues/91)) ([dedac03](https://github.com/cloudfluent/terragraph/commit/dedac037753dc3194c1757d1b9a412dbbc0b74bd))
+* report structured plan evidence and policy assessment ([#92](https://github.com/cloudfluent/terragraph/issues/92)) ([ea87b14](https://github.com/cloudfluent/terragraph/commit/ea87b146a77143a3baefdedd4c645eb8c505334a))
+
 ## [0.2.2](https://github.com/cloudfluent/terragraph/compare/v0.2.1...v0.2.2) (2026-09-08)
 
 
