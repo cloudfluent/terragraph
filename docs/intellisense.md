@@ -24,6 +24,8 @@ edge {
 
 An input suggestion shows its type, whether it's required, whether it's sensitive, and its description. An output shows its name, description, and whether it's sensitive.
 
+Module inspection follows a node's explicit runtime or the root blueprint's default runtime, with Terraform as the editor fallback. A standalone group's unspecified runtime depends on its use site, so inspection only confirms ports when Terraform and OpenTofu expose the same declarations; a default-marked runtime in the group's source directory does not select its runtime. An ambiguous wrapper or unreadable module leaves ports unknown and does not produce missing-port errors. No runtime is executed for editor inspection.
+
 An edge's nested `input` blocks (see [blueprint.md](blueprint.md#several-values-between-the-same-two-nodes-input)) complete the same way: the block label suggests the input variables declared by the edge's `to` node, and `from = output.` suggests the outputs of its `from` node. Neither reference repeats a node name, so both suggestion lists come from that edge's own endpoints.
 
 ```hcl

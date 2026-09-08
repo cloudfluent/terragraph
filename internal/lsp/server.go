@@ -4,9 +4,10 @@ package lsp
 
 import (
 	"context"
+	"errors"
 	"io"
-	"os"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"unicode/utf16"
@@ -19,16 +20,26 @@ import (
 	"github.com/cloudfluent/terragraph/internal/language"
 )
 
-// Serve runs one LSP connection until the client closes stdin.
+// Serve closes its input transport on exit so a client need not close stdin before waiting for the server process.
 func Serve(ctx context.Context, in io.Reader, out io.Writer) error {
-	server := &server{workspace: language.NewWorkspace(""), documents: map[string][]byte{}}
+	server := &server{workspace: language.NewWorkspace(""), documents: map[string][]byte{}, exit: make(chan struct{})}
 	// NewServer starts dispatching immediately, so diagnostic handlers must wait until their client is installed.
 	server.mu.Lock()
 	_, conn, client := protocol.NewServer(ctx, server, jsonrpc2.NewStream(stdio{Reader: in, Writer: out}))
 	server.client = client
 	server.mu.Unlock()
-	<-conn.Done()
-	return conn.Err()
+	select {
+	case <-conn.Done():
+		return conn.Err()
+	case <-server.exit:
+		if err := conn.Close(); err != nil {
+			return err
+		}
+		if !server.hasShutdown() {
+			return errors.New("language-server: exit received before shutdown; send shutdown before exit")
+		}
+		return nil
+	}
 }
 
 type stdio struct {
@@ -36,41 +47,85 @@ type stdio struct {
 	io.Writer
 }
 
-func (stdio) Close() error { return nil }
+func (s stdio) Close() error {
+	if closer, ok := s.Reader.(io.Closer); ok {
+		return closer.Close()
+	}
+	return nil
+}
 
 type server struct {
 	protocol.UnimplementedServer
-	mu        sync.RWMutex
-	workspace *language.Workspace
-	documents map[string][]byte
-	client    protocol.Client
+	// An edit must not replace text between diagnostic calculation and byte-to-position conversion.
+	documentMu sync.Mutex
+	mu         sync.RWMutex
+	workspace  *language.Workspace
+	documents  map[string][]byte
+	client     protocol.Client
+	shutdown   bool
+	exit       chan struct{}
 }
 
 func (s *server) Initialize(_ context.Context, params *protocol.InitializeParams) (*protocol.InitializeResult, error) {
+	if s.hasShutdown() {
+		return nil, jsonrpc2.ErrInvalidRequest
+	}
 	if folders, ok := params.WorkspaceFolders.Get(); ok && len(folders) > 0 {
 		s.workspace.SetRoot(filePath(string(folders[0].URI)))
 	}
 	full := protocol.TextDocumentSyncKindFull
 	return &protocol.InitializeResult{Capabilities: protocol.ServerCapabilities{TextDocumentSync: full, CompletionProvider: &protocol.CompletionOptions{TriggerCharacters: []string{"."}}, DefinitionProvider: protocol.Boolean(true), PositionEncoding: protocol.PositionEncodingKindUTF16}, ServerInfo: protocol.ServerInfo{Name: "terragraph"}}, nil
 }
-func (s *server) DidOpen(_ context.Context, params *protocol.DidOpenTextDocumentParams) error {
+func (s *server) DidOpen(ctx context.Context, params *protocol.DidOpenTextDocumentParams) error {
+	s.documentMu.Lock()
+	defer s.documentMu.Unlock()
 	s.set(string(params.TextDocument.URI), []byte(params.TextDocument.Text))
-	s.publishDiagnostics(context.Background(), params.TextDocument.URI)
+	s.publishDiagnostics(ctx)
 	return nil
 }
 
-func (s *server) Shutdown(context.Context) error { return nil }
-func (s *server) Exit(context.Context) error     { return nil }
-func (s *server) DidChange(_ context.Context, params *protocol.DidChangeTextDocumentParams) error {
+func (s *server) Shutdown(context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.shutdown {
+		return jsonrpc2.ErrInvalidRequest
+	}
+	s.shutdown = true
+	return nil
+}
+
+func (s *server) Exit(context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.exit != nil {
+		select {
+		case <-s.exit:
+		default:
+			close(s.exit)
+		}
+	}
+	return nil
+}
+
+func (s *server) hasShutdown() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.shutdown
+}
+func (s *server) DidChange(ctx context.Context, params *protocol.DidChangeTextDocumentParams) error {
+	s.documentMu.Lock()
+	defer s.documentMu.Unlock()
 	for _, change := range params.ContentChanges {
 		if whole, ok := change.(*protocol.TextDocumentContentChangeWholeDocument); ok {
 			s.set(string(params.TextDocument.URI), []byte(whole.Text))
 		}
 	}
-	s.publishDiagnostics(context.Background(), params.TextDocument.URI)
+	s.publishDiagnostics(ctx)
 	return nil
 }
-func (s *server) DidClose(_ context.Context, params *protocol.DidCloseTextDocumentParams) error {
+func (s *server) DidClose(ctx context.Context, params *protocol.DidCloseTextDocumentParams) error {
+	s.documentMu.Lock()
+	defer s.documentMu.Unlock()
 	path := filePath(string(params.TextDocument.URI))
 	s.mu.Lock()
 	delete(s.documents, path)
@@ -78,19 +133,20 @@ func (s *server) DidClose(_ context.Context, params *protocol.DidCloseTextDocume
 	s.mu.Unlock()
 	s.workspace.CloseDocument(path)
 	if client != nil {
-		_ = client.PublishDiagnostics(context.Background(), &protocol.PublishDiagnosticsParams{URI: params.TextDocument.URI, Diagnostics: []protocol.Diagnostic{}})
+		_ = client.PublishDiagnostics(ctx, &protocol.PublishDiagnosticsParams{URI: params.TextDocument.URI, Diagnostics: []protocol.Diagnostic{}})
 	}
+	s.publishDiagnostics(ctx)
 	return nil
 }
 
 func (s *server) Completion(ctx context.Context, params *protocol.CompletionParams) (protocol.CompletionResult, error) {
-	path := filePath(string(params.TextDocument.URI))
-	s.mu.RLock()
-	text := append([]byte(nil), s.documents[path]...)
-	s.mu.RUnlock()
-	if len(text) == 0 {
-		text, _ = os.ReadFile(path)
+	if s.hasShutdown() {
+		return nil, jsonrpc2.ErrInvalidRequest
 	}
+	s.documentMu.Lock()
+	defer s.documentMu.Unlock()
+	path := filePath(string(params.TextDocument.URI))
+	text := s.workspace.Document(path)
 	offset := positionOffset(text, params.Position)
 	candidates := s.workspace.Complete(ctx, path, offset)
 	items := make(protocol.CompletionItemSlice, 0, len(candidates))
@@ -106,13 +162,13 @@ func (s *server) Completion(ctx context.Context, params *protocol.CompletionPara
 }
 
 func (s *server) Definition(ctx context.Context, params *protocol.DefinitionParams) (protocol.DefinitionResult, error) {
-	path := filePath(string(params.TextDocument.URI))
-	s.mu.RLock()
-	text := append([]byte(nil), s.documents[path]...)
-	s.mu.RUnlock()
-	if len(text) == 0 {
-		text, _ = os.ReadFile(path)
+	if s.hasShutdown() {
+		return nil, jsonrpc2.ErrInvalidRequest
 	}
+	s.documentMu.Lock()
+	defer s.documentMu.Unlock()
+	path := filePath(string(params.TextDocument.URI))
+	text := s.workspace.Document(path)
 	target, ok := s.workspace.Definition(ctx, path, positionOffset(text, params.Position))
 	if !ok {
 		return nil, nil
@@ -140,7 +196,21 @@ func (s *server) set(rawURI string, text []byte) {
 	s.workspace.SetDocument(path, text)
 }
 
-func (s *server) publishDiagnostics(ctx context.Context, documentURI uri.URI) {
+// A changed declaration or group export can affect any open consumer, including one in a different directory.
+func (s *server) publishDiagnostics(ctx context.Context) {
+	s.mu.RLock()
+	paths := make([]string, 0, len(s.documents))
+	for path := range s.documents {
+		paths = append(paths, path)
+	}
+	s.mu.RUnlock()
+	sort.Strings(paths)
+	for _, path := range paths {
+		s.publishDocumentDiagnostics(ctx, uri.File(path))
+	}
+}
+
+func (s *server) publishDocumentDiagnostics(ctx context.Context, documentURI uri.URI) {
 	s.mu.RLock()
 	client := s.client
 	s.mu.RUnlock()
@@ -189,7 +259,7 @@ func positionOffset(text []byte, position protocol.Position) int {
 		}
 		offset++
 	}
-	for offset < len(text) && character < position.Character {
+	for offset < len(text) && character < position.Character && text[offset] != '\n' && text[offset] != '\r' {
 		r, size := utf8.DecodeRune(text[offset:])
 		units := uint32(1)
 		if r > 0xffff {
