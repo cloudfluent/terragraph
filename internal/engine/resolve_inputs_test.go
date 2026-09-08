@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/cloudfluent/terragraph/internal/blueprint"
+	"github.com/cloudfluent/terragraph/internal/exec"
 	"github.com/cloudfluent/terragraph/internal/module"
 )
 
@@ -31,7 +32,7 @@ func TestResolveInputs_EdgeAndVarsTogether(t *testing.T) {
 	e.Graph.Nodes["b"].Schema.Variables["cidr"] = module.Variable{Name: "cidr", Type: "string"}
 	e.Graph.Nodes["b"].Vars = map[string]any{"cidr": "10.16.0.0/20"}
 
-	applied := map[string]map[string]any{"a": {"id": "vpc-123"}}
+	applied := map[string]exec.Outputs{"a": {"id": {Value: "vpc-123"}}}
 	vars, err := e.resolveInputs("b", applied)
 	if err != nil {
 		t.Fatalf("resolveInputs: %v", err)
@@ -49,7 +50,7 @@ func TestResolveInputs_ConflictBetweenEdgeAndVarsErrors(t *testing.T) {
 	e.Graph.Nodes["b"].Schema.Variables["x"] = module.Variable{Name: "x", Type: "string"}
 	e.Graph.Nodes["b"].Vars = map[string]any{"x": "literal-value"}
 
-	applied := map[string]map[string]any{"a": {"id": "vpc-123"}}
+	applied := map[string]exec.Outputs{"a": {"id": {Value: "vpc-123"}}}
 	if _, err := e.resolveInputs("b", applied); err == nil {
 		t.Fatalf("expected an error: %q is set by both an edge and vars", "x")
 	}

@@ -27,7 +27,7 @@ func (e *Engine) Plan(opts Options) ([]NodeRun, error) {
 	defer unlockGraph()
 
 	e.logger().Info("plan starting", "node", opts.Node, "parallelism", opts.parallelism())
-	return e.runLevels(opts, false, func(name string, applied map[string]map[string]any, out io.Writer) (map[string]any, string, error) {
+	return e.runLevels(opts, false, func(name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
 		vars, err := e.resolveInputs(name, applied)
 		if err != nil {
 			return nil, "", err

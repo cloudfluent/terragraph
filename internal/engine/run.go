@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/cloudfluent/terragraph/internal/blueprint"
+	"github.com/cloudfluent/terragraph/internal/exec"
 	"github.com/cloudfluent/terragraph/internal/graph"
 )
 
@@ -69,7 +70,7 @@ type NodeRun struct {
 }
 
 // nodeAction runs one node's step of a plan/apply/destroy: given the outputs applied so far this run and a writer for this node's terraform output, it returns the outputs to feed downstream (nil if the node produced none worth propagating, e.g. Destroy), the success status to record for the node, and an error.
-type nodeAction func(name string, applied map[string]map[string]any, out io.Writer) (outputs map[string]any, status string, err error)
+type nodeAction func(name string, applied map[string]exec.Outputs, out io.Writer) (outputs exec.Outputs, status string, err error)
 
 // runLevels is the shared execution loop behind Plan/Apply/Destroy: it walks the graph (or a single node) level by level, running up to opts.Parallelism nodes within a level concurrently. Nodes in the same level are guaranteed to have no edge between them, so a read-only snapshot of outputs applied so far is safe to share across the level's goroutines, and results are merged back only once the whole level completes (no data races). If any node in a level errors, already-started siblings finish but the next level never starts; the returned runs record those unreached nodes as StatusNotRun so a report covers the whole selection rather than stopping where execution did. afterLevel, if non-nil, runs once each level completes successfully; an error from it aborts the run the same way.
 func (e *Engine) runLevels(opts Options, reverse bool, action nodeAction, afterLevel func() error) (runs []NodeRun, err error) {
@@ -78,7 +79,7 @@ func (e *Engine) runLevels(opts Options, reverse bool, action nodeAction, afterL
 		return nil, err
 	}
 
-	applied := map[string]map[string]any{}
+	applied := map[string]exec.Outputs{}
 	var mu sync.Mutex
 	var outMu sync.Mutex
 	buffered := opts.parallelism() > 1
@@ -98,7 +99,7 @@ func (e *Engine) runLevels(opts Options, reverse bool, action nodeAction, afterL
 			return markNotRun(runs, levels, li), err
 		}
 		mu.Lock()
-		snapshot := make(map[string]map[string]any, len(applied))
+		snapshot := make(map[string]exec.Outputs, len(applied))
 		for k, v := range applied {
 			snapshot[k] = v
 		}
@@ -123,7 +124,7 @@ func (e *Engine) runLevels(opts Options, reverse bool, action nodeAction, afterL
 				}
 
 				e.logger().Debug("running node", "node", name)
-				var outputs map[string]any
+				var outputs exec.Outputs
 				var status string
 				err := e.context().Err()
 				if err == nil {

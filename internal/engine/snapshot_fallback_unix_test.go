@@ -247,3 +247,55 @@ func TestResolveInputs_CancellationDoesNotUseSnapshot(t *testing.T) {
 		t.Fatalf("inputs = %v, error = %v, want cancellation without snapshot values", vars, err)
 	}
 }
+
+func TestResolveInputs_ReadsUpstreamOnceForMultipleInputs(t *testing.T) {
+	t.Setenv("TG_OUTPUT_LATER", "later")
+	e := loadFallbackEngine(t, false)
+	modulePath := filepath.Join(e.BaseDir, "module", "main.tf")
+	src, err := os.ReadFile(modulePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src = append(src, []byte("\nvariable \"second\" { default = \"\" }\n")...)
+	if err := os.WriteFile(modulePath, src, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	blueprintPath := filepath.Join(e.BaseDir, "blueprint.hcl")
+	src, err = os.ReadFile(blueprintPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src = append(src, []byte(`
+edge {
+ from = node.a.output.consumed
+ to = node.b.input.second
+}
+`)...)
+	if err := os.WriteFile(blueprintPath, src, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	e, err = Load(blueprintPath, e.Binary, e.Stdout, e.Stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		vars, err := e.resolveInputs("b", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := "first"
+		if i == 1 {
+			want = "later"
+		}
+		if vars["consumed"] != want || vars["second"] != want {
+			t.Fatalf("inputs = %v, want both inputs from the same %q read", vars, want)
+		}
+	}
+	calls, err := os.ReadFile(filepath.Join(e.dataDir("a"), "output-calls"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(calls)) != "2" {
+		t.Fatalf("output calls = %q, want one per input resolution", calls)
+	}
+}

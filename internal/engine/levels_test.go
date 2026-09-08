@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/cloudfluent/terragraph/internal/blueprint"
+	"github.com/cloudfluent/terragraph/internal/exec"
 	"github.com/cloudfluent/terragraph/internal/graph"
 	"github.com/cloudfluent/terragraph/internal/module"
 )
@@ -48,7 +49,7 @@ func TestRunLevels_RespectsParallelismCap(t *testing.T) {
 	e := newTestEngine([]string{"a", "b", "c", "d"}, nil)
 
 	var current, max int64
-	action := func(name string, applied map[string]map[string]any, out io.Writer) (map[string]any, string, error) {
+	action := func(name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
 		n := atomic.AddInt64(&current, 1)
 		for {
 			m := atomic.LoadInt64(&max)
@@ -77,7 +78,7 @@ func TestRunLevels_LevelIsABarrier(t *testing.T) {
 	e := newTestEngine([]string{"a", "b"}, []blueprint.Edge{orderEdge("a", "b")})
 
 	var aFinished atomic.Bool
-	action := func(name string, applied map[string]map[string]any, out io.Writer) (map[string]any, string, error) {
+	action := func(name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
 		if name == "a" {
 			time.Sleep(30 * time.Millisecond)
 			aFinished.Store(true)
@@ -99,7 +100,7 @@ func TestRunLevels_ErrorInLevelStopsNextLevel(t *testing.T) {
 	e := newTestEngine([]string{"a", "b", "c"}, []blueprint.Edge{orderEdge("a", "b")})
 
 	var bRan atomic.Bool
-	action := func(name string, applied map[string]map[string]any, out io.Writer) (map[string]any, string, error) {
+	action := func(name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
 		switch name {
 		case "c":
 			return nil, "", fmt.Errorf("boom")
@@ -121,11 +122,11 @@ func TestRunLevels_ErrorInLevelStopsNextLevel(t *testing.T) {
 func TestRunLevels_AppliedSnapshotPropagatesAcrossLevels(t *testing.T) {
 	e := newTestEngine([]string{"a", "b"}, []blueprint.Edge{orderEdge("a", "b")})
 
-	action := func(name string, applied map[string]map[string]any, out io.Writer) (map[string]any, string, error) {
+	action := func(name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
 		if name == "a" {
-			return map[string]any{"x": "from-a"}, "", nil
+			return exec.Outputs{"x": {Value: "from-a"}}, "", nil
 		}
-		if applied["a"]["x"] != "from-a" {
+		if applied["a"]["x"].Value != "from-a" {
 			return nil, "", fmt.Errorf("expected b to see a's output, got %v", applied["a"])
 		}
 		return nil, "", nil
@@ -141,7 +142,7 @@ func TestRunLevels_AfterLevelRunsOncePerLevel(t *testing.T) {
 	// levels: [a, c], [b] -> afterLevel should fire twice.
 
 	var calls int64
-	action := func(name string, applied map[string]map[string]any, out io.Writer) (map[string]any, string, error) {
+	action := func(name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
 		return nil, "", nil
 	}
 	afterLevel := func() error {
@@ -161,7 +162,7 @@ func TestRunLevels_AfterLevelErrorAbortsRun(t *testing.T) {
 	e := newTestEngine([]string{"a", "b"}, []blueprint.Edge{orderEdge("a", "b")})
 
 	var bRan atomic.Bool
-	action := func(name string, applied map[string]map[string]any, out io.Writer) (map[string]any, string, error) {
+	action := func(name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
 		if name == "b" {
 			bRan.Store(true)
 		}

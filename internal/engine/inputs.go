@@ -12,11 +12,14 @@ import (
 	ctyjson "github.com/zclconf/go-cty/cty/json"
 
 	"github.com/cloudfluent/terragraph/internal/blueprint"
+	"github.com/cloudfluent/terragraph/internal/exec"
 )
 
 // resolveInputs gathers the values for name's inputs (every data edge pointing at it, plus its own literal Vars), checking each one against the target variable's declared type. Sources are tried in a fixed order — outputs already captured earlier in the current run (keyed by node name), then that upstream node's own existing state read live — and only when the graph opted into snapshots and the live read failed, the node's published output snapshot as a last resort (see snapshot.go): never ahead of the live read, so stale snapshots cannot displace a successful live read.
-func (e *Engine) resolveInputs(name string, applied map[string]map[string]any) (map[string]any, error) {
+func (e *Engine) resolveInputs(name string, applied map[string]exec.Outputs) (map[string]any, error) {
 	vars := map[string]any{}
+	// Multiple edges from one upstream must share one live read so a state change cannot mix revisions within a node's inputs.
+	liveOutputs := make(map[string]exec.Outputs)
 
 	for _, edge := range e.Graph.Edges {
 		if !edge.IsDataEdge() || edge.To.Node != name {
@@ -25,8 +28,14 @@ func (e *Engine) resolveInputs(name string, applied map[string]map[string]any) (
 
 		outputs, ok := applied[edge.From.Node]
 		if !ok {
+			outputs, ok = liveOutputs[edge.From.Node]
+		}
+		if !ok {
 			live, err := e.runner(edge.From.Node).Outputs()
-			outputs = live.Values()
+			outputs = live
+			if err == nil {
+				liveOutputs[edge.From.Node] = live
+			}
 			if err != nil {
 				// Cancellation must not fall back to disk, where stale values can obscure the cause or block a run that is already stopping.
 				if cancelled := e.context().Err(); cancelled != nil {
@@ -41,7 +50,12 @@ func (e *Engine) resolveInputs(name string, applied map[string]map[string]any) (
 						if !e.snapshotOutputAllowed(edge.From.Node, edge.From.Name) || slices.Contains(snapshot.Withheld, edge.From.Name) {
 							return nil, fmt.Errorf("resolving %s: %s was withheld from output snapshots; sensitive outputs and outputs without verified sensitivity metadata cannot be reused; restore live upstream outputs or apply the upstream in this run: %w", edge.To, edge.From, err)
 						}
-						outputs = snapshot.Outputs
+						outputs = make(exec.Outputs, len(snapshot.Outputs))
+						// readSnapshot has already removed values without verified public metadata.
+						public := false
+						for name, value := range snapshot.Outputs {
+							outputs[name] = exec.Output{Value: value, Sensitive: &public}
+						}
 					}
 				}
 				if !found {
@@ -65,7 +79,7 @@ func (e *Engine) resolveInputs(name string, applied map[string]map[string]any) (
 			return nil, err
 		}
 
-		vars[edge.To.Name] = val
+		vars[edge.To.Name] = val.Value
 	}
 
 	// graph.Validate already rejects a variable set by both an edge and Vars as a structural error, but resolveInputs runs on whatever graph it's handed (e.g. in a future --node-scoped run that skips Validate), so it re-checks rather than trusting that pass ran first.
@@ -83,9 +97,11 @@ func (e *Engine) resolveInputs(name string, applied map[string]map[string]any) (
 }
 
 // checkType verifies a concrete value resolved from a data edge against the target variable's declared type constraint. See checkVarType, which does the actual check and is shared with a node's own literal Vars.
-func (e *Engine) checkType(edge blueprint.Edge, val any) error {
+func (e *Engine) checkType(edge blueprint.Edge, output exec.Output) error {
 	sourceSensitive := e.Graph.Nodes[edge.From.Node].Schema.OutputDetails[edge.From.Name].Sensitive
-	if err := e.checkVarType(edge.To.Node, edge.To.Name, val, sourceSensitive); err != nil {
+	// Runtime metadata survives live reads and level boundaries so static declarations cannot expose sensitive payloads through conversion errors.
+	sourceSensitive = sourceSensitive || output.Sensitive == nil || *output.Sensitive
+	if err := e.checkVarType(edge.To.Node, edge.To.Name, output.Value, sourceSensitive); err != nil {
 		return fmt.Errorf("value from %s: %w", edge.From, err)
 	}
 	return nil

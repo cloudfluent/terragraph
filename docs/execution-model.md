@@ -123,6 +123,8 @@ terragraph does not roll back completed changes. A failed apply may also have ch
 
 terragraph never generates or edits `.tf` files. It resolves incoming data edges and [literal `vars`](blueprint.md#literal-input-values-vars), writes an ephemeral JSON tfvars file, and passes it explicitly with `-var-file`. Each node also has an isolated `TF_DATA_DIR`, including nodes that share the same source directory, so backend initialization is separate for every node.
 
+A node resolving multiple inputs from the same upstream reuses one successful live output read for those inputs, so they cannot mix different state revisions. A subsequent input resolution reads live outputs again.
+
 The optional `tfvars` block chooses where resolved values live while the node runs:
 
 ```hcl
@@ -138,7 +140,7 @@ tfvars {
 
 The default avoids writing tfvars into module directories and works well for shared or vendored sources. With `module`, add `.terragraph.*.tfvars.json` to each module's `.gitignore`. Both locations contain cleartext inputs and are removed when the node finishes, including on failure. Unix files use mode `0600`; Windows tfvars use inherited filesystem permissions, without an explicit owner-only ACL. A crash or forced termination can leave files behind.
 
-terragraph's input encoding and type-checking errors omit value-derived details when the destination variable or inspected upstream output is declared sensitive. They still identify the node, input, and expected type. This also applies to JSON reports, but does not redact arbitrary Terraform/OpenTofu subprocess output.
+terragraph's input encoding and type-checking errors omit value-derived details, including object and map keys, when the destination variable or inspected upstream output is declared sensitive, or when the runtime output is sensitive or has missing or null sensitivity metadata. Runtime sensitivity is preserved both for live reads and for outputs produced earlier in the same run. Errors still identify the node, input, and expected type so you can check the value against the module's variable declaration. This also applies to JSON reports, but does not redact arbitrary Terraform/OpenTofu subprocess output.
 
 For a module declaring `backend "local"`, terragraph supplies an absolute state path at `<blueprint dir>/.terragraph/state/<node>.tfstate` unless the node or an enclosing `use` sets `backend_config.path`. A path written only in the module's backend block is overridden. Terraform writes the state there. When adopting terragraph for an existing local state, plan the backend migration per node before applying; pointing at a new empty state can propose recreating existing resources. `destroy` uses the last initialized backend, as described [above](#approval).
 
