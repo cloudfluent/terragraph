@@ -304,7 +304,7 @@ func newPlanCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fun
 	cmd.Flags().BoolVar(&save, "save", false, "save only the ready graph frontier for a later apply --plan")
 	cmd.Flags().StringVar(&continueID, "continue", "", "create the next frontier after applying this saved execution")
 	cmd.Flags().StringVar(&approve, "approve", "safe", "default policy to assess: none, safe, or all (does not authorize apply)")
-	cmd.AddCommand(newExecutionHistoryCmd("list", blueprintPath), newExecutionHistoryCmd("show", blueprintPath), newExecutionRecoveryCmd(blueprintPath, binaryOf, loggerOf))
+	cmd.AddCommand(newExecutionHistoryCmd("list", blueprintPath), newExecutionHistoryCmd("show", blueprintPath), newExecutionRecoveryCmd(blueprintPath, binaryOf, loggerOf), newExecutionCleanupCmd("cancel", blueprintPath), newExecutionCleanupCmd("prune", blueprintPath))
 	return cmd
 }
 

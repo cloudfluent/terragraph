@@ -33,11 +33,12 @@ type ExecutionRecord struct {
 
 // ExecutionNode separates successful mutation from output collection so failed post-processing cannot cause a blind replay.
 type ExecutionNode struct {
-	Name   string `json:"name"`
-	Target string `json:"target"`
-	Phase  string `json:"phase"`
-	PlanID string `json:"plan_id,omitempty"`
-	Code   string `json:"code,omitempty"`
+	Name   string      `json:"name"`
+	Review *PlanReview `json:"review,omitempty"`
+	Target string      `json:"target"`
+	Phase  string      `json:"phase"`
+	PlanID string      `json:"plan_id,omitempty"`
+	Code   string      `json:"code,omitempty"`
 }
 
 // executionSession publishes each transition before making its in-memory decision available to another node worker.
@@ -93,11 +94,25 @@ func (e *Engine) executionTarget(name string) (string, error) {
 	workspace, set := node.Env["TF_WORKSPACE"]
 	if !set {
 		workspace = os.Getenv("TF_WORKSPACE")
+		if workspace == "" {
+			data, err := os.ReadFile(filepath.Join(e.dataDir(name), "environment"))
+			if err != nil && !os.IsNotExist(err) {
+				return "", fmt.Errorf("node.%s: reading selected workspace: %w", name, err)
+			}
+			workspace = strings.TrimSpace(string(data))
+		}
 	}
 	if workspace == "" {
 		workspace = "default"
 	}
 	identity["workspace"] = workspace
+	if backend == "http" && identity["address"] == "" {
+		address, ok := node.Env["TF_HTTP_ADDRESS"]
+		if !ok {
+			address = os.Getenv("TF_HTTP_ADDRESS")
+		}
+		identity["address"] = address
+	}
 	return executionDigest(identity)
 }
 
@@ -179,24 +194,11 @@ func (e *Engine) beginExecution(operation string, names []string) (*executionSes
 	if err != nil {
 		return nil, err
 	}
-	keys, err := store.list(e.context())
-	if err != nil {
+	if err := e.checkExecutionBarrier(store, scope, ""); err != nil {
 		return nil, err
 	}
-	for _, key := range keys {
-		if !strings.HasPrefix(key, "run-") {
-			continue
-		}
-		old, _, err := readExecutionRecord(e.context(), store, strings.TrimSuffix(key, ".json"))
-		if err != nil {
-			return nil, err
-		}
-		if old.Scope != scope {
-			return nil, fmt.Errorf("execution storage is shared by different coordination scopes; configure the same graph lock or separate prefixes")
-		}
-		if executionNeedsRecovery(old) {
-			return nil, fmt.Errorf("execution %s has an unresolved mutation; inspect it with plan show and recover it before changing infrastructure", old.ID)
-		}
+	if _, err := e.pruneExecutions(store); err != nil {
+		return nil, err
 	}
 	now := time.Now().UTC()
 	record := ExecutionRecord{SchemaVersion: 1, ID: newExecutionID("run"), Scope: scope, Operation: operation, Status: "preparing", CreatedAt: now, UpdatedAt: now, Nodes: []ExecutionNode{}}
@@ -276,7 +278,13 @@ func (s *executionSession) finish(runErr error) error {
 	} else {
 		next.FinishedAt = &now
 	}
-	return s.publish(next)
+	if err := s.publish(next); err != nil {
+		return err
+	}
+	if err := s.engine.cleanupExecution(s.store, next); err != nil {
+		s.engine.logger().Warn("execution artifact cleanup deferred", "execution", next.ID, "error", err)
+	}
+	return nil
 }
 
 // ListExecutions is observational with respect to infrastructure, but retains local source coordination while reading protected records.
@@ -364,4 +372,41 @@ func (e *Engine) GetExecution(id string) (ExecutionRecord, error) {
 		return record, fmt.Errorf("execution %s belongs to a different coordination scope; restore the original lock configuration or use a dedicated prefix", id)
 	}
 	return record, nil
+}
+
+func (e *Engine) checkExecutionBarrier(store executionStore, scope, exceptID string) error {
+	keys, err := store.list(e.context())
+	if err != nil {
+		return err
+	}
+	for _, key := range keys {
+		if !strings.HasPrefix(key, "run-") || !strings.HasSuffix(key, ".json") {
+			continue
+		}
+		old, _, err := readExecutionRecord(e.context(), store, strings.TrimSuffix(key, ".json"))
+		if err != nil {
+			return err
+		}
+		if old.Scope != scope {
+			return fmt.Errorf("execution %s belongs to another coordination scope; configure the same graph lock or separate prefixes", old.ID)
+		}
+		if old.ID != exceptID && executionNeedsRecovery(old) {
+			return fmt.Errorf("execution %s has an unresolved mutation; inspect it with plan show and recover before changing infrastructure", old.ID)
+		}
+	}
+	return nil
+}
+
+func (s *executionSession) setReview(name string, review *PlanReview) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	next := s.record
+	next.Nodes = append([]ExecutionNode(nil), next.Nodes...)
+	for i := range next.Nodes {
+		if next.Nodes[i].Name == name {
+			next.Nodes[i].Review = review
+			return s.publish(next)
+		}
+	}
+	return fmt.Errorf("node.%s: absent from execution", name)
 }

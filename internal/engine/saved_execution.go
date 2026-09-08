@@ -34,18 +34,18 @@ func (e *Engine) SavePlans(opts Options, continueID string) (record ExecutionRec
 		return record, err
 	}
 	defer s.close()
-	defer func() {
-		if resultErr != nil {
-			resultErr = errors.Join(resultErr, s.finish(resultErr))
-		}
-		record = s.record
-	}()
 	if continueID != "" && opts.Node != "" {
 		return record, fmt.Errorf("--continue already fixes node selection; omit --node")
 	}
 	if s.record.Status != "preparing" && s.record.Status != "ready_for_next_plan" {
 		return record, fmt.Errorf("execution %s is %s; apply its pending plans or start a fresh execution", s.record.ID, s.record.Status)
 	}
+	defer func() {
+		if resultErr != nil {
+			resultErr = errors.Join(resultErr, s.finish(resultErr))
+		}
+		record = s.record
+	}()
 	binding, err := e.savedGraphBinding(s.record)
 	if err != nil {
 		return record, err
@@ -76,7 +76,7 @@ func (e *Engine) SavePlans(opts Options, continueID string) (record ExecutionRec
 		if !ready {
 			continue
 		}
-		if err := e.saveFrontierNode(s, node.Name); err != nil {
+		if err := e.saveFrontierNode(s, node.Name, opts); err != nil {
 			return record, err
 		}
 		count++
@@ -90,7 +90,7 @@ func (e *Engine) SavePlans(opts Options, continueID string) (record ExecutionRec
 	return next, s.publish(next)
 }
 
-func (e *Engine) saveFrontierNode(s *executionSession, name string) error {
+func (e *Engine) saveFrontierNode(s *executionSession, name string, opts Options) error {
 	vars, err := e.resolveLiveInputs(name)
 	if err != nil {
 		return err
@@ -130,7 +130,9 @@ func (e *Engine) saveFrontierNode(s *executionSession, name string) error {
 		return fmt.Errorf("node.%s: source inputs changed while planning; create a fresh plan", name)
 	}
 	// Native show validates the produced artifact before publishing it as reviewable, including no-change plans.
-	changes, err := r.PlanChangeSet(plan.path)
+	review := newPlanReview(e.approveFor(name, opts.Approve))
+	review.Limitations = []string{"only this ready frontier is saved; downstream nodes require a new plan after applying upstream"}
+	changes, err := r.PlanChangeSet(plan.path, &review.Outputs)
 	if err != nil {
 		return err
 	}
@@ -139,7 +141,12 @@ func (e *Engine) saveFrontierNode(s *executionSession, name string) error {
 	}
 	plan.binding = before
 	_, err = e.retainPlan(s, plan, vars)
-	return err
+	if err != nil {
+		return err
+	}
+	review.Resources = changes
+	review.normalize(plan.changed)
+	return s.setReview(name, review)
 }
 
 // ApplySavedPlans applies exactly the stored frontier and never plans or applies downstream nodes in the same invocation.
@@ -205,7 +212,10 @@ func (e *Engine) ApplySavedPlans(id string, opts Options) (runs []NodeRun, resul
 	if next.Status == "completed" {
 		next.FinishedAt = &now
 	}
-	return runs, s.publish(next)
+	if err := s.publish(next); err != nil {
+		return runs, err
+	}
+	return runs, e.cleanupExecution(s.store, next)
 }
 
 func (e *Engine) applySavedNode(s *executionSession, node ExecutionNode, opts Options) (string, error) {
@@ -233,6 +243,22 @@ func (e *Engine) applySavedNode(s *executionSession, node ExecutionNode, opts Op
 	if binding != bundle.Binding {
 		return "", fmt.Errorf("node.%s: source, runtime, paths, or inputs changed; create a fresh plan", node.Name)
 	}
+	if err := s.transition(node.Name, "initializing", "", ""); err != nil {
+		return "", err
+	}
+	if err := r.Init(e.Graph.Nodes[node.Name].BackendConfig); err != nil {
+		return "", s.fail(node.Name, "indeterminate", err)
+	}
+	if err := s.transition(node.Name, "planned", "", ""); err != nil {
+		return "", err
+	}
+	after, err := e.planBinding(node.Name, r, vars)
+	if err != nil {
+		return "", err
+	}
+	if after != bundle.Binding {
+		return "", fmt.Errorf("node.%s: runtime preparation changed plan bindings; create a fresh plan", node.Name)
+	}
 	path := e.planPath(node.Name)
 	cleanup, err := prepareSavedPlan(path)
 	if err != nil {
@@ -242,7 +268,7 @@ func (e *Engine) applySavedNode(s *executionSession, node ExecutionNode, opts Op
 	if err := os.WriteFile(path, bundle.Plan, 0600); err != nil {
 		return "", err
 	}
-	plan := &preparedNodePlan{name: node.Name, runner: r, path: path, changed: bundle.Changed, cleanup: cleanup, session: s}
+	plan := &preparedNodePlan{name: node.Name, runner: r, path: path, changed: bundle.Changed, cleanup: cleanup, session: s, verifyUnchanged: true}
 	_, status, err := e.applyPreparedPlan(plan, opts)
 	return status, err
 }
@@ -265,6 +291,10 @@ func (e *Engine) openSavedExecution(id string) (*executionSession, error) {
 	if record.Scope != scope || record.Operation != "saved_apply" || record.RecoveryAt != nil || executionNeedsRecovery(record) {
 		_ = store.close()
 		return nil, fmt.Errorf("execution cannot resume in its current scope or recovery status; inspect plan show")
+	}
+	if err := e.checkExecutionBarrier(store, scope, id); err != nil {
+		_ = store.close()
+		return nil, err
 	}
 	return &executionSession{engine: e, store: store, record: record, revision: revision}, nil
 }
