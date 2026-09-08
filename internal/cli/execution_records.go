@@ -9,10 +9,11 @@ import (
 )
 
 type executionNodeDTO struct {
-	Node   string `json:"node"`
-	Phase  string `json:"phase"`
-	PlanID string `json:"plan_id,omitempty"`
-	Code   string `json:"code,omitempty"`
+	Node   string         `json:"node"`
+	Review *planReviewDTO `json:"review,omitempty"`
+	Phase  string         `json:"phase"`
+	PlanID string         `json:"plan_id,omitempty"`
+	Code   string         `json:"code,omitempty"`
 }
 
 type executionDTO struct {
@@ -36,7 +37,7 @@ type executionHistoryDTO struct {
 func executionToDTO(record engine.ExecutionRecord) executionDTO {
 	dto := executionDTO{ID: record.ID, Preparation: record.Preparation, Operation: record.Operation, Status: record.Status, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt, FinishedAt: record.FinishedAt, RecoveryAt: record.RecoveryAt, Nodes: []executionNodeDTO{}}
 	for _, node := range record.Nodes {
-		dto.Nodes = append(dto.Nodes, executionNodeDTO{Node: node.Name, Phase: node.Phase, PlanID: node.PlanID, Code: node.Code})
+		dto.Nodes = append(dto.Nodes, executionNodeDTO{Node: node.Name, Review: reviewToDTO(node.Review), Phase: node.Phase, PlanID: node.PlanID, Code: node.Code})
 	}
 	return dto
 }

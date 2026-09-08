@@ -251,19 +251,31 @@ func validateRunArgs(cmd *cobra.Command, args []string) error {
 
 func newPlanCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf func() *slog.Logger) *cobra.Command {
 	var node, output, approve string
+	var save bool
+	var continueID string
 	var parallelism int
 	cmd := &cobra.Command{
 		Use:   "plan",
 		Short: "Review node plans, actions, approval policy, and evidence limitations",
 		RunE: func(cmd *cobra.Command, args []string) (resultErr error) {
 			var runs []engine.NodeRun
+			var savedRecord engine.ExecutionRecord
 			phase := "arguments"
-			defer func() { resultErr = finishPlan(cmd, output, runs, phase, resultErr) }()
+			defer func() {
+				if save {
+					resultErr = finishSavedExecution(cmd, output, savedRecord, resultErr)
+				} else {
+					resultErr = finishPlan(cmd, output, runs, phase, resultErr)
+				}
+			}()
 			if err := validateRunArgs(cmd, args); err != nil {
 				return err
 			}
 			if output != "text" && output != "json" {
 				return fmt.Errorf("unknown output %q (want text or json)", output)
+			}
+			if continueID != "" && !save {
+				return fmt.Errorf("--continue requires --save")
 			}
 			policy, policyErr := blueprint.ParseApprove(approve)
 			if policyErr != nil {
@@ -281,6 +293,10 @@ func newPlanCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fun
 			}
 			e.Stdout = cmd.ErrOrStderr()
 			phase = "prepare"
+			if save {
+				savedRecord, err = e.SavePlans(engine.Options{Node: node, Parallelism: parallelism, Approve: policy}, continueID)
+				return err
+			}
 			runs, err = e.ReviewPlan(engine.Options{Node: node, Parallelism: parallelism, Approve: policy}, output == "text")
 			return err
 		},
@@ -288,13 +304,17 @@ func newPlanCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fun
 	cmd.Flags().StringVar(&node, "node", "", "restrict to a single node")
 	cmd.Flags().IntVar(&parallelism, "parallelism", 1, "max nodes to run concurrently within one execution level")
 	cmd.Flags().StringVar(&output, "output", "text", "output format: text or json")
+	cmd.Flags().BoolVar(&save, "save", false, "save only the ready graph frontier for a later apply --plan")
+	cmd.Flags().StringVar(&continueID, "continue", "", "create the next frontier after applying this saved execution")
 	cmd.Flags().StringVar(&approve, "approve", "safe", "default policy to assess: none, safe, or all (does not authorize apply)")
-	cmd.AddCommand(newExecutionHistoryCmd("list", blueprintPath), newExecutionHistoryCmd("show", blueprintPath), newExecutionRecoveryCmd(blueprintPath, binaryOf, loggerOf))
+	cmd.AddCommand(newExecutionHistoryCmd("list", blueprintPath), newExecutionHistoryCmd("show", blueprintPath), newExecutionRecoveryCmd(blueprintPath, binaryOf, loggerOf), newExecutionCleanupCmd("cancel", blueprintPath), newExecutionCleanupCmd("prune", blueprintPath))
 	return cmd
 }
 
 func newApplyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf func() *slog.Logger) *cobra.Command {
 	var node string
+	var planID string
+	var retainPlan bool
 	var autoApprove bool
 	var parallelism int
 	var force bool
@@ -328,11 +348,22 @@ func newApplyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fu
 			if output == "json" {
 				e.Stdout = cmd.ErrOrStderr()
 			}
-			runs, err := e.Apply(engine.Options{Node: node, AutoApprove: autoApprove, Approve: level, Parallelism: parallelism})
+			opts := engine.Options{Node: node, AutoApprove: autoApprove, Approve: level, Parallelism: parallelism, RetainPlan: retainPlan}
+			var runs []engine.NodeRun
+			if planID != "" {
+				if retainPlan {
+					return fmt.Errorf("--plan already uses retained artifacts; omit --retain-plan")
+				}
+				runs, err = e.ApplySavedPlans(planID, opts)
+			} else {
+				runs, err = e.Apply(opts)
+			}
 			return finishRun(cmd, output, runs, err)
 		},
 	}
 	cmd.Flags().StringVar(&node, "node", "", "restrict to a single node")
+	cmd.Flags().StringVar(&planID, "plan", "", "apply the stored frontier of a saved execution without replanning")
+	cmd.Flags().BoolVar(&retainPlan, "retain-plan", false, "retain optional plan artifacts while ordinary apply continues")
 	cmd.Flags().BoolVar(&autoApprove, "auto-approve", false, "skip the interactive approval prompt")
 	cmd.Flags().StringVar(&approve, "approve", string(blueprint.ApproveSafe), "what a node may do without saying so per run: none, safe (create/update), or all (adds replace/delete); a node's own approve wins over this")
 	cmd.Flags().IntVar(&parallelism, "parallelism", 1, "max nodes to run concurrently within one execution level")

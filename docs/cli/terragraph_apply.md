@@ -15,6 +15,8 @@ terragraph apply [flags]
       --node string       restrict to a single node
       --output string     output format: text or json (default "text")
       --parallelism int   max nodes to run concurrently within one execution level (default 1)
+      --plan string       apply the stored frontier of a saved execution without replanning
+      --retain-plan       retain optional plan artifacts while ordinary apply continues
 ```
 
 ### Options inherited from parent commands

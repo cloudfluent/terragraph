@@ -10,10 +10,12 @@ terragraph plan [flags]
 
 ```
       --approve string    default policy to assess: none, safe, or all (does not authorize apply) (default "safe")
+      --continue string   create the next frontier after applying this saved execution
   -h, --help              help for plan
       --node string       restrict to a single node
       --output string     output format: text or json (default "text")
       --parallelism int   max nodes to run concurrently within one execution level (default 1)
+      --save              save only the ready graph frontier for a later apply --plan
 ```
 
 ### Options inherited from parent commands
@@ -27,6 +29,8 @@ terragraph plan [flags]
 ### SEE ALSO
 
 * [terragraph](terragraph.md)	 - Graph-based orchestration for independent Terraform/OpenTofu root modules
+* [terragraph plan cancel](terragraph_plan_cancel.md)	 - Cancel a paused execution without touching infrastructure
 * [terragraph plan list](terragraph_plan_list.md)	 - List execution records without reading infrastructure state
+* [terragraph plan prune](terragraph_plan_prune.md)	 - Remove eligible completed artifacts and expired terminal records
 * [terragraph plan recover](terragraph_plan_recover.md)	 - Recover outputs or retire an inspected uncertain attempt without replaying it
 * [terragraph plan show](terragraph_plan_show.md)	 - Show an execution's recorded phases without rerunning it

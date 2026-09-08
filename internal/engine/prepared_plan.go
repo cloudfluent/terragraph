@@ -9,12 +9,14 @@ import (
 
 // preparedNodePlan keeps the inspected bytes and runtime together so applying a plan cannot silently create a different one.
 type preparedNodePlan struct {
-	name    string
-	runner  *exec.Runner
-	path    string
-	changed bool
-	cleanup func()
-	session *executionSession
+	name            string
+	runner          *exec.Runner
+	path            string
+	changed         bool
+	cleanup         func()
+	session         *executionSession
+	binding         string
+	verifyUnchanged bool
 }
 
 func (e *Engine) prepareNodePlan(name string, runner *exec.Runner, args ...string) (*preparedNodePlan, error) {
@@ -34,7 +36,7 @@ func (e *Engine) prepareNodePlan(name string, runner *exec.Runner, args ...strin
 // applyPreparedPlan keeps policy, confirmation and post-apply reads identical for every producer of a prepared plan.
 func (e *Engine) applyPreparedPlan(plan *preparedNodePlan, opts Options) (exec.Outputs, string, error) {
 	name, out := plan.name, plan.runner.Stdout
-	if !plan.changed {
+	if !plan.changed && !plan.verifyUnchanged {
 		e.logger().Debug("plan reports no changes, skipping apply", "node", name)
 		_, _ = fmt.Fprintf(out, "node %s: unchanged, skipping apply\n", name)
 		outputs, err := plan.runner.Outputs()
