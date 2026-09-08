@@ -11,13 +11,13 @@ import (
 	"github.com/cloudfluent/terragraph/internal/module"
 )
 
-// Node is a blueprint node enriched with its module's real variable/output schema, read directly from its .tf files.
+// Node is a blueprint node enriched with its module's real variable/output schema, read directly from its runtime-selected configuration files.
 type Node struct {
 	blueprint.Node
 	Schema *module.Schema
 	// Dir is the resolved, absolute directory this node's Terraform files live in. For a node expanded from a group instance, this is relative to the group definition's own directory, not the outer blueprint's, so callers must use Dir directly rather than re-joining Node.Source against the outer blueprint directory.
 	Dir string
-	// Runtime is this node's fully resolved runtime declaration (see blueprint.Runtime), already following the blueprint.Node.Runtime -> enclosing blueprint.Use.Runtime cascade (see build). Nil means neither this node nor anything it's nested under ever named a runtime; engine.Engine.runtimeFor applies the remaining CLI/built-in fallback layers on top of that, which are not graph concerns.
+	// Runtime is this node's fully resolved runtime declaration (see blueprint.Runtime), already following the blueprint.Node.Runtime -> enclosing blueprint.Use.Runtime cascade (see build). Nil means neither this node nor anything it's nested under ever named a runtime; engine.Engine.runtimeFor applies the remaining CLI/built-in fallback layers on top of that, and Build uses those same fallbacks to select the static module files.
 	Runtime *blueprint.Runtime
 	// Env is this node's fully resolved extra environment variables (see blueprint.Node.Env), already merged with whatever an enclosing blueprint.Use.Env cascade contributed (see build). Nil/empty means nothing anywhere in this node's chain ever set one.
 	Env map[string]string
@@ -82,9 +82,16 @@ func mergeEnv(base, override map[string]string) map[string]string {
 	return merged
 }
 
-// Build resolves a blueprint into a Graph, recursively expanding any group instantiations (`use` blocks). baseDir is the directory the blueprint file lives in and must be absolute: it becomes the root every relative node/group source resolves against, directly or (for a node inside a group) transitively. Build fails fast if a node's source directory cannot be inspected (e.g. it doesn't exist); that is a structural problem, not something validate can usefully report alongside others.
-func Build(bp *blueprint.Blueprint, baseDir string) (*Graph, error) {
-	g, _, err := build(bp, baseDir, "", nil, nil, nil, "", &resolveContext{rootDir: baseDir})
+// Build resolves a blueprint into a Graph, recursively expanding any group instantiations (`use` blocks). baseDir is the directory the blueprint file lives in and must be absolute: it becomes the root every relative node/group source resolves against, directly or (for a node inside a group) transitively. cliBinary supplies the execution fallback (Terraform when omitted), below node/use/root-default choices, so static inspection reads the same declarations as execution. Build fails fast if a node's source directory cannot be inspected (e.g. it doesn't exist); that is a structural problem, not something validate can usefully report alongside others.
+func Build(bp *blueprint.Blueprint, baseDir string, cliBinary ...string) (*Graph, error) {
+	fallback := "terraform"
+	if len(cliBinary) > 0 && cliBinary[0] != "" {
+		fallback = cliBinary[0]
+	}
+	if rt, ok := bp.DefaultRuntime(); ok {
+		fallback = rt.Binary
+	}
+	g, _, err := build(bp, baseDir, "", nil, nil, nil, "", &resolveContext{rootDir: baseDir, fallbackBinary: fallback})
 	if g != nil {
 		g.Lock = bp.Lock
 		g.Snapshots = bp.Snapshots != nil && bp.Snapshots.Enabled
@@ -147,7 +154,16 @@ func build(bp *blueprint.Blueprint, baseDir, namespace string, ambient *blueprin
 				)
 			}
 		}
-		schema, err := rc.inspect(dir)
+		resolved := ambient
+		if n.Runtime != "" {
+			rt, _ := runtimeFor(n.Runtime)
+			resolved = &rt
+		}
+		binary := rc.fallbackBinary
+		if resolved != nil {
+			binary = resolved.Binary
+		}
+		schema, err := rc.inspect(dir, module.FileModeForBinary(binary))
 		if err != nil {
 			return nil, nil, fmt.Errorf("node %q: %w", n.Name, err)
 		}
@@ -155,11 +171,6 @@ func build(bp *blueprint.Blueprint, baseDir, namespace string, ambient *blueprin
 		qn.Name = qualify(n.Name)
 		qn.BackendConfig = fillLocalBackendPath(mergeEnv(ambientBackendConfig, qn.BackendConfig), schema, rc.rootDir, qn.Name)
 
-		resolved := ambient
-		if n.Runtime != "" {
-			rt, _ := runtimeFor(n.Runtime)
-			resolved = &rt
-		}
 		env := mergeEnv(ambientEnv, n.Env)
 
 		// Approve replaces rather than merges, like Runtime: a level is one choice, and the most specific scope that made it wins.

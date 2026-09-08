@@ -153,7 +153,7 @@ func load(blueprintPath string, binary exec.Binary, stdout, stderr io.Writer, ta
 		}
 	}
 
-	g, err := graph.Build(bp, baseDir)
+	g, err := graph.Build(bp, baseDir, string(binary))
 	if err != nil {
 		if lock != nil {
 			_ = lock.Close()

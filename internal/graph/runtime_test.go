@@ -179,3 +179,56 @@ use "g" {
 		t.Fatalf("expected the group's own default runtime to never apply automatically, got %+v", rt)
 	}
 }
+
+func TestBuild_RuntimeFileSelectionFollowsFullCascade(t *testing.T) {
+	root := t.TempDir()
+	writeFixtureFile(t, filepath.Join(root, "module", "main.tf"), "terraform {\nbackend \"local\" {}\n}\noutput \"terraform\" { value = 1 }")
+	writeFixtureFile(t, filepath.Join(root, "module", "main.tofu"), "terraform {\nbackend \"local\" {}\n}\noutput \"tofu\" { value = 1 }")
+	writeFixtureFile(t, filepath.Join(root, "group", "group.hcl"), `
+runtime "own" {
+ binary = "terraform"
+ default = true
+}
+group "g" {
+ node "explicit" {
+  source = "../module"
+  runtime = runtime.own
+ }
+ node "inherited" { source = "../module" }
+}
+`)
+	writeFixtureFile(t, filepath.Join(root, "blueprint.hcl"), `
+runtime "root" {
+ binary = "terraform"
+ default = true
+}
+runtime "tofu" { binary = "tofu" }
+node "explicit" {
+ source = "./module"
+ runtime = runtime.tofu
+}
+node "defaulted" { source = "./module" }
+use "g" {
+ as = "overridden"
+ source = "./group"
+ runtime = runtime.tofu
+}
+use "g" {
+ as = "defaulted"
+ source = "./group"
+}
+`)
+	bp, dir, err := blueprint.LoadPath(filepath.Join(root, "blueprint.hcl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, err := Build(bp, dir, "tofu")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{"explicit": "tofu", "defaulted": "terraform", "overridden.explicit": "terraform", "overridden.inherited": "tofu", "defaulted.explicit": "terraform", "defaulted.inherited": "terraform"} {
+		if schema := g.Nodes[name].Schema; !schema.HasOutput(want) || len(schema.Outputs) != 1 {
+			t.Fatalf("node %s outputs = %v, want only %q", name, schema.Outputs, want)
+		}
+	}
+}
