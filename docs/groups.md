@@ -73,6 +73,8 @@ use "eks-service" {
 
 Unlike `runtime`, this merges rather than replaces: an internal node that sets its own `env` only overrides the specific keys it names, still inheriting anything else the instance's `env` contributed. Nesting works the same way `runtime` does, layer by layer: an inner `use` block's own `env` merges over whatever it inherited from an outer one before passing the result down further.
 
+`TF_DATA_DIR` is reserved for terragraph's per-node backend isolation and cannot appear in any `use` or node `env`, regardless of case. Remove the entry rather than setting it to an empty string; see the [environment rules](blueprint.md#extra-environment-variables-per-node-env).
+
 ## Setting literal inputs for an instance
 
 A `use` block can set `vars` (see [blueprint.md](blueprint.md#literal-input-values-vars)) to fill this instance's public inputs with literal values. Keys are **export input names**, not internal `node.input` paths: the group author still decides what is public.

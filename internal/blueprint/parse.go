@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/hashicorp/hcl/v2"
@@ -780,9 +781,25 @@ func parseBackendConfig(attr *hcl.Attribute) (map[string]string, error) {
 	return parseStringMapAttr(attr, "backend_config")
 }
 
-// parseEnvAttr evaluates the optional env attribute (see Node.Env/Use.Env), an object/map of environment variable name to value.
+// parseEnvAttr rejects managed keys before expansion or execution so an inherited use env cannot collapse multiple nodes onto one backend cache.
 func parseEnvAttr(attr *hcl.Attribute) (map[string]string, error) {
-	return parseStringMapAttr(attr, "env")
+	env, err := parseStringMapAttr(attr, "env")
+	if err != nil {
+		return nil, err
+	}
+	keys := make([]string, 0, len(env))
+	for key := range env {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		// Environment entries split at the first equals sign, so a quoted key cannot disguise a managed-variable override.
+		name, _, _ := strings.Cut(key, "=")
+		if strings.EqualFold(name, "TF_DATA_DIR") {
+			return nil, fmt.Errorf("%s: env.%s: TF_DATA_DIR is managed per node to isolate backend configuration; remove this env entry", attr.Range, key)
+		}
+	}
+	return env, nil
 }
 
 // parseStringMapAttr evaluates attr as an object/map of string keys to string values, the shape shared by backend_config and env. attrName only labels error messages with which attribute failed.

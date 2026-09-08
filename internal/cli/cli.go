@@ -94,7 +94,7 @@ func loadEngine(cmd *cobra.Command, blueprintPath *string, binaryOf func() exec.
 
 // loadLockedEngine is loadEngine after taking the blueprint process lock, so plan/apply/destroy inspect module files only once a concurrent vendor cannot rewrite them. The caller must invoke the returned func when the command ends.
 func loadLockedEngine(cmd *cobra.Command, blueprintPath *string, binaryOf func() exec.Binary, loggerOf func() *slog.Logger) (*engine.Engine, func(), error) {
-	e, unlock, err := engine.LoadLocked(*blueprintPath, binaryOf(), cmd.OutOrStdout(), cmd.ErrOrStderr())
+	e, unlock, err := engine.LoadLockedContext(cmd.Context(), *blueprintPath, binaryOf(), cmd.OutOrStdout(), cmd.ErrOrStderr())
 	if err != nil {
 		return nil, nil, err
 	}
@@ -103,6 +103,7 @@ func loadLockedEngine(cmd *cobra.Command, blueprintPath *string, binaryOf func()
 }
 
 func wireEngine(cmd *cobra.Command, e *engine.Engine, loggerOf func() *slog.Logger, blueprintPath string) {
+	e.Context = cmd.Context()
 	e.Stdin = cmd.InOrStdin()
 	e.Logger = loggerOf()
 	e.Logger.Debug("blueprint loaded", "path", blueprintPath, "nodes", len(e.Graph.Nodes))
