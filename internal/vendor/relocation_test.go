@@ -157,3 +157,65 @@ func TestAll_LegacySubdirWithDivergentTofuStateRefusesUpgrade(t *testing.T) {
 	assertExists(t, filepath.Join(dir, "backend.tofu"))
 	assertMissing(t, filepath.Join(dir, blueprint.VendoredSourceFilename))
 }
+
+func TestAll_PackagedSubdirStateRefusesChangingToRoot(t *testing.T) {
+	n, baseDir, dir := legacySubdirFixture(t, `output "id" { value = "legacy" }`)
+	manifestPath := filepath.Join(baseDir, "vendor.yaml")
+	results, err := All([]blueprint.Node{n}, baseDir, "vendor", manifestPath, Options{})
+	if err != nil || len(results) != 1 || results[0].Err != nil {
+		t.Fatalf("initial package vendor = %+v, %v", results, err)
+	}
+	moduleDir := filepath.Join(dir, "modules", "app")
+	state := filepath.Join(moduleDir, "terraform.tfstate")
+	mustWrite(t, state, `{"version":4}`)
+	before, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n.Source = strings.Replace(n.Source, "//modules/app", "", 1)
+	results, err = All([]blueprint.Node{n}, baseDir, "vendor", manifestPath, Options{})
+	if err != nil || len(results) != 1 || results[0].Err == nil || !strings.Contains(results[0].Err.Error(), "local state") {
+		t.Fatalf("results = %+v, err = %v, want packaged state refusal", results, err)
+	}
+	after, err := os.ReadFile(manifestPath)
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("manifest changed: %v", err)
+	}
+	after, err = os.ReadFile(state)
+	if err != nil || string(after) != `{"version":4}` {
+		t.Fatalf("state changed: %s, %v", after, err)
+	}
+	assertExists(t, filepath.Join(moduleDir, "main.tf"))
+	assertExists(t, filepath.Join(dir, blueprint.VendoredSourceFilename))
+}
+
+func TestAll_PackagedSubdirSiblingStateRefusesRefresh(t *testing.T) {
+	n, baseDir, dir := legacySubdirFixture(t, `terraform {
+   backend "local" {}
+ }`)
+	manifestPath := filepath.Join(baseDir, "vendor.yaml")
+	results, err := All([]blueprint.Node{n}, baseDir, "vendor", manifestPath, Options{})
+	if err != nil || len(results) != 1 || results[0].Err != nil {
+		t.Fatalf("initial package vendor = %+v, %v", results, err)
+	}
+	state := filepath.Join(dir, "state", "existing.json.backup")
+	mustWrite(t, state, `{"version":4}`)
+	n.BackendConfig = map[string]string{"path": strings.TrimSuffix(state, ".backup")}
+	before, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, err = All([]blueprint.Node{n}, baseDir, "vendor", manifestPath, Options{Force: true})
+	if err != nil || len(results) != 1 || results[0].Err == nil || !strings.Contains(results[0].Err.Error(), "local state") {
+		t.Fatalf("results = %+v, err = %v, want sibling state refusal", results, err)
+	}
+	after, err := os.ReadFile(manifestPath)
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("manifest changed: %v", err)
+	}
+	after, err = os.ReadFile(state)
+	if err != nil || string(after) != `{"version":4}` {
+		t.Fatalf("state changed: %s, %v", after, err)
+	}
+	assertExists(t, filepath.Join(dir, "modules", "app", "main.tf"))
+}

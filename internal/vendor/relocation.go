@@ -11,6 +11,7 @@ import (
 
 // checkSourceRelocation refuses to change a working directory while local state still depends on that directory; state is never moved by vendoring.
 func checkSourceRelocation(n blueprint.Node, dir string) error {
+	treeDir := dir
 	source, err := blueprint.ReadVendoredSource(dir)
 	if err != nil {
 		return err
@@ -42,7 +43,7 @@ func checkSourceRelocation(n blueprint.Node, dir string) error {
 			}
 		}
 	}
-	if err := checkLocalStatePath(n.Name, dir, path); err != nil {
+	if err := checkLocalStatePath(n.Name, dir, treeDir, path); err != nil {
 		return err
 	}
 	workspacePath := workspaceDir
@@ -57,7 +58,7 @@ func checkSourceRelocation(n blueprint.Node, dir string) error {
 		return fmt.Errorf("checking local workspaces before changing source directory: %w", err)
 	}
 	for _, entry := range entries {
-		if err := checkLocalStatePath(n.Name, dir, filepath.Join(workspaceDir, entry.Name(), "terraform.tfstate")); err != nil {
+		if err := checkLocalStatePath(n.Name, dir, treeDir, filepath.Join(workspaceDir, entry.Name(), "terraform.tfstate")); err != nil {
 			return err
 		}
 	}
@@ -65,7 +66,7 @@ func checkSourceRelocation(n blueprint.Node, dir string) error {
 }
 
 // checkLocalStatePath checks each existing backup independently because its primary state may no longer exist.
-func checkLocalStatePath(name, dir, path string) error {
+func checkLocalStatePath(name, dir, treeDir, path string) error {
 	relative := !filepath.IsAbs(path)
 	if relative {
 		path = filepath.Join(dir, path)
@@ -77,7 +78,7 @@ func checkLocalStatePath(name, dir, path string) error {
 			return fmt.Errorf("checking local state before changing source directory: %w", err)
 		}
 		if !relative {
-			within, err := pathWithin(dir, candidate)
+			within, err := pathWithin(treeDir, candidate)
 			if err != nil {
 				return fmt.Errorf("checking absolute local state before changing source directory: %w", err)
 			}

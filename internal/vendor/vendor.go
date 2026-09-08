@@ -84,7 +84,8 @@ func All(nodes []blueprint.Node, baseDir, vendorDir, manifestPath string, opts O
 			continue
 		}
 
-		if dstExists && (existingDir != dst || needsPackageLayout(n.Source, existingDir)) {
+		_, markerErr := os.Lstat(filepath.Join(existingDir, blueprint.VendoredSourceFilename))
+		if dstExists && (existingDir != dst || needsPackageLayout(n.Source, existingDir) || !os.IsNotExist(markerErr)) {
 			if err := checkSourceRelocation(n, existingDir); err != nil {
 				results = append(results, Result{Node: n.Name, Err: err})
 				continue
