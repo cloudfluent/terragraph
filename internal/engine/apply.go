@@ -114,9 +114,7 @@ func (e *Engine) Apply(opts Options) error {
 		if err != nil {
 			return nil, fmt.Errorf("reading outputs after apply: %w", err)
 		}
-		// Both exits that produce current reality publish the same snapshot
-		// (the unchanged branch does too), so nothing about the file reveals
-		// which path wrote it.
+		// Both exits that produce current reality publish the same snapshot (the unchanged branch does too), so nothing about the file reveals which path wrote it.
 		if err := e.writeSnapshot(name, outputs); err != nil {
 			return nil, err
 		}

@@ -177,10 +177,7 @@ type Lock struct {
 	S3 *S3Lock
 }
 
-// Snapshots is the `snapshots { }` block's parsed form: the opt-in gate for
-// output snapshots. v1's whole configuration is the block's presence, hence a
-// lone Enabled; a real knob arrives by widening the block's (deliberately
-// empty) body schema, not by adding fields nobody sets differently.
+// Snapshots is the `snapshots { }` block's parsed form: the opt-in gate for output snapshots. v1's whole configuration is the block's presence, hence a lone Enabled; a real knob arrives by widening the block's (deliberately empty) body schema, not by adding fields nobody sets differently.
 type Snapshots struct {
 	Enabled bool
 }
