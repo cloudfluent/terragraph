@@ -72,7 +72,7 @@ func contractProblems(g *Graph) []Problem {
 			}
 			v := schemaOwner.Schema.Variables[name]
 			c := dc.Consumer[name]
-			// C007: a variable's declared type constraint is the record; a consumer claiming a different type contradicts its own module. Both sides parsed (not string-compared) so spellings that normalize to one cty type agree; a variable with no constraint has nothing to contradict.
+			// C007: a consumer contract that its own module could never satisfy. Convertibility, not equality — a contract narrower than the variable (map(string) against map(any)) is a stricter promise, not a contradiction, and it is the only way to say so about a vendored module whose declaration cannot be edited. What stays an error is a genuine mismatch like string against number. Both sides are parsed rather than string-compared, so spellings that normalize to one cty type agree, and a variable with no constraint has nothing to contradict.
 			if c.Type != "" && v.Type != "" {
 				ct, err := parseCtyType(c.Type)
 				if err != nil {
@@ -84,8 +84,9 @@ func contractProblems(g *Graph) []Problem {
 					report("contract.[C007] consumer %s.input.%s: module type %v", dc.Scope, name, err)
 					continue
 				}
-				if !ct.Equals(mt) {
-					report("contract.[C007] consumer %s.input.%s claims type %s but the module declares %s; fix the contract — the module is the declaration of record", dc.Scope, name, c.Type, v.Type)
+				// Safe conversion, not unsafe: cty will coerce string to number unsafely, which is exactly the mismatch this code exists to catch, while map(string) into map(any) is safe and is the narrowing to allow. Identical types need no conversion at all, so Equals still has to be asked first.
+				if !ct.Equals(mt) && convert.GetConversion(ct, mt) == nil {
+					report("contract.[C007] consumer %s.input.%s claims type %s, which the module's declared %s can never accept; fix the contract — the module is the declaration of record", dc.Scope, name, c.Type, v.Type)
 				}
 			}
 			// C008: the input-side twin of C009 — explicit sensitive claim, either direction, against the variable's declared flag.
