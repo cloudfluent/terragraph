@@ -1,8 +1,10 @@
 # VS Code IntelliSense
 
-The Terragraph Blueprint extension gives `blueprint.hcl` and `group.hcl` language-server-backed editing. Install **Terragraph Blueprint** from the VS Code Marketplace and it works immediately.
+The Terragraph Blueprint extension gives Terragraph `.hcl` files language-server-backed editing, whatever their filenames. This includes split files such as `nodes.hcl`, `edges.hcl`, and `contracts.hcl`, as well as arbitrarily named files in group source directories. Open them with the **HCL** language mode. Install **Terragraph Blueprint** from the VS Code Marketplace to use these features.
 
 The extension bundles a compatible language server, so nothing here requires installing the `terragraph` CLI separately.
+
+The editor uses other `.hcl` files in the same directory as context, including unsaved changes in open files. To run a split blueprint through the CLI, use `--blueprint .`: the CLI's default still reads only `blueprint.hcl`. Editor support does not change [which files the CLI loads](blueprint.md#files-and-loading).
 
 ## Completion
 
@@ -69,7 +71,7 @@ Clearing the path goes back to the language server bundled with the extension.
 
 ## When completion doesn't appear
 
-1. Check the file is named `blueprint.hcl` or `group.hcl`.
+1. Check the file has a `.hcl` extension and the language mode in the status bar is **HCL**; its basename can be anything.
 2. Reload the window with the `Developer: Reload Window` command.
 3. Under **View: Output**, select the `Terragraph Blueprint` channel and look for a language server startup error.
 4. If you're developing, run `make build` in the repository root and restart the Extension Development Host.

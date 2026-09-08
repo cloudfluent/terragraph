@@ -27,11 +27,11 @@ Requires Go 1.27.1+ to build, and `terraform` or `tofu` on `PATH` to run.
 
 ## VS Code
 
-Install **Terragraph Blueprint** from the VS Code Marketplace to get completion, definition navigation, hover metadata, and validation for `blueprint.hcl` and `group.hcl`. The extension contains a matching language server, so editor features do not require a separate CLI installation. See [`editors/vscode`](editors/vscode) for source-development and override details.
+Install **Terragraph Blueprint** from the VS Code Marketplace to get completion with port metadata, definition navigation, and validation for Terragraph `.hcl` files opened as HCL, whatever their filenames. The extension contains a matching language server, so editor features do not require a separate CLI installation. See [`editors/vscode`](editors/vscode) for source-development and override details.
 
 ## Quick look
 
-A blueprint (`blueprint.hcl`) is a flat list of `node` and `edge` facts:
+A blueprint is a flat list of `node` and `edge` facts. Save this example as `blueprint.hcl`, the CLI's default path:
 
 ```hcl
 node "vpc" { source = "./stacks/vpc" }
@@ -48,6 +48,8 @@ terragraph apply --parallelism 2 --auto-approve
 ```
 
 `terragraph` resolves the graph, runs `terraform`/`tofu` for each node in dependency order, and passes `vpc`'s real `vpc_id` output into `eks`'s input at runtime. See [`examples/basic`](examples/basic) for this exact setup running end to end.
+
+Filenames are flexible: `--blueprint topology.hcl` reads that file alone, while `--blueprint .` merges every `.hcl` file directly in the current directory. Without the flag, only `blueprint.hcl` is read. A group's `group.hcl` filename is also a convention; groups are selected by their block names. See [file loading and a split blueprint example](docs/blueprint.md#files-and-loading) and [group source directories](docs/groups.md#source-directories-and-filenames).
 
 ## Documentation
 
