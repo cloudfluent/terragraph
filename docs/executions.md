@@ -12,7 +12,7 @@ Both commands only inspect stored records. They do not run Terraform/OpenTofu, r
 
 The record format has its own `schema_version: 1`. JSON results use explicit public fields; private coordination and target fingerprints are not included. An argument, configuration, or storage failure emits a diagnostic under `--output json` and exits nonzero. The existing node `status` command continues to observe Terraform state and does not read execution history.
 
-This interface introduces record storage and inspection. Existing ordinary `apply` still uses its temporary runtime plan; durable recording and retained-plan execution are separate command integrations.
+Ordinary `apply` and `destroy` now record their attempts by default. Ordinary `apply` still uses a temporary runtime plan and does not package or upload a retained plan bundle. Failure to publish a required transition prevents the next mutation. Unresolved mutations block subsequent apply and destroy commands sharing this store.
 
 ## Storage configuration
 
@@ -60,3 +60,23 @@ Local data is written to a private pending file, flushed, and renamed before pub
 - `indeterminate` means the runtime result cannot establish the full effect of the operation.
 
 A record with an unresolved mutation is `needs_recovery`, not an ordinary retry instruction. Do not reapply a saved plan merely because a previous process exited or a record has no completion timestamp. Infrastructure changes and recording their outcome are not a single transaction.
+
+## Recovery
+
+First inspect `plan show <run-id>` and verify that the previous process or CI job has stopped. A timeout or released graph lock alone is insufficient. Never force-unlock a live executor.
+
+When the record says `applied`, retry only output collection:
+
+```sh
+terragraph plan recover <run-id> --confirm-stopped
+```
+
+This checks the configured target and reads outputs without init, plan, or apply. Restore the original backend configuration if it changed. It does not automatically start downstream nodes.
+
+When the outcome is unknown, inspect the real backend state and affected resources using your normal runtime/backend tools. After reconciling any partial changes, explicitly retire the attempt:
+
+```sh
+terragraph plan recover <run-id> --confirm-stopped --state-reviewed --replan
+```
+
+The command preserves the original node outcome, records recovery separately, and requires a fresh plan. It does not label an unknown operation successful, roll back changes, release native state locks, or prove what an external writer did. The acknowledgements are operator assertions, not automated verification. The replan path remains available with missing module sources so damaged checkouts cannot permanently hide recovery metadata.
