@@ -190,6 +190,50 @@ func TestServe_GroupExportEditsRefreshConsumerDiagnostics(t *testing.T) {
 	}
 }
 
+func TestServe_RuntimeOverlayRefreshesPortsAndDiagnostics(t *testing.T) {
+	dir := t.TempDir()
+	protocolFile(t, filepath.Join(dir, "m", "main.tf"), "variable \"tf_id\" {}\noutput \"tf_id\" { value = \"tf\" }")
+	protocolFile(t, filepath.Join(dir, "m", "main.tofu"), "variable \"tofu_id\" {}\noutput \"tofu_id\" { value = \"tofu\" }")
+	runtimePath := filepath.Join(dir, "z-runtime.hcl")
+	runtimeText := "runtime \"tool\" {\n binary = \"terraform\"\n default = true\n}"
+	protocolFile(t, runtimePath, runtimeText)
+	declaration := uri.File(runtimePath)
+	document := uri.File(filepath.Join(dir, "blueprint.hcl"))
+	text := "node \"a\" { source = \"./m\" }\nedge {\n from = node.a.output.tofu_id\n to = node.a.input.tofu_id\n}"
+	ctx, remote, client, _ := startProtocol(t)
+	if err := remote.DidOpen(ctx, &protocol.DidOpenTextDocumentParams{TextDocument: protocol.TextDocumentItem{URI: declaration, Text: runtimeText, Version: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	_ = waitDiagnostics(t, ctx, client, declaration)
+	if err := remote.DidOpen(ctx, &protocol.DidOpenTextDocumentParams{TextDocument: protocol.TextDocumentItem{URI: document, Text: text, Version: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := waitDiagnostics(t, ctx, client, document); len(got) != 2 {
+		t.Fatalf("Terraform diagnostics = %#v, want two unknown ports", got)
+	}
+	changed := strings.Replace(runtimeText, "terraform", "tofu", 1)
+	if err := remote.DidChange(ctx, &protocol.DidChangeTextDocumentParams{TextDocument: protocol.VersionedTextDocumentIdentifier{URI: declaration, Version: 2}, ContentChanges: []protocol.TextDocumentContentChangeEvent{&protocol.TextDocumentContentChangeWholeDocument{Text: changed}}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := waitDiagnostics(t, ctx, client, document); len(got) != 0 {
+		t.Fatalf("OpenTofu diagnostics = %#v, want none", got)
+	}
+	result, err := remote.Completion(ctx, &protocol.CompletionParams{TextDocumentPositionParams: protocol.TextDocumentPositionParams{TextDocument: protocol.TextDocumentIdentifier{URI: document}, Position: protocol.Position{Line: 2, Character: uint32(len(" from = node.a.output."))}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, ok := result.(protocol.CompletionItemSlice)
+	if !ok || len(items) != 1 || items[0].Label != "tofu_id" {
+		t.Fatalf("completion = %#v, want tofu_id", result)
+	}
+	if err := remote.DidClose(ctx, &protocol.DidCloseTextDocumentParams{TextDocument: protocol.TextDocumentIdentifier{URI: declaration}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := waitDiagnostics(t, ctx, client, document); len(got) != 2 {
+		t.Fatalf("closed runtime overlay diagnostics = %#v, want Terraform ports restored", got)
+	}
+}
+
 func TestServe_ShutdownThenExitStopsWithoutClientEOF(t *testing.T) {
 	ctx, remote, _, done := startProtocol(t)
 	if err := remote.Shutdown(ctx); err != nil {

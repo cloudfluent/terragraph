@@ -129,24 +129,47 @@ type portMeta struct {
 
 func (w *Workspace) model(path string, text []byte) workspaceModel {
 	m := newWorkspaceModel()
-	for _, candidate := range w.blueprintFiles(path) {
+	files := w.blueprintFiles(path)
+	bodies := make(map[string]*hclsyntax.Body, len(files))
+	runtimes := make(map[string]module.FileMode)
+	defaultMode, defaults := module.TerraformFiles, 0
+	// Runtime declarations may follow their nodes or live in an unsaved sibling, so collect them before inspecting any source.
+	for _, candidate := range files {
 		contents := w.document(candidate)
 		if candidate == path {
 			contents = text
 		}
-		w.addFileToModel(&m, candidate, contents)
+		file, _ := hclsyntax.ParseConfig(contents, candidate, hcl.InitialPos)
+		body, ok := file.Body.(*hclsyntax.Body)
+		if !ok {
+			continue
+		}
+		bodies[candidate] = body
+		for _, block := range body.Blocks {
+			if block.Type != "runtime" || len(block.Labels) != 1 {
+				continue
+			}
+			mode := module.FileModeForBinary(literalAttribute(block, "binary"))
+			runtimes[block.Labels[0]] = mode
+			if attr := block.Body.Attributes["default"]; attr != nil {
+				value, diags := attr.Expr.Value(nil)
+				if !diags.HasErrors() && value.IsKnown() && !value.IsNull() && value.Type() == cty.Bool && value.True() {
+					defaultMode = mode
+					defaults++
+				}
+			}
+		}
+	}
+	if defaults > 1 {
+		defaultMode = module.UnknownFiles
+	}
+	for _, candidate := range files {
+		if body := bodies[candidate]; body != nil {
+			w.addBodyToModel(&m, candidate, body, runtimes, defaultMode)
+		}
 	}
 	m.runtimes = uniqueSorted(m.runtimes)
 	return m
-}
-
-func (w *Workspace) addFileToModel(m *workspaceModel, path string, text []byte) {
-	file, _ := hclsyntax.ParseConfig(text, path, hcl.InitialPos)
-	body, ok := file.Body.(*hclsyntax.Body)
-	if !ok {
-		return
-	}
-	w.addBodyToModel(m, path, body)
 }
 
 func newWorkspaceModel() workspaceModel {
@@ -168,13 +191,14 @@ func (m workspaceModel) at(text []byte, offset int) workspaceModel {
 	return m
 }
 
-func (w *Workspace) addBodyToModel(m *workspaceModel, path string, body *hclsyntax.Body) {
+func (w *Workspace) addBodyToModel(m *workspaceModel, path string, body *hclsyntax.Body, runtimes map[string]module.FileMode, fallback module.FileMode) {
 	for _, block := range body.Blocks {
 		switch block.Type {
 		case "group":
 			if len(block.Labels) == 1 {
 				group := newWorkspaceModel()
-				w.addBodyToModel(&group, path, block.Body)
+				// A group inherits its runtime at the use site, never from a default-marked declaration in its source directory.
+				w.addBodyToModel(&group, path, block.Body, runtimes, module.UnknownFiles)
 				m.groups[block.Labels[0]] = &group
 			}
 		case "node":
@@ -182,7 +206,7 @@ func (w *Workspace) addBodyToModel(m *workspaceModel, path string, body *hclsynt
 				continue
 			}
 			if source := literalAttribute(block, "source"); source != "" {
-				m.nodes[block.Labels[0]] = inspectPorts(filepath.Dir(path), source)
+				m.nodes[block.Labels[0]] = inspectPorts(filepath.Dir(path), source, nodeFileMode(block, runtimes, fallback))
 			} else {
 				m.nodes[block.Labels[0]] = ports{}
 			}
@@ -202,11 +226,27 @@ func (w *Workspace) addBodyToModel(m *workspaceModel, path string, body *hclsynt
 	}
 }
 
-func inspectPorts(base, source string) ports {
+func nodeFileMode(block *hclsyntax.Block, runtimes map[string]module.FileMode, fallback module.FileMode) module.FileMode {
+	attr := block.Body.Attributes["runtime"]
+	if attr == nil {
+		return fallback
+	}
+	traversal, diags := hcl.AbsTraversalForExpr(attr.Expr)
+	if !diags.HasErrors() && len(traversal) == 2 && traversal.RootName() == "runtime" {
+		if name, ok := traversal[1].(hcl.TraverseAttr); ok {
+			if mode, exists := runtimes[name.Name]; exists {
+				return mode
+			}
+		}
+	}
+	return module.UnknownFiles
+}
+
+func inspectPorts(base, source string, mode module.FileMode) ports {
 	if blueprint.IsRemote(source) {
 		return ports{}
 	}
-	schema, err := module.Inspect(filepath.Join(base, source))
+	schema, err := module.Inspect(filepath.Join(base, source), mode)
 	if err != nil {
 		return ports{}
 	}
