@@ -7,12 +7,14 @@
 ## Validation
 
 `terragraph validate` (and `graph`/`plan`/`apply`/`destroy`, which run it first) reports two severities:
-- **Error**: blocks the command (a `from`/`to` referencing a port that doesn't exist, two data edges targeting the same input after group expansion even when they are exact duplicates, a data edge and `vars` both setting the same input, a cycle, a value that doesn't fit the target variable's declared type, `backend_config` set on a module with no `backend` block, two nodes sharing a module directory with identical `backend_config` maps).
+- **Error**: blocks the command (a `from`/`to` referencing a port that doesn't exist, two data edges targeting the same input after group expansion even when they are exact duplicates, a data edge and `vars` both setting the same input, a cycle, `backend_config` set on a module with no `backend` block, two nodes sharing a module directory with identical `backend_config` maps).
 - **Warning**: printed but never blocks. A required variable with no edge feeding it may legitimately come from that module's own `terraform.tfvars` or the environment, outside the blueprint entirely; so may a `.terragraph/state/<name>.tfstate` file left behind by a node that's since been renamed or removed (see below).
 
 Cycle detection reports every independent cyclic cluster in one pass (Tarjan's SCC algorithm), not just the first one found.
 
-Type checking runs when inputs are resolved for execution. terragraph decodes each concrete value and uses cty's type conversion and optional attribute defaults to check whether the target variable's declared type can accept it. This accepts `any`, convertible `map(any)` values, optional object attributes with defaults, and additional object attributes. The original input is passed unchanged in the tfvars file: Terraform/OpenTofu performs the final conversion, applies variable defaults and nullability rules, and evaluates variable validation blocks.
+Concrete values from both `vars` and data edges are type-checked while resolving a node's inputs for `plan`, `apply`, or `destroy`, not by `terragraph validate`.
+
+terragraph decodes each concrete value and uses cty's type conversion and optional attribute defaults to check whether the target variable's declared type can accept it. This accepts `any`, convertible `map(any)` values, optional object attributes with defaults, and additional object attributes. The original input is passed unchanged in the tfvars file: Terraform/OpenTofu performs the final conversion, applies variable defaults and nullability rules, and evaluates variable validation blocks.
 
 ## How values are passed
 
