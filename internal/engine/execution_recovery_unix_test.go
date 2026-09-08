@@ -93,3 +93,38 @@ func TestRecoverExecution_UnknownRequiresInspectionAndPreservesOutcome(t *testin
 	}
 	next.close()
 }
+
+func TestRecoverExecution_MixedUnknownDoesNotHideAppliedSibling(t *testing.T) {
+	e, _, _ := loadApplyTestEngine(t)
+	if _, err := e.Apply(Options{AutoApprove: true}); err != nil {
+		t.Fatal(err)
+	}
+	peer := *e.Graph.Nodes["cached"]
+	peer.Name = "peer"
+	e.Graph.Nodes["peer"] = &peer
+	s, err := e.beginExecution("apply", []string{"cached", "peer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.transition("cached", "applied", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.transition("peer", "indeterminate", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.finish(errors.New("partial failure")); err != nil {
+		t.Fatal(err)
+	}
+	id := s.record.ID
+	s.close()
+	if _, err := e.RecoverExecution(id, true, false, false); err == nil {
+		t.Fatal("unknown sibling was cleared")
+	}
+	record, err := e.GetExecution(id)
+	if err != nil || record.Nodes[0].Phase != "completed" || record.Nodes[1].Phase != "indeterminate" || record.RecoveryAt != nil {
+		t.Fatalf("got = %+v, %v", record, err)
+	}
+	if _, err := e.beginExecution("apply", []string{"cached"}); err == nil {
+		t.Fatal("partial recovery released barrier")
+	}
+}

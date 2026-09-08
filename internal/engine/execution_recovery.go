@@ -1,12 +1,13 @@
 package engine
 
 import (
+	"errors"
 	"fmt"
 	"time"
 )
 
 // RecoverExecution either retries only output collection or retires an uncertain attempt after an operator has inspected actual state; it never replays a mutation.
-func (e *Engine) RecoverExecution(id string, confirmStopped, stateReviewed, replan bool) (ExecutionRecord, error) {
+func (e *Engine) RecoverExecution(id string, confirmStopped, stateReviewed, replan bool, initializeBackend ...bool) (ExecutionRecord, error) {
 	if !confirmStopped {
 		return ExecutionRecord{}, fmt.Errorf("recovery requires --confirm-stopped after verifying the previous executor has stopped")
 	}
@@ -53,34 +54,36 @@ func (e *Engine) RecoverExecution(id string, confirmStopped, stateReviewed, repl
 		}
 		return session.record, nil
 	}
+	var issues []error
+	if record.Preparation != "" {
+		issues = append(issues, fmt.Errorf("backend preparation outcome is unknown; inspect state and use --state-reviewed --replan"))
+	}
 	for _, node := range record.Nodes {
 		switch node.Phase {
 		case "initializing", "applying", "operating", "indeterminate":
-			return ExecutionRecord{}, fmt.Errorf("node.%s: mutation outcome is unknown; inspect actual state, then use --state-reviewed --replan to retire this attempt and create a fresh plan", node.Name)
+			issues = append(issues, fmt.Errorf("node.%s: mutation outcome is unknown; inspect actual state, then use --state-reviewed --replan", node.Name))
 		case "applied":
 			target, err := e.executionTarget(node.Name)
 			if err != nil {
-				return ExecutionRecord{}, err
+				issues = append(issues, err)
+				continue
 			}
 			if target != node.Target {
-				return ExecutionRecord{}, fmt.Errorf("node.%s: backend target changed; restore the original configuration before collecting outputs", node.Name)
+				issues = append(issues, fmt.Errorf("node.%s: backend target changed; restore the original configuration", node.Name))
+				continue
+			}
+			allowInit := len(initializeBackend) > 0 && initializeBackend[0]
+			if err := e.recoverNodeOutputs(session, node.Name, allowInit); err != nil {
+				issues = append(issues, err)
+				continue
+			}
+			if err := session.transition(node.Name, "completed", "outputs_recovered", ""); err != nil {
+				return session.record, err
 			}
 		}
 	}
-	for _, node := range record.Nodes {
-		if node.Phase != "applied" {
-			continue
-		}
-		outputs, err := e.runner(node.Name).Outputs()
-		if err != nil {
-			return ExecutionRecord{}, fmt.Errorf("node.%s: reading outputs without reapplying: %w", node.Name, err)
-		}
-		if err := e.writeSnapshot(node.Name, outputs); err != nil {
-			return ExecutionRecord{}, err
-		}
-		if err := session.transition(node.Name, "completed", "outputs_recovered", ""); err != nil {
-			return ExecutionRecord{}, err
-		}
+	if len(issues) > 0 {
+		return session.record, errors.Join(issues...)
 	}
 	// Unstarted downstream work still needs a new plan, even when all known mutations have now been post-processed.
 	now := time.Now().UTC()
