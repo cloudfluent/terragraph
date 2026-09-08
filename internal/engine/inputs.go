@@ -57,11 +57,13 @@ func (e *Engine) resolveInputsWithBasis(name string, applied map[string]exec.Out
 				if cancelled := e.context().Err(); cancelled != nil {
 					return nil, fmt.Errorf("resolving %s: %w", edge.To, cancelled)
 				}
-				if basis != nil && !e.Graph.Snapshots {
+				if !e.Graph.Snapshots {
 					if path, known := graph.LocalStatePath(e.Graph.Nodes[edge.From.Node]); known {
-						if _, err := os.Stat(path); os.IsNotExist(err) {
-							*basis = append(*basis, InputBasis{Input: edge.To.Name, Node: edge.From.Node, Output: edge.From.Name, Source: "unavailable"})
-							return nil, fmt.Errorf("node.%s.input.%s: %w from node %s; recover existing local state or apply the upstream first", name, edge.To.Name, errUpstreamOutputMissing, edge.From.Node)
+						if _, stateErr := os.Stat(path); os.IsNotExist(stateErr) {
+							if basis != nil {
+								*basis = append(*basis, InputBasis{Input: edge.To.Name, Node: edge.From.Node, Output: edge.From.Name, Source: "unavailable"})
+							}
+							return nil, fmt.Errorf("resolving %s: reading existing outputs from upstream node %q failed: %w; %w because local state is missing; recover existing local state or apply the upstream first", edge.To, edge.From.Node, err, errUpstreamOutputMissing)
 						}
 					}
 				}

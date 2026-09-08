@@ -3,8 +3,10 @@
 package engine
 
 import (
+	"errors"
 	"io"
 	"os"
+	osexec "os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -230,5 +232,34 @@ func TestReviewPlan_InspectionFailureRemovesPlan(t *testing.T) {
 	}
 	if _, err := os.Stat(e.planPath("created")); !os.IsNotExist(err) {
 		t.Fatal("failed inspection retained sensitive plan")
+	}
+}
+
+func TestApply_MissingUpstreamStatePreservesReadFailure(t *testing.T) {
+	e := reviewFixture(t, reviewNode("created")+reviewNode("consumer")+"edge {\n from = node.created.output.id\n to = node.consumer.input.input\n}\n")
+	t.Setenv("TG_REVIEW_OUTPUT_FAIL", "1")
+	_, err := e.Apply(Options{Node: "consumer", AutoApprove: true})
+	assertMissingUpstreamState(t, e, err)
+}
+
+func TestDestroy_MissingUpstreamStatePreservesReadFailure(t *testing.T) {
+	e := reviewFixture(t, reviewNode("created")+reviewNode("consumer")+"edge {\n from = node.created.output.id\n to = node.consumer.input.input\n}\n")
+	t.Setenv("TG_REVIEW_OUTPUT_FAIL", "1")
+	_, err := e.Destroy(Options{Node: "consumer", AutoApprove: true})
+	assertMissingUpstreamState(t, e, err)
+}
+
+func assertMissingUpstreamState(t *testing.T, e *Engine, err error) {
+	t.Helper()
+	var runtimeError *osexec.ExitError
+	if !errors.Is(err, errUpstreamOutputMissing) || !errors.As(err, &runtimeError) || !strings.Contains(err.Error(), "recover existing local state") {
+		t.Fatalf("got = %v, want missing-state classification, original runtime cause, and remedy", err)
+	}
+	calls, readErr := os.ReadFile(filepath.Join(e.BaseDir, "calls"))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if strings.Contains(string(calls), "consumer apply") || strings.Contains(string(calls), "consumer destroy") {
+		t.Fatalf("unavailable inputs reached a mutation: %s", calls)
 	}
 }
