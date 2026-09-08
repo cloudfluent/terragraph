@@ -11,7 +11,7 @@ terragraph vendor [flags]
 ```
       --force           re-fetch even if already vendored
   -h, --help            help for vendor
-      --node string     restrict to a single node
+      --node string     restrict to one qualified leaf node (for example prod.vpc)
       --output string   output format: text or json (default "text")
 ```
 

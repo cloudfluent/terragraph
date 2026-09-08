@@ -11,9 +11,19 @@ import (
 
 // checkSourceRelocation refuses to change a working directory while local state still depends on that directory; state is never moved by vendoring.
 func checkSourceRelocation(n blueprint.Node, dir string) error {
+	source, err := blueprint.ReadVendoredSource(dir)
+	if err != nil {
+		return err
+	}
+	if source != nil {
+		dir, err = source.Directory(dir)
+		if err != nil {
+			return err
+		}
+	}
 	schema, err := module.Inspect(dir, module.UnknownFiles)
 	if err != nil {
-		return fmt.Errorf("checking existing module before changing its directory: %w", err)
+		return fmt.Errorf("checking existing module before changing its directory (vendoring requires matching Terraform/OpenTofu declarations because it does not select a runtime): %w", err)
 	}
 	if schema.Backend != "" && schema.Backend != "local" {
 		return nil

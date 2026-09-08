@@ -35,6 +35,8 @@ func fetch(ctx context.Context, src, dst string) error {
 type Options struct {
 	// Force re-fetches a node even if it's already vendored with a matching Source. Without it, an existing <vendorDir>/<name>/ whose manifest entry still has the same Source is left untouched. But a node whose blueprint Source changed since the last vendor (e.g. a ref bump) is always re-fetched, Force or not: that's a declared intent to get different content, not something to require a flag for.
 	Force bool
+	// LegacyDirectories keeps group-local copies readable until refreshing a qualified leaf can safely change its working directory.
+	LegacyDirectories map[string]string
 }
 
 // Result is the outcome of vendoring one node.
@@ -61,17 +63,29 @@ func All(nodes []blueprint.Node, baseDir, vendorDir, manifestPath string, opts O
 
 		dst := filepath.Join(baseDir, vendorDir, n.Name)
 		existing, hasEntry := manifest[n.Name]
-		_, statErr := os.Stat(dst)
+		existingDir := dst
+		if _, err := os.Lstat(dst); os.IsNotExist(err) && opts.LegacyDirectories[n.Name] != "" {
+			existingDir = opts.LegacyDirectories[n.Name]
+		}
+		info, statErr := os.Stat(existingDir)
+		if statErr != nil && !os.IsNotExist(statErr) {
+			results = append(results, Result{Node: n.Name, Err: fmt.Errorf("reading existing source: %w", statErr)})
+			continue
+		}
 		dstExists := statErr == nil
+		if dstExists && !info.IsDir() {
+			results = append(results, Result{Node: n.Name, Err: fmt.Errorf("node.%s: existing source is not a directory; remove it before re-vendoring", n.Name)})
+			continue
+		}
 
 		sourceChanged := hasEntry && existing.Source != n.Source
-		if dstExists && !sourceChanged && !opts.Force && !needsPackageLayout(n.Source, dst) {
+		if dstExists && !sourceChanged && !opts.Force && !needsPackageLayout(n.Source, existingDir) {
 			results = append(results, Result{Node: n.Name, Skipped: true})
 			continue
 		}
 
-		if dstExists && needsPackageLayout(n.Source, dst) {
-			if err := checkSourceRelocation(n, dst); err != nil {
+		if dstExists && (existingDir != dst || needsPackageLayout(n.Source, existingDir)) {
+			if err := checkSourceRelocation(n, existingDir); err != nil {
 				results = append(results, Result{Node: n.Name, Err: err})
 				continue
 			}

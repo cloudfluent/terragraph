@@ -453,19 +453,29 @@ func newVendorCmd(blueprintPath *string, loggerOf func() *slog.Logger) *cobra.Co
 			}
 			defer func() { _ = lock.Close() }()
 
-			nodes := bp.Nodes
-			if node != "" {
-				n, ok := bp.NodeByName(node)
-				if !ok {
-					return fmt.Errorf("unknown node %q", node)
+			sources, err := graph.SourceNodes(bp, baseDir)
+			if err != nil {
+				return err
+			}
+			var nodes []blueprint.Node
+			legacyDirs := make(map[string]string)
+			for _, source := range sources {
+				if node != "" && source.Name != node {
+					continue
 				}
-				if !blueprint.IsRemote(n.Source) {
-					return fmt.Errorf("node %q has a local source (%q); nothing to vendor", node, n.Source)
+				if node != "" && !blueprint.IsRemote(source.Source) {
+					return fmt.Errorf("node %q has a local source (%q); nothing to vendor", node, source.Source)
 				}
-				nodes = []blueprint.Node{n}
+				nodes = append(nodes, source.Node)
+				if source.LegacyDir != "" {
+					legacyDirs[source.Name] = source.LegacyDir
+				}
+			}
+			if node != "" && len(nodes) == 0 {
+				return fmt.Errorf("unknown node %q", node)
 			}
 
-			results, err := vendor.All(nodes, baseDir, bp.VendorDirectory(), filepath.Join(baseDir, bp.VendorManifestFile()), vendor.Options{Force: force})
+			results, err := vendor.All(nodes, baseDir, bp.VendorDirectory(), filepath.Join(baseDir, bp.VendorManifestFile()), vendor.Options{Force: force, LegacyDirectories: legacyDirs})
 			errorCount := 0
 			for _, r := range results {
 				switch {
@@ -495,7 +505,7 @@ func newVendorCmd(blueprintPath *string, loggerOf func() *slog.Logger) *cobra.Co
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&node, "node", "", "restrict to a single node")
+	cmd.Flags().StringVar(&node, "node", "", "restrict to one qualified leaf node (for example prod.vpc)")
 	cmd.Flags().BoolVar(&force, "force", false, "re-fetch even if already vendored")
 	cmd.Flags().StringVar(&output, "output", "text", "output format: text or json")
 	return cmd

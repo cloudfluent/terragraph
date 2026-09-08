@@ -16,6 +16,8 @@ type resolveContext struct {
 	schemas   map[string]*module.Schema
 	// rootDir is the outer blueprint directory passed to Build, used for the local state default path. It is not the recursive baseDir used to resolve group-relative sources.
 	rootDir string
+	// rootVendorDir keeps every expanded remote leaf in the calling blueprint's managed area.
+	rootVendorDir string
 }
 
 func (rc *resolveContext) push(dir, name string) (func(), error) {
@@ -61,18 +63,18 @@ func (rc *resolveContext) inspect(dir string) (*module.Schema, error) {
 	return s, nil
 }
 
-// loadGroupDef returns the group definition named groupName from dir, a group source directory (see resolveContext.parseGroupDir for how dir's .hcl files are merged and cached), along with every `runtime` block declared alongside it in that same directory: a group's own internal nodes/uses can only reference runtimes declared there (see blueprint.validateRuntimes), never ones declared in whichever outer scope happens to instantiate the group. It also returns the directory's own top-level contracts (producer/consumer blocks outside any group body), which ride with the group like the contracts inside its own body do.
-func loadGroupDef(rc *resolveContext, dir, groupName string) (*blueprint.Group, []blueprint.Runtime, *blueprint.Contracts, error) {
+// loadGroupDef returns the group definition named groupName from dir, a group source directory (see resolveContext.parseGroupDir for how dir's .hcl files are merged and cached), along with every `runtime` block declared alongside it in that same directory: a group's own internal nodes/uses can only reference runtimes declared there (see blueprint.validateRuntimes), never ones declared in whichever outer scope happens to instantiate the group. It also returns the directory's own top-level contracts (producer/consumer blocks outside any group body), which ride with the group like the contracts inside its own body do, and its vendor configuration for compatibility source lookup.
+func loadGroupDef(rc *resolveContext, dir, groupName string) (*blueprint.Group, []blueprint.Runtime, *blueprint.Contracts, *blueprint.VendorConfig, error) {
 	bp, err := rc.parseGroupDir(dir)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("reading group source directory %s: %w", dir, err)
+		return nil, nil, nil, nil, fmt.Errorf("reading group source directory %s: %w", dir, err)
 	}
 	for i := range bp.Groups {
 		if bp.Groups[i].Name == groupName {
-			return &bp.Groups[i], bp.Runtimes, bp.Contracts, nil
+			return &bp.Groups[i], bp.Runtimes, bp.Contracts, bp.Vendor, nil
 		}
 	}
-	return nil, nil, nil, fmt.Errorf("no group named %q found in %s", groupName, dir)
+	return nil, nil, nil, nil, fmt.Errorf("no group named %q found in %s", groupName, dir)
 }
 
 // synthesizeSchema turns a group's (already namespace-qualified) Export block into a module.Schema (the same shape module.Inspect produces for a real Terraform module) after validating every export mapping against the real schemas of the internal nodes it references. Synthesized Variables carry no Type: a fan-out input may map to internal targets with different declared types, so there is no single type to check at the export boundary. The real per-target type check still happens once an edge is rewritten to its actual leaf target (see engine.checkType), so this loses no safety, only reports a mismatch one step later.
