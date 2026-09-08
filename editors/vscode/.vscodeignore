@@ -1,6 +1,9 @@
 .github/
 .vscode/
 src/
+test/
+out/test/
+.vscode-test/
 node_modules/
 eslint.config.mjs
 .prettierignore

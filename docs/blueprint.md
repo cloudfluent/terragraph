@@ -1,6 +1,6 @@
 # Blueprint
 
-A blueprint (`blueprint.hcl` by default) is a flat list of `node` and `edge` facts, not nested configuration. `--blueprint` can also point at a directory instead of a single file: every `.hcl` file directly inside it (not recursively) is merged into one blueprint, exactly the way a [group](groups.md)'s source directory already merges its own `.hcl` files. This is useful for splitting a large blueprint across several files (e.g. `nodes.hcl`, `edges.hcl`) without any of them needing a specific name.
+A blueprint describes nodes and the edges between them in HCL. The CLI reads `blueprint.hcl` by default; other filenames and directories can be selected with `--blueprint`.
 
 ```hcl
 node "vpc" {
@@ -28,6 +28,40 @@ An input is a single slot: two data edges targeting the same input are a validat
 Node canvas layout (for the future visual editor) lives in a separate `blueprint.layout.json`, so moving a box never shows up in a `blueprint.hcl` diff.
 
 Edges wire values; contracts review them. See [`docs/contracts.md`](contracts.md) to declare producer guarantees and consumer requirements as top-level `producer`/`consumer` blocks keyed by module source.
+
+## Files and loading
+
+| Invocation | Files read |
+|---|---|
+| `terragraph graph` | `blueprint.hcl` only |
+| `terragraph graph --blueprint topology.hcl` | `topology.hcl` only |
+| `terragraph graph --blueprint .` | Every `.hcl` file directly in the current directory, non-recursively |
+
+Single-file loading does not merge neighboring files. For example, adding `contracts.hcl` next to `blueprint.hcl` only includes those contracts when you select the directory. Directory loading includes hidden `.hcl` files too, including `.terraform.lock.hcl`; keep another tool's HCL configuration in its own directory. `.tf`, `.HCL`, and `.hcl.json` files are not collected by directory loading.
+
+You can split a blueprint without creating either `blueprint.hcl` or `group.hcl`. In a new directory, copy the `stacks` directory from [`examples/basic`](../examples/basic) and create these two files:
+
+```hcl
+# nodes.hcl
+node "vpc" { source = "./stacks/vpc" }
+node "eks" { source = "./stacks/eks" }
+```
+
+```hcl
+# edges.hcl
+edge {
+  from = node.vpc.output.vpc_id
+  to   = node.eks.input.vpc_id
+}
+```
+
+```sh
+terragraph graph --blueprint .
+# level 1: vpc
+# level 2: eks
+```
+
+Names and singleton settings must be unique across the merged files; later files do not override earlier declarations. The files may contain any supported top-level blocks regardless of their names. Block nesting still matters: `export` belongs inside a `group`, while settings such as `runtime`, `vendor`, and `lock` belong at the top level. Repeating the same `group` name in multiple files is a duplicate definition, not a way to extend its body. See [group source directories](groups.md#source-directories-and-filenames) for how a `use` selects a group.
 
 ## Graph remote lock (`lock`)
 

@@ -39,10 +39,7 @@ export async function activate(
     args: ["language-server"],
   };
   const clientOptions: LanguageClientOptions = {
-    documentSelector: [
-      { scheme: "file", pattern: "**/blueprint.hcl" },
-      { scheme: "file", pattern: "**/group.hcl" },
-    ],
+    documentSelector: [{ scheme: "file", pattern: "**/*.hcl" }],
     outputChannel: output,
     traceOutputChannel: output,
   };
