@@ -5,7 +5,13 @@ import tseslint from "typescript-eslint";
 
 export default defineConfig(
   {
-    ignores: ["bin/**", "node_modules/**", "out/**", "*.vsix"],
+    ignores: [
+      "bin/**",
+      "node_modules/**",
+      "out/**",
+      ".vscode-test/**",
+      "*.vsix",
+    ],
   },
   eslint.configs.recommended,
   ...tseslint.configs.recommended,

@@ -1,19 +1,19 @@
 # VS Code IntelliSense
 
-The Terragraph Blueprint extension gives `blueprint.hcl` and `group.hcl` language-server-backed editing. Install **Terragraph Blueprint** from the VS Code Marketplace and it works immediately.
+Install **Terragraph** (`cloudfluent.terragraph-vscode`) from the VS Code Marketplace and open Terragraph `.hcl` files with the **HCL** language mode. Filenames can be anything, including `nodes.hcl`, `edges.hcl`, `contracts.hcl`, and files in group source directories. The extension bundles its language server, so editor features do not require a separate CLI installation.
 
-The extension bundles a compatible language server, so nothing here requires installing the `terragraph` CLI separately.
+The editor uses other `.hcl` files in the same directory as context, including unsaved changes in open files. To run a split blueprint through the CLI, use `--blueprint .`: the CLI's default still reads only `blueprint.hcl`. See [files and loading](blueprint.md#files-and-loading).
 
 ## Completion
 
-Open the completion list with `Ctrl+Space` (`Control+Space` on macOS).
+Open the completion list with `Ctrl+Space` (`Control+Space` on macOS). Suggestions include:
 
-- Top-level blueprint blocks: `node`, `edge`, `runtime`, `group`, `use`, `vendor`, `tfvars`, `lock`, `snapshots`
-- The attributes each block accepts: a node's `source`, `vars`, `env`, `runtime`, `backend_config`, `approve`; a `use` block's `as`, `source`, `vars`, `env`, `runtime`, `backend_config`, `approve`; and so on
-- A Terraform/OpenTofu module's own input variables and outputs
-- Declared runtime names
+- Top-level blocks: `node`, `edge`, `runtime`, `group`, `use`, `vendor`, `tfvars`, `lock`, `snapshots`
+- Block attributes, such as a node's `source`, `vars`, `env`, `runtime`, `backend_config`, and `approve`
+- Declared node and runtime names, group instance references, and exported group ports
+- Local Terraform/OpenTofu module inputs and outputs, with descriptions and sensitivity; inputs also show type and whether they are required
 
-Inside a node's `vars = {}` only the input variables that module declares are suggested. Inside a `use` block's `vars = {}` only that instance's export input names are suggested. To pass another node's result, use an `edge` rather than `vars`.
+Inside a node's `vars = {}`, suggestions come from that module's inputs. Inside a `use` block's `vars = {}`, they come from the group's exported inputs. To pass another node's result, use an edge:
 
 ```hcl
 edge {
@@ -22,11 +22,7 @@ edge {
 }
 ```
 
-An input suggestion shows its type, whether it's required, whether it's sensitive, and its description. An output shows its name, description, and whether it's sensitive.
-
-Module inspection follows a node's explicit runtime or the root blueprint's default runtime, with Terraform as the editor fallback. A standalone group's unspecified runtime depends on its use site, so inspection only confirms ports when Terraform and OpenTofu expose the same declarations; a default-marked runtime in the group's source directory does not select its runtime. An ambiguous wrapper or unreadable module leaves ports unknown and does not produce missing-port errors. No runtime is executed for editor inspection.
-
-An edge's nested `input` blocks (see [blueprint.md](blueprint.md#several-values-between-the-same-two-nodes-input)) complete the same way: the block label suggests the input variables declared by the edge's `to` node, and `from = output.` suggests the outputs of its `from` node. Neither reference repeats a node name, so both suggestion lists come from that edge's own endpoints.
+An edge's [nested `input` blocks](blueprint.md#several-values-between-the-same-two-nodes-input) also complete against its endpoints: input labels come from the `to` node, and `output.` suggestions come from the `from` node.
 
 ```hcl
 edge {
@@ -41,23 +37,27 @@ edge {
 
 ## Go to definition
 
-`Cmd+Click` (macOS), `Ctrl+Click` (Windows/Linux), or `F12` on `node.vpc` or `runtime.tofu` jumps to its declaration, including nodes and runtimes declared in another `.hcl` file in the same blueprint directory.
+`Cmd+Click` (macOS), `Ctrl+Click` (Windows/Linux), or `F12` on `node.vpc` or `runtime.tofu` jumps to its declaration, including declarations in another `.hcl` file in the same directory.
 
-## Error reporting
+## Error reporting and limits
 
-Mistakes that can be found without evaluating anything are underlined as you type:
+The editor underlines unknown node names, nonexistent module ports, incorrect input/output directions, invalid `vars` keys, and invalid edge `input` mappings as you type. For unknown ports, hovering the error lists the available names.
 
-- A node name that isn't declared
-- A module input or output name that doesn't exist
-- A `from` referencing an input, or a `to` referencing an output
-- A `vars` entry the module has no such input variable for, or a `use.vars` key that is not an export input
-- An edge `input` block whose label isn't an input of the `to` node, or whose `from = output.<attr>` isn't an output of the `from` node
+Module-port completion and name checks require a readable local module. A node with a remote `source` has no module-port completion or name checks, **even after vendoring**; node-name and block completion still work.
 
-Hovering an error lists the input or output names that are available.
+Module inspection follows a node's explicit runtime or the root blueprint's default, with Terraform as the editor fallback. Inside a group definition, a node without an explicit runtime has known module ports only when Terraform and OpenTofu expose the same declarations: its runtime depends on the use site, not a default-marked runtime in the group's source directory. Ambiguous wrappers or unreadable modules leave ports unknown. Editor inspection never executes a runtime.
+
+Contract-specific completion and contract checks for `producer`, `consumer`, and `contracts` blocks are not implemented. A file named `contracts.hcl` receives the same editing support for node/edge content as any other `.hcl` file; its name does not add contract support.
+
+Editor diagnostics cover these editing checks, not the full CLI validation. Use `terragraph validate` to check the blueprint, including vendored modules and contracts. For a split blueprint:
+
+```sh
+terragraph validate --blueprint .
+```
 
 ## Pointing at your own language server
 
-Rarely needed, but to use a binary you're developing or a specific CLI version, set this in your VS Code settings:
+To use a binary you are developing or a specific CLI version, set:
 
 ```json
 {
@@ -65,11 +65,12 @@ Rarely needed, but to use a binary you're developing or a specific CLI version, 
 }
 ```
 
-Clearing the path goes back to the language server bundled with the extension.
+Clearing the path restores the bundled server. A source checkout uses its locally built binary when no bundled server is present.
 
 ## When completion doesn't appear
 
-1. Check the file is named `blueprint.hcl` or `group.hcl`.
-2. Reload the window with the `Developer: Reload Window` command.
-3. Under **View: Output**, select the `Terragraph Blueprint` channel and look for a language server startup error.
-4. If you're developing, run `make build` in the repository root and restart the Extension Development Host.
+1. Check that the file has a `.hcl` extension and the status bar language mode is **HCL**; its basename can be anything.
+2. For missing port suggestions, check the source and runtime limits above.
+3. Reload the window with `Developer: Reload Window`.
+4. Under **View: Output**, select the `Terragraph Blueprint` channel and look for a language server startup error.
+5. If you are developing, run `make build` in the repository root and restart the Extension Development Host.

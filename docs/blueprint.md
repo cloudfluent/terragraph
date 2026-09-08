@@ -1,6 +1,6 @@
 # Blueprint
 
-A blueprint (`blueprint.hcl` by default) is a flat list of `node` and `edge` facts, not nested configuration. `--blueprint` can also point at a directory instead of a single file: every `.hcl` file directly inside it (not recursively) is merged into one blueprint, exactly the way a [group](groups.md)'s source directory already merges its own `.hcl` files. This is useful for splitting a large blueprint across several files (e.g. `nodes.hcl`, `edges.hcl`) without any of them needing a specific name.
+A blueprint describes independent Terraform/OpenTofu root modules (`node` blocks) and the connections between them (`edge` blocks). The CLI reads `blueprint.hcl` by default; select another file or a directory with `--blueprint`.
 
 ```hcl
 node "vpc" {
@@ -17,53 +17,42 @@ edge {
 }
 ```
 
-An edge can be:
-- **Explicit (data edge)**: both sides reference a specific port (`node.<name>.output.<attr>` / `node.<name>.input.<attr>`). The engine passes the value at runtime.
-- **Implicit (ordering-only edge)**: both sides reference a bare node (`node.<name>`). No value is passed; it only constrains execution order.
+Each `source` points to a module with its own Terraform configuration, variables, and outputs. Local node sources start with `./` or `../` and resolve relative to the blueprint file's directory, or to the directory selected by `--blueprint`. Other source strings require [vendoring](vendoring.md). Node, group, runtime, and `use` instance names may contain only letters, digits, underscores, and hyphens.
 
-Mixing the two on the same edge (a port on one side, a bare node on the other) is rejected at parse time.
+An edge can carry a value or only control execution order:
 
-An input is a single slot: two data edges targeting the same input are a validation Error, whether their `from` sides differ or match (exact duplicates). The same rule covers a data edge colliding with `vars` (see [Literal input values (`vars`)](#literal-input-values-vars)). It is checked after group expansion, so two outer edges, or an outer edge plus an internal one, that only meet on the same leaf once a `use` export has rewritten them are caught too. A `use.vars` key is rewritten onto those same leaves and collides the same way as `node.vars`; see [groups.md](groups.md#setting-literal-inputs-for-an-instance). Ordering-only edges are not this rule; they carry no value.
+- **Data edge:** `node.<name>.output.<attr>` feeds `node.<name>.input.<attr>`. Both ports must exist in their modules. The downstream node waits for the upstream node, then receives its real output value.
+- **Ordering-only edge:** `from = node.vpc` and `to = node.eks` makes `eks` wait for `vpc` without passing a value.
 
-Node canvas layout (for the future visual editor) lives in a separate `blueprint.layout.json`, so moving a box never shows up in a `blueprint.hcl` diff.
+Both endpoints must use the same form; mixing a bare node and a port is an error. A destination input may have only one data source, including after [group expansion](groups.md). Duplicate data edges and a data edge combined with `vars` on the same input are errors. Ordering-only edges do not occupy an input.
 
-Edges wire values; contracts review them. See [`docs/contracts.md`](contracts.md) to declare producer guarantees and consumer requirements as top-level `producer`/`consumer` blocks keyed by module source.
+See [`examples/basic`](../examples/basic) for runnable modules and [the execution model](execution-model.md) for how `plan`, `apply`, and `destroy` use these connections.
 
-## Graph remote lock (`lock`)
+## Literal input values (`vars`)
 
-An optional top-level `lock` block serializes `plan` / `apply` / `destroy` across machines (a laptop and CI, or two clones). Terraform still locks each node's state; this lock is the graph run. Activation is the block itself, not a CLI flag. At most one `lock` per blueprint. See [execution-model.md](execution-model.md#graph-remote-lock) for acquire order and crash behavior.
+Use `vars` for values specific to a node, such as an environment name or CIDR. Keys are the module's declared variable names:
 
 ```hcl
-lock {
-  s3 {
-    bucket = "acme-tfstate"
-    key    = "terragraph/prod.lock"
-    region = "ap-northeast-2"
+node "data-apne2-dev-vpc" {
+  source = "./modules/vpc"
+  vars = {
+    name            = "dpl-apne2-vpc-dev"
+    cidr            = "10.16.0.0/20"
+    private_subnets = ["10.16.0.0/23", "10.16.2.0/23"]
+    tags            = { tenant = "data-platform" }
   }
 }
 ```
 
-`s3` is the only nested type in this release (`dynamodb` / `gcs` later). Parse errors: empty `lock {}`; two nested backends; an unknown nested type (including `dynamodb` today); a second `lock` block. `bucket`, `key`, and `region` are required non-empty literal strings.
+Values can be strings, numbers, booleans, nulls, lists, or nested objects. Numeric precision is preserved when values are passed to Terraform. If you control the module interface, related settings can share an `object`-typed variable instead of many separate variables.
 
-When `lock` is present, every node must use a remote backend (`s3` / `gcs` / `azurerm` / `http` / `remote` / `cloud`). `backend "local"` or no backend block is a validate **Error**. An S3 graph lock must not share an object with a node (same `key` and same bucket, or same `key` when `backend_config.bucket` is omitted). Known literal S3 backend settings from the module are combined with `backend_config` overrides for this check. Matching literal bucket/key candidates whose AWS partition cannot be determined produce a warning that lock/state separation is unverified; the existing explicit partial-key error remains an error. No `lock` block leaves current behavior (including local state) unchanged.
+`vars` accepts literal data with no variables or functions in scope. Another node's output needs an `edge`; putting `node.other.output.x` inside `vars` is an error and would not record the dependency. A `vars` key must name a real input and must not also be supplied by a data edge.
 
-## Output snapshots (`snapshots`)
-
-An optional empty `snapshots { }` block opts the graph into local output
-snapshots. Activation is the block itself, not a CLI flag; at most one
-`snapshots` per blueprint; the body accepts nothing in this release. With
-it, `apply` records the non-sensitive outputs a data edge consumes from each
-node into the gitignored `.terragraph/outputs/`. Sensitive outputs and outputs
-without sensitivity metadata are withheld; only their port names are recorded.
-Input resolution gains a source of **last** resort — after this run's applied
-outputs and after live `terraform output`, never ahead of either. Without the block, nothing is
-written and resolution is unchanged. See
-[execution-model.md](execution-model.md#output-snapshots) for the ordering
-rationale.
+Resolved `vars` and edge values share the same temporary tfvars file and type checks. Terraform/OpenTofu performs the final conversion and variable validation. See [how values are passed](execution-model.md#how-values-are-passed) for the optional `tfvars` setting and cleanup behavior, and [group instance inputs](groups.md#setting-literal-inputs-for-an-instance) for `use.vars`.
 
 ## Several values between the same two nodes (`input`)
 
-One `edge` block is one pair, which is faithful to "a flat list of facts" but noisy when two modules that already expose many flat variables need ten of them wired. An edge whose `from` and `to` are bare references may instead carry nested `input` blocks, the same shape as a group's [`export` input](groups.md):
+When two modules exchange several values, nested `input` blocks let you name the nodes once:
 
 ```hcl
 edge {
@@ -80,19 +69,51 @@ edge {
 }
 ```
 
-The block label is the destination input on the `to` node, and `from` is a relative `output.<attr>` on the `from` node: the enclosing edge already names the source, so it is never repeated (an absolute `node.vpc.output.vpc_id` inside the block is rejected rather than accepted-if-it-matches). Duplicate labels on one edge are an error, the same as in an `export` block.
+Each block label names an input on the destination, and `from = output.<attr>` names an output on the source. Use this relative spelling inside the block; an absolute `node.vpc.output.vpc_id` is rejected. Labels must be unique within an edge.
 
-This is shorthand and nothing more. With no `input` blocks the edge is the ordering-only edge above; with one or more, it expands at parse time into exactly that many ordinary data edges (`node.vpc.output.vpc_id` → `node.eks.input.vpc_id`, and so on), and everything downstream — the one-source-per-input rule below, `use` export resolution, cycle detection — treats them as if they had been written out one block each. An edge that already names a specific port on either side has exactly one value to carry, so combining that with `input` blocks is rejected.
+Each `input` becomes an ordinary data edge, so the same port checks, input collision rules, and execution order apply. The enclosing `from` and `to` must be bare node or `use` references. With no `input` blocks, the edge is ordering-only; it cannot combine nested inputs with port endpoints.
 
-When you own both modules, the better reduction is still one `object`-typed output wired into one `object`-typed input by one ordinary edge (see [`vars`](#literal-input-values-vars) for the same argument applied to literal values). This shorthand is for the modules you don't get to reshape.
+Either endpoint may be a group instance, such as `use.checkout`. Its values resolve through the group's [exported ports](groups.md), including input fan-out.
 
-Either endpoint may be a group instance (`use.<name>`), and each expanded edge then resolves through that instance's `export` exactly as a separately written one would, fan-out included: see [groups.md](groups.md).
+## Files and loading
+
+| Invocation | Files read |
+|---|---|
+| `terragraph graph` | `blueprint.hcl` only |
+| `terragraph graph --blueprint topology.hcl` | `topology.hcl` only |
+| `terragraph graph --blueprint .` | Every `.hcl` file directly in the current directory, non-recursively |
+
+Single-file loading does not merge neighboring files. For example, adding `contracts.hcl` next to `blueprint.hcl` only includes those contracts when you select the directory. Directory loading includes hidden `.hcl` files too, including `.terraform.lock.hcl`; keep another tool's HCL configuration in its own directory. `.tf`, `.HCL`, and `.hcl.json` files are not collected by directory loading.
+
+You can split a blueprint without creating either `blueprint.hcl` or `group.hcl`. In a new directory, copy the `stacks` directory from [`examples/basic`](../examples/basic) and create these two files:
+
+```hcl
+# nodes.hcl
+node "vpc" { source = "./stacks/vpc" }
+node "eks" { source = "./stacks/eks" }
+```
+
+```hcl
+# edges.hcl
+edge {
+  from = node.vpc.output.vpc_id
+  to   = node.eks.input.vpc_id
+}
+```
+
+```sh
+terragraph graph --blueprint .
+# level 1: vpc
+# level 2: eks
+```
+
+Names and singleton settings must be unique across the merged files; later files do not override earlier declarations. The files may contain any supported top-level blocks regardless of their names. Block nesting still matters: `export` belongs inside a `group`, while settings such as `runtime`, `vendor`, and `lock` belong at the top level. Repeating the same `group` name in multiple files is a duplicate definition, not a way to extend its body. See [group source directories](groups.md#source-directories-and-filenames) for how a `use` selects a group.
 
 ## Reusing the same module across instances
 
-A node can reuse one module `source` across multiple instances (e.g. the same `./stacks/vpc` for both `dev` and `prod`) without their state colliding. If the module declares `backend "local"` (an empty block is enough) and the node does not set `path`, terragraph fills `path` to `<blueprint dir>/.terragraph/state/<node>.tfstate` (absolute) and passes it as `terraform init -backend-config=path=...`. An explicit `backend_config.path` wins.
+Multiple nodes can share one `source` while supplying different `vars`, environments, and backend settings. Each instance needs its own state address.
 
-An explicit relative local-backend `backend_config.path` is passed through unchanged: Terraform/OpenTofu resolves it for the default workspace from the node's module directory, **not** the blueprint directory. For example, with `source = "./modules/vpc"`, `path = ".terragraph/state/vpc.tfstate"` places state under `modules/vpc/.terragraph/state/`. `terragraph validate` warns about this relative path. Omit `backend_config.path` to use the automatic absolute path above, or supply an absolute path outside the module directory when choosing a custom location. Changing a path does not move existing state; migrate existing state before running against the new location.
+For a module declaring `backend "local"` (an empty block is enough), terragraph supplies an absolute `path` of `<blueprint dir>/.terragraph/state/<node>.tfstate` when the node has no explicit `backend_config.path`:
 
 ```hcl
 node "vpc_prod" {
@@ -104,65 +125,54 @@ node "vpc_dev" {
 }
 ```
 
-`backend_config` is still available for remote backends (`bucket`, `profile`, `region`, `key`, ...) or an explicit local `path`. It requires a `backend` block in the module; a missing block or a `cloud` block plus a non-empty `backend_config` is a validate **Error**. Two nodes that share a module directory and resolve to the same `backend_config` map (including both empty) are also a validate **Error**. Validation also rejects known shared local state paths (including symlink aliases and differing backup options) and known shared S3 bucket/key addresses across module directories. Explicit `TF_WORKSPACE` values are included in these address checks. Confirmed S3 collisions require a known partition as well as matching bucket, effective workspace key, and endpoint. If the literal bucket/key candidates match, their endpoints are not explicitly distinct, and either partition is unknown, validation warns of a possible collision instead of inferring equality from missing regions or matching custom endpoints. Set explicit backend region and endpoint settings where applicable and verify the resolved namespaces: AWS profiles can select different partitions, and custom services can select namespaces by credentials. Only statically known scalar settings are compared; backend expressions, compound settings, and external configuration are not resolved by these checks, which do not discover or manage remote state. Names that resolve to the same managed path on the actual filesystem are a validate **Error**, including letter-case variants on a case-insensitive volume; validation never renames nodes or moves state. If missing paths have parent directories whose case rules cannot be established, validation warns that separation is unverified. Every node also gets its own isolated `.terraform/` metadata directory (`TF_DATA_DIR`, managed automatically) regardless of whether its `source` is shared with another node. Otherwise two instances of the same module would also fight over which backend they were last configured with.
+This gives the default workspace a different state file for each node. A module with no backend block uses Terraform's implicit local state and does not receive this generated path. An explicit `backend_config.path` wins; a path written only in the module's backend block is overridden. A relative path is resolved from the **module's directory**, not the blueprint directory. Non-default Terraform workspaces use their backend's workspace paths, so verify those separately. Terragraph never migrates existing state; see [state paths and migration](execution-model.md#how-values-are-passed) before adopting this layout for an existing deployment.
 
-Sharing a `source` directory does *not* isolate `.terraform.lock.hcl`, though: unlike `.terraform/`, that file lives in the module directory itself. If those instances also resolve to different runtimes (see below), Terraform and OpenTofu will each keep rewriting it to their own provider registry host on every `init`, and `terragraph validate` warns about exactly this. Give each instance its own `source` copy (or wait until they're all on the same runtime) rather than ignoring that warning.
+An explicit relative local-backend `backend_config.path` is passed through unchanged. For example, with `source = "./modules/vpc"`, `path = ".terragraph/state/vpc.tfstate"` places default-workspace state under `modules/vpc/.terragraph/state/`. `terragraph validate` warns about this relative path. Omit `backend_config.path` to use the automatic absolute path above, or supply an absolute path outside the module directory when choosing a custom location.
+
+Use `backend_config` for remote backend fields such as `bucket`, `key`, `region`, and `profile`, or for an explicit local path. Entries are passed to `terraform init` as `-backend-config` options. A non-empty map requires a `backend` block in the module; it is invalid with no backend block or with a `cloud` block. A group's [`use.backend_config`](groups.md#isolating-state-for-an-instance) can supply shared defaults.
+
+Validation rejects identical backend configuration maps on a shared source, known shared local state paths, and known shared S3 state addresses. It also rejects node names that collide on the filesystem, including case differences on a case-insensitive volume. These checks use statically known settings, including explicit `TF_WORKSPACE` values; they cannot resolve all backend expressions, external configuration, or credential-dependent namespaces. Warnings about unverified separation require checking the paths or backend namespaces yourself. Set distinct addresses and explicit region/endpoint settings where needed; a different profile alone does not establish a different state address.
+
+Every node receives a separate `TF_DATA_DIR` for Terraform's backend metadata, even when sources are not shared. The module's `.terraform.lock.hcl` is still shared by nodes using the same directory. Validation warns when those nodes select different runtime binaries; use separate source copies or the same runtime to avoid provider lock file conflicts.
 
 ## Choosing a runtime per node (`runtime`)
 
-Every node runs against whichever binary a plain `--tofu`/no-flag choice on the CLI selects, by default. A node (or a whole blueprint) can override that by declaring one or more named `runtime` blocks and referencing one:
+Use named runtimes to select Terraform or OpenTofu per node, or to pin a binary while migrating stacks independently:
 
 ```hcl
 runtime "tofu" {
-  binary  = "tofu"          # a PATH-resolved command, or an absolute path to pin an exact install
-  version = ">= 1.8.0"      # optional, free-form; documentation only, see below
+  binary  = "tofu"
+  version = ">= 1.8.0"  # documentation only; not an enforced constraint
 }
 
 runtime "legacy" {
-  binary  = "/opt/terraform_1.5.7"
+  binary = "/opt/terraform_1.5.7"
 }
 
 node "eks" {
   source  = "./stacks/eks"
-  runtime = runtime.tofu     # this node always runs on tofu, regardless of --tofu
+  runtime = runtime.tofu
 }
 
 node "legacy_dns" {
   source  = "./stacks/dns"
-  runtime = runtime.legacy   # pinned to an exact binary, for a stack that isn't ready to move yet
+  runtime = runtime.legacy
 }
 ```
 
-A node that names no `runtime` falls back, in order: the blueprint's own `default = true` runtime, if it declared one; otherwise the CLI's `--tofu` flag or its built-in `terraform` default. Since every node has its own isolated state (see [execution-model.md](execution-model.md)), this can be applied node by node: migrate one stack to a new runtime while everything else keeps running exactly as before, with no shared workspace to force an all-or-nothing cutover. There's no way back down, though: Terraform/OpenTofu record the version that last wrote a state file, and an older binary will refuse to read it, so treat this as a one-way door per node, not something to toggle back and forth.
+Runtime selection uses the node's explicit choice, then the nearest enclosing [`use.runtime`](groups.md#choosing-a-runtime-for-an-instance), then the root blueprint's runtime marked `default = true`, then the CLI's `--tofu` flag or built-in `terraform` default. At most one runtime in the root blueprint may declare `default = true`. A group's default-marked runtime does not become an instance default.
 
-Static module inspection follows the same runtime choice before validating ports, types, backend configuration, or contracts. Terraform reads `.tf` and `.tf.json`; OpenTofu also reads `.tofu` and `.tofu.json`, replacing a `.tf` file only with its same-name `.tofu` counterpart (and likewise for `.tf.json` / `.tofu.json`). Different formats coexist. Inspection never creates or edits module files.
+`binary` may name a command on PATH or an absolute executable path. `version` records intent; terragraph does not enforce that constraint. Before switching runtimes, back up state and check compatibility: new state formats or runtime features can prevent a rollback. See [Terraform's compatibility guidance](https://developer.hashicorp.com/terraform/language/v1-compatibility-promises) and the [OpenTofu migration guide](https://opentofu.org/docs/intro/migration/migration-guide/).
 
-The canonical commands `terraform` and `tofu` identify the file-selection mode. An absolute binary path also identifies it when it resolves to the same file as exactly one of those commands on the current PATH. A different installation or arbitrary wrapper is accepted when both modes expose identical static declarations, including defaults, sensitivity, and backend attributes. If they differ, inspection fails before execution: use the intended canonical command on PATH, point to that same installation, or make the declarations agree. A filename such as `/opt/custom/tofu` alone does not prove which runtime a wrapper runs. No runtime is executed to make this decision.
+Validation and editor inspection follow the same runtime choice. Terraform reads `.tf` and `.tf.json`; OpenTofu also reads `.tofu` and `.tofu.json`. An OpenTofu file replaces only its same-name, same-format Terraform counterpart, so `main.tofu` replaces `main.tf`, while `main.tofu.json` and `main.tf` coexist. Inspection does not execute a runtime or edit module files.
 
-For a recognized OpenTofu runtime, static validation and editor inspection assume support for `.tofu` files (OpenTofu 1.8 or newer). They never execute the runtime. Before `plan`, `apply`, or `destroy` consumes inputs or snapshots, nodes selecting `.tofu` / `.tofu.json` files must report an actual version of at least 1.8.0 through `version -json`; an old, failed, or unparseable response stops the run with an upgrade remedy. A node-scoped run also checks direct upstream nodes whose outputs it can read. Modules selecting only `.tf` / `.tf.json` need no version probe and continue to work with older OpenTofu.
+The canonical `terraform` and `tofu` commands identify the inspection mode. An absolute binary path does too if it resolves to the same file as exactly one of those commands on PATH. Other binaries and wrappers are accepted only when both modes expose identical static declarations, including defaults, sensitivity, and backend settings. If inspection reports a mismatch, select the intended canonical command on PATH, point to that installation, or make the declarations agree; a wrapper's filename alone does not identify its runtime.
 
-An unknown wrapper whose static schemas agree remains allowed without a version probe: terragraph cannot prove what it executes from its name or version response. This preserves the wrapper contract without claiming support for runtime-specific behavior outside the inspected declarations.
-
-`version` in a runtime declaration remains documentation only and has no effect on execution; the `.tofu` compatibility check uses the selected binary's actual response. It is there to record what a node is expected to run against, next to the `binary` that actually selects it. (It once fed the incremental-apply cache key. That cache is gone: whether a node needs applying is now decided by asking Terraform for a refreshed plan, every run — see [execution-model.md](execution-model.md#deciding-whether-a-node-needs-applying).)
-
-### How much a node may change without being asked (`approve`)
-
-```hcl
-node "db" {
-  source  = "./stacks/db"
-  approve = "all"
-}
-```
-
-`approve` declares how much of this node's plan may be applied unattended: `none`, `safe` (create/update, the default), or `all` (adds replace and delete). Set it on the specific node whose plan is destructive by design, rather than reaching for `--approve=all`, which grants the same thing to every node in the graph at once and tends to end up pasted into CI.
-
-Like `runtime`, it replaces rather than merges, and a `use` block can set it for every node an instance expands to. Full resolution order and what happens when a plan exceeds its level are in [execution-model.md](execution-model.md#what-a-node-may-do-approve).
-
-A `use` block can also set `runtime`, which becomes the default for every node the group instance expands to (unless one of those nodes names its own): see [groups.md](groups.md#choosing-a-runtime-for-an-instance). A group's own definition has no equivalent: which toolchain deploys a reusable group is a fact about where it's instantiated, not about the group itself.
+Recognized OpenTofu runtimes selecting `.tofu` files must report version 1.8.0 or newer before `plan`, `apply`, or `destroy` can consume inputs. An old, failed, or unparseable version response stops execution. A `--node` run also checks direct upstream nodes whose outputs it may read. Modules selecting only `.tf` files need no probe; unknown wrappers with matching declarations remain allowed without a probe.
 
 ## Extra environment variables per node (`env`)
 
-Different nodes sometimes need to run against different cloud accounts, regions, or roles: the same module deployed once per tenant, each into its own AWS account, say. That's ordinarily expressed through whatever a provider block reads from its environment (`AWS_PROFILE`, `AWS_REGION`, `ARM_SUBSCRIPTION_ID`, and so on), so a node can set `env` to add exactly those, keyed by variable name:
+Use `env` when nodes need different provider accounts, regions, or roles:
 
 ```hcl
 node "prod_vpc" {
@@ -174,32 +184,67 @@ node "prod_vpc" {
 }
 ```
 
-Each entry is added to (and, on a name collision, overrides) the terragraph process's own environment before the node's `terraform`/`tofu` subprocess starts. `TF_DATA_DIR` is reserved: declaring it in any node or `use` `env`, even with an empty value, is a parse error. The restriction ignores case on every platform so the same blueprint remains safe on Windows, where environment variable names are case-insensitive. Remove that entry; terragraph always supplies a separate data directory for each node, replacing any `TF_DATA_DIR` inherited from the host process. This rule also applies to custom runtime binaries and wrappers.
+Entries override the terragraph process's environment for that node's Terraform/OpenTofu subprocesses. An enclosing [`use.env`](groups.md#setting-the-environment-for-an-instance) contributes defaults; the node overrides only the keys it sets. Nested instances merge in the same way, with the nearest declaration winning.
 
-This is deliberately the *only* mechanism terragraph offers for provider environment configuration: it never generates or edits a `provider` block (see [execution-model.md](execution-model.md#how-values-are-passed) for the same "no generated `.tf`" rule applied to values), so a provider that needs something `env` can't express (a literal value baked into the config, say) should instead read it as a variable and take that through an edge or `vars`, the same as any other input.
+`TF_DATA_DIR` is reserved for per-node backend isolation. Declaring it in node or `use` `env` is an error, regardless of case or an empty value. Remove that entry; terragraph supplies its own value, including when the host environment or a custom runtime is used.
 
-Unlike `runtime` (a single choice that replaces whatever it inherits), `env` merges: a `use` block's own `env` (see [groups.md](groups.md#choosing-a-runtime-for-an-instance)) contributes defaults to every node the instance expands to, and a node's own `env` only overrides the specific keys it names, leaving everything else it inherited in place. `env` is part of what a node actually runs against, so changing which account or region it targets changes the plan Terraform produces for it — see [execution-model.md](execution-model.md#deciding-whether-a-node-needs-applying).
+Terragraph never generates provider configuration. If a provider setting needs a module variable instead of an environment variable, supply it through `vars` or an edge.
 
-## Literal input values (`vars`)
+<a id="how-much-a-node-may-change-without-being-asked-approve"></a>
 
-An edge wires one node's real output into another node's input, but not every input is another node's data. Sometimes a value is just this node's own: "this tenant's CIDR is 10.16.0.0/20." A node can set `vars` to supply such values directly, keyed by variable name:
+## Allowed plan changes (`approve`)
+
+Set `approve` to control which resource changes a node may apply:
 
 ```hcl
-node "data-apne2-dev-vpc" {
-  source = "./modules/vpc"
-  vars = {
-    name            = "dpl-apne2-vpc-dev"
-    cidr            = "10.16.0.0/20"
-    private_subnets = ["10.16.0.0/23", "10.16.2.0/23"]
-    tags            = { tenant = "data-platform" }
+node "db" {
+  source  = "./stacks/db"
+  approve = "safe"
+}
+```
+
+| Level | Allowed resource changes |
+|---|---|
+| `none` | No resource mutations |
+| `safe` (default) | Create and update |
+| `all` | Create, update, replace, and delete |
+
+The policy is checked before applying, including in interactive runs. `--auto-approve` skips confirmation prompts; it does not bypass this policy. A plan that exceeds the policy fails before that node applies, and later levels do not run.
+
+`none` can still apply plans containing only output changes or reads, which may write state. Use `terragraph plan` for a preview without apply.
+
+The node's setting wins over the nearest enclosing [`use.approve`](groups.md#setting-an-approval-policy-for-an-instance), then `--approve`, then `safe`. Thus `--approve=all` only changes the fallback for nodes with no declared policy; it cannot override the explicit `safe` above. See [approval behavior](execution-model.md#what-a-node-may-do-approve) for execution details and how this applies to `destroy`.
+
+## Graph remote lock (`lock`)
+
+Add a top-level `lock` block when laptops, CI jobs, or separate clones may run the same graph concurrently. It serializes `plan`, `apply`, and `destroy` across machines while Terraform continues to lock each node's state:
+
+```hcl
+lock {
+  s3 {
+    bucket = "acme-tfstate"
+    key    = "terragraph/prod.lock"
+    region = "ap-northeast-2"
   }
 }
 ```
 
-This is the same mechanism an edge uses to feed a value in: both end up merged into the same engine-managed tfvars file (see [execution-model.md](execution-model.md#how-values-are-passed)) and type-checked against the target variable's declared type the same way, so a `vars` value is exactly as safe as a wired one. An input is a single slot: it's an error for it to be set by more than one source at once, whether that's two data edges targeting the same input (including exact duplicates, and including after group expansion, where two outer edges or an outer edge plus an internal one can converge on the same leaf only once a `use` export has rewritten them) or a data edge and `vars` together. Since a variable's value can itself be any JSON-compatible shape a Terraform variable can hold (string, number, bool, list, or a nested object like `tags` above), a module needing many inputs still only needs one `vars` entry per node, not one edge per variable: give it a single variable typed `object({ ... })`, or several logically-grouped ones, rather than dozens of flat variables, and reuse across many nearly-identical stacks (the same module, one per tenant, differing only in `vars`) stays as small as adding one `node` block each.
+The block itself enables locking. A blueprint may declare one lock, containing one `s3` block; other lock backends are not supported. `bucket`, `key`, and `region` must be non-empty literal strings.
 
-Numbers are passed to tfvars without conversion to floating-point Go values: for example, `9007199254740993` remains that number rather than being rounded to `9007199254740992`. This also applies to numbers inside lists and objects, live upstream outputs, and output snapshots. Previously rounded values cannot be recovered from an existing snapshot; apply the upstream again to publish its current outputs.
+Every node must then use a supported remote backend (`s3`, `gcs`, `azurerm`, `http`, `remote`, or `cloud`); implicit or explicit local state is rejected. Choose a lock object separate from every node's state. Validation checks known S3 addresses and reports collisions or unverified separation; resolve these before sharing the graph across machines. Without the block, local state remains allowed.
 
-`vars` is for literal data, not another node's output: the attribute is evaluated with no variables or functions in scope, so writing `node.other.output.x` inside it fails to parse. That value needs a real edge, which is what actually records the dependency and makes the engine wait for it to exist.
+See [graph remote locking](execution-model.md#graph-remote-lock) for credentials, permissions, contention, and recovering a stale lock, and [backend limitations](execution-model.md#known-limitation) for `apply` support.
 
-See also: [groups.md](groups.md) for bundling several nodes into one reusable unit, [vendoring.md](vendoring.md) for pointing `node.source` at a remote module, and [execution-model.md](execution-model.md#how-values-are-passed) for the optional `tfvars` block controlling where a node's resolved values are written.
+## Output snapshots (`snapshots`)
+
+Add an empty top-level block to retain local output values for fallback when live upstream outputs are unavailable:
+
+```hcl
+snapshots {}
+```
+
+A blueprint may contain one `snapshots` block; it accepts no settings. During `apply`, including a no-change apply, terragraph records outputs consumed by data edges under `.terragraph/outputs/`. Sensitive outputs and outputs without sensitivity metadata are withheld; only their names are recorded. Keep `.terragraph/` out of version control.
+
+Snapshots are a last resort after this run's applied outputs and live `terraform output`. They may be stale and do not replace a refreshed plan or automatically apply upstream nodes. Without the block, snapshots are neither written nor used. See [output snapshots](execution-model.md#output-snapshots) for fallback conditions and refreshing existing snapshots.
+
+For additional checks on values exchanged between modules, see [producer and consumer contracts](contracts.md).

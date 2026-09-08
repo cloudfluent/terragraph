@@ -1,155 +1,155 @@
 # Contracts
 
-Contracts turn graph edges into reviewed, two-sided promises: a producer
-declares what one of its outputs guarantees; a consumer declares what one of
-its inputs requires. Contracts are advisory by default: violations surface as
-warnings in `terragraph validate`, and the blueprint's `contracts { mode =
-"enforce" }` block (see [Modes](#modes)) is the only way to make them block;
-it is never enabled silently.
+Contracts help review whether connected modules agree on the values they
+exchange. A producer declares an output's promised type, nullability, or
+sensitivity; a consumer declares what its input expects. They are useful when
+reusing modules or reviewing an interface change before execution.
 
-## Where contracts live
-
-`producer` and `consumer` are ordinary top-level blueprint blocks. They parse
-from any `.hcl` file a blueprint parses: a single-file blueprint, every file
-of a directory blueprint (which merge like every other block kind), and a
-group body — so a group's own `group.hcl` carries the contracts for its
-internal modules, resolved against the group file's own directory. There is
-no reserved filename: `contracts.hcl` is a convention, not a mechanism — a
-file by that name is just another blueprint file whose blocks merge with the
-rest.
+Contracts check **declarations**, not actual output values. Even in `enforce`
+mode, terragraph does not verify that a returned value satisfies a producer's
+type or non-null promise. Runtime input type checks use the module's variable
+declaration, not a narrower consumer contract.
 
 ## Grammar
 
+For modules that expose an output and input named `vpc_id`, add contracts to
+the blueprint alongside their data edge:
+
 ```hcl
+node "vpc" { source = "./modules/vpc" }
+node "app" { source = "./modules/app" }
+
+edge {
+  from = node.vpc.output.vpc_id
+  to   = node.app.input.vpc_id
+}
+
 producer "./modules/vpc" {
   output "vpc_id" {
-    type      = "string"        # Terraform type constraint syntax
-    nullable  = false           # this output is never null
-    sensitive = false           # not a secret
+    type      = "string"
+    nullable  = false  # promises a non-null output
+    sensitive = false
   }
 }
 
 consumer "./modules/app" {
   input "vpc_id" {
     type      = "string"
-    nullable  = false           # this input must never receive null
-    sensitive = false           # refuses values marked sensitive upstream
+    nullable  = false  # requires the producer's non-null promise
+    sensitive = false
   }
 }
 ```
 
-The block label is the module source, spelled exactly as a node's `source`:
-a relative path (`./modules/vpc`, `../shared/vpc`) or a remote module source
-(`github.com/org/repo//modules/vpc`). Absolute paths are rejected at parse
-time.
+The module's input must accept `string`, and its input and output sensitivity
+declarations must agree with the explicit `sensitive = false` claims above.
+See the [contracts example](../examples/contracts) for a complete blueprint
+and modules.
 
-A port carries at most three attributes — `type` (a Terraform type
-constraint, parse-checked where the file and port are known), `nullable`, and
-`sensitive` — and the grammar carries nothing `validate` does not check:
-there is no predicate syntax and no `stability`.
+Each port accepts three optional attributes. `type` is a quoted Terraform
+type constraint, such as `"string"` or `"list(string)"`.
 
-Attribute absence is the *lenient* claim: an omitted `nullable` on a producer
-means "may be null" (a weak promise), an omitted `nullable` on a consumer
-means "accepts null", and an omitted `sensitive` claims nothing. Checks only
-fire on explicit strictness the other side does not meet.
-
-## Keying: one contract per source, not per node
-
-Contracts are keyed by module source, not by node name. A local scope keys by
-the directory it resolves to against the declaring file's directory — the
-same base a node source in that file resolves against. A remote scope keys
-by the declared source string itself, because a remote node's vendored
-directory is per-instance (`vendor/<node-name>`) while the contract belongs
-to the source everything was vendored from. Every node sharing a source
-shares its contract: a group instantiated twice, one module reused through
-`backend_config`, or two vendored instances of the same remote module inherit
-the same contract everywhere they appear. Every actual module copy is checked against that contract, so updating only one vendored instance cannot hide a contradiction behind another copy. Repeated identical findings are grouped and name all affected nodes.
-
-## Facts, and who declares them
-
-Terraform modules already declare most contract facts in their own `variable`
-and `output` blocks. `validate` reconciles every explicit contract claim
-against the module's schema:
-
-| Fact | Declared by the module | Reconciled |
+| Omitted attribute | Producer | Consumer |
 |---|---|---|
-| Consumer `type` | `variable` type constraint | yes — C007 |
-| Consumer `sensitive` | `variable` `sensitive` | yes — C008 |
-| Producer `sensitive` | `output` `sensitive` | yes — C009 |
-| Producer `type` | nothing — a root-module output cannot declare a type | no — the contract's reason to exist |
+| `type` | No type promise | No type requirement |
+| `nullable` | May return null | Accepts null |
+| `sensitive` | No sensitivity claim | Does not declare acceptance of sensitive values |
 
-Producer output type is the one fact no `.tf` file can declare, which is
-exactly why the producer side of a contract exists: the contract is the only
-place that promise can be written down, and the compatibility checks (C003)
-are the only thing that reviews it.
+If the producer contract declares `sensitive = true`, the consumer contract
+must explicitly declare `sensitive = true` too. The corresponding module
+output and variable must also declare that sensitivity.
 
-## Error classes and codes
+## Modes
 
-`terragraph validate` reports three classes. C001/C002/C006 are existence and
-scope: a promise about a port the module never declared, or a scope nothing
-instantiates, is wrong whether or not anything consumes it yet. C003–C005 are
-side-vs-side compatibility, checked for every data edge whose endpoints both
-carry contracts on that port — producer and consumer each keep their word and
-still cannot be wired together. C007–C009 are contract-vs-module
-contradiction: the module's `variable` and `output` blocks are the
-declaration of record, and a contract claiming a different type or
-sensitivity is simply wrong about the module it describes — fix the contract,
-not the wiring. Reconciliation fires only on explicit claims (an absent
-attribute is no claim, and a variable with no type constraint has nothing to
-contradict), in both directions. Uncontracted endpoints check nothing — that
-is the migration path.
+Start by checking the blueprint:
 
-C007 asks whether the module's type could accept the contract's, not whether
-the two are identical. A contract **narrower** than the variable it describes
-is a stricter promise rather than a contradiction:
+```sh
+terragraph validate
+```
+
+The default mode, `warn`, reports contract findings without failing the
+command. Once the declarations agree, make findings block commands by adding
+this top-level block:
 
 ```hcl
-# a vendored module, not yours to edit
-variable "tags" { type = map(any) }
-
-consumer "./vendor/thing" {
-  input "tags" { type = "map(string)" }   # allowed: we only ever pass strings
+contracts {
+  mode = "enforce"
 }
 ```
 
-Requiring equality would have left C007 able to say nothing beyond "restate
-the module's type", and would have made a narrowing promise impossible for
-exactly the modules that cannot be changed. A genuine mismatch — `string`
-against a `number` variable — still fires. The distinction is Terraform's own
-safe conversion: narrowing is safe, `string` to `number` is not.
+`enforce` makes every C001–C009 finding an error for `validate`, `graph`,
+`plan`, `apply`, and `destroy`. Set `mode = "warn"` or remove the mode block
+to return to warnings. There is no per-code severity setting. Invalid syntax
+and conflicting contract declarations remain errors in either mode.
 
-| Code | Severity | Fires when |
-|---|---|---|
-| C001 | warning | producer contract names an output the module does not declare |
-| C002 | warning | consumer contract names an input variable the module does not declare |
-| C003 | warning | producer type is not convertible to the consumer's required type (cty `ConvertibleTo`) |
-| C004 | warning | consumer requires non-null (`nullable = false`) but the producer allows null |
-| C005 | warning | producer is `sensitive = true` but the consumer does not accept sensitive values |
-| C006 | warning | contract scope matches no node in the graph (stale path after a move or rename) |
-| C007 | warning | consumer's claimed `type` is one the module's declared variable type could never accept |
-| C008 | warning | consumer's explicit `sensitive` claim contradicts the module's declared variable sensitivity |
-| C009 | warning | producer's explicit `sensitive` claim contradicts the module's declared output sensitivity |
+## Where contracts live
 
-Every code is a warning under the default mode; the mode block below is the
-one severity dial, and it moves all of them together — there is no per-code
-severity.
+`producer` and `consumer` are top-level blueprint blocks or blocks inside a
+`group` body. In a directory blueprint, they can live in any parsed `.hcl`
+file. `contracts.hcl` is only a naming convention: when loading a single
+blueprint file, sibling files are not loaded automatically.
 
-### Modes
+The label is a module source: a relative path such as `./modules/vpc` or
+`../shared/vpc`, or a remote source such as
+`github.com/org/repo//modules/vpc`. Absolute paths are rejected.
 
-`contracts { mode = "..." }` in the blueprint is reviewed configuration and
-the only severity dial: `warn` (the default when the block is absent) reports
-every C001–C009 as a warning; `enforce` escalates them to errors, which
-blocks `validate`, `plan`, `apply`, and `destroy` the same way structural
-errors already do. An upgrade never selects a stricter mode on its own.
+## Keying: one contract per source, not per node
 
-## Contract identity
+All nodes using the same source share its contract. Local paths resolve
+against the declaring file's directory, including contracts inside a group.
+Remote sources must match the node's declared source string, rather than its
+per-node vendored path. Every actual module copy is checked, including copies
+used by different group instances.
 
-An internal contract digest helper exists for possible future consumers.
-No CLI command reports a contract digest, and execution, approval, and
-output snapshots do not use it.
+There is no per-node override. If a group and its enclosing blueprint declare
+the same source, role, and port, identical claims are shared; different claims
+are an error. Within one blueprint's files, declaring the same source, role,
+and port twice is an error even when the claims agree.
 
-## Deferred
+## Facts, and who declares them
 
-- The evidence layer (`terragraph.lock`, `observe`, `propose`) — removed per review; runtime evidence may return once the declarative layer settles.
-- Predicate syntax (`assert` blocks) — no check evaluates it today.
-- LSP/VS Code support for contract blocks — returns once the grammar settles.
+Contracts check that named ports exist. When both ends of a data edge have
+contracts for those ports, terragraph also compares their type, nullability,
+and sensitivity claims. A port without a contract skips this comparison, so
+contracts can be adopted one connection at a time. Type compatibility is
+checked only when both contracts specify a type; a possible conversion does
+not guarantee that every actual value will convert successfully.
+
+Explicit claims are also checked against the module's declarations:
+
+| Claim | Checked against the module |
+|---|---|
+| Consumer `type` | The variable's type constraint, if declared (C007) |
+| Consumer `sensitive` | The variable's sensitivity, in either direction (C008) |
+| Producer `sensitive` | The output's sensitivity, in either direction (C009) |
+| Producer `type` | Not checked against the output's value |
+| `nullable` | Compared between contracts only, not with module declarations or values |
+
+A consumer contract can be narrower than the module's input type. For example,
+a module variable declared as `map(any)` can have this consumer contract:
+
+```hcl
+consumer "./modules/app" {
+  input "tags" { type = "map(string)" }
+}
+```
+
+C007 accepts that narrowing, but reports `string` against a `number` variable:
+not every string can be converted to a number. The narrower contract documents
+the intended interface; it does not add runtime input validation.
+
+## Error classes and codes
+
+All codes are warnings in `warn` mode and errors in `enforce` mode.
+
+| Code | Reported when |
+|---|---|
+| C001 | Producer contract names an output the module does not declare |
+| C002 | Consumer contract names an input variable the module does not declare |
+| C003 | Producer type cannot be converted to the consumer's required type |
+| C004 | Consumer requires non-null but the producer does not promise `nullable = false` |
+| C005 | Producer declares `sensitive = true` but the consumer does not |
+| C006 | Contract source matches no node in the graph; update the source or remove the contract |
+| C007 | Consumer's claimed type cannot be safely converted to the module variable's declared type |
+| C008 | Consumer's explicit sensitivity differs from the module variable's declaration |
+| C009 | Producer's explicit sensitivity differs from the module output's declaration |

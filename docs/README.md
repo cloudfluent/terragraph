@@ -1,9 +1,32 @@
 # Documentation
 
-- [blueprint.md](blueprint.md): nodes, edges, reusing a module across instances, literal `vars`, per-node `runtime` and `env`
-- [groups.md](groups.md): bundling nodes into a reusable sub-blueprint
-- [contracts.md](contracts.md): producer guarantees, consumer requirements, and advisory or enforced declaration checks
-- [vendoring.md](vendoring.md): pointing a node at a remote git module
-- [execution-model.md](execution-model.md): validation, how values are passed, parallelism, concurrent CLI processes, the graph remote lock, how apply decides what needs applying, the one known limitation
-- [intellisense.md](intellisense.md): VS Code completion, go to definition, error reporting
-- [cli/terragraph.md](cli/terragraph.md): full command/flag reference, generated from the CLI itself (see `make docs` in the repo root)
+terragraph connects independent Terraform/OpenTofu root modules. A blueprint names the modules and connects their outputs to inputs; terragraph runs them in dependency order while each module keeps its own state.
+
+## Start with a working example
+
+[Install the CLI](../README.md#install) and put `terraform` or `tofu` on `PATH`. From a checkout of this repository, try the [basic example](../examples/basic), which uses local files and random values without cloud credentials:
+
+```sh
+cd examples/basic
+terragraph validate
+terragraph graph
+terragraph apply
+```
+
+`validate` checks the blueprint against its modules, `graph` shows execution order, and `apply` plans and asks for confirmation as it reaches each changed node. Add `--tofu` to use OpenTofu. The example may download providers during initialization.
+
+For a new graph, `apply` can create upstream resources and pass their outputs to downstream nodes in the same run. `plan` reads existing upstream outputs, so it cannot preview a consumer whose required output is unavailable, or propagate upstream's newly planned values. Read the [planning limitation](execution-model.md#known-limitation) before using a whole-graph plan as a change preview.
+
+For your own modules, start with [nodes, edges, and literal inputs](blueprint.md). If a node uses a remote source, run [vendoring](vendoring.md) before validation or execution. For a blueprint split across files, select its directory with `--blueprint .`; see [files and loading](blueprint.md#files-and-loading).
+
+## Find the next task
+
+| You want to | Read |
+|---|---|
+| Connect modules, supply inputs, or choose runtimes and environments | [Blueprint](blueprint.md) |
+| Reuse a set of connected modules | [Groups](groups.md) and the [group example](../examples/group) |
+| Check producer and consumer declarations | [Contracts](contracts.md) |
+| Bring Git sources into version control and update them | [Vendoring](vendoring.md) |
+| Preview a graph, control changes, run in CI, or recover from failure | [Execution model](execution-model.md) |
+| Use completion, definition navigation, and editor diagnostics | [VS Code IntelliSense](intellisense.md) |
+| Look up a command or flag | [CLI reference](cli/terragraph.md), generated from the CLI |
