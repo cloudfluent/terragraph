@@ -68,7 +68,7 @@ func (e *Engine) resolveInputs(name string, applied map[string]map[string]any) (
 		if _, conflict := vars[varName]; conflict {
 			return nil, fmt.Errorf("node.%s.input.%s: set by both a data edge and vars; remove one", name, varName)
 		}
-		if err := e.checkVarType(name, varName, val); err != nil {
+		if err := e.checkVarType(name, varName, val, false); err != nil {
 			return nil, err
 		}
 		vars[varName] = val
@@ -79,14 +79,15 @@ func (e *Engine) resolveInputs(name string, applied map[string]map[string]any) (
 
 // checkType verifies a concrete value resolved from a data edge against the target variable's declared type constraint. See checkVarType, which does the actual check and is shared with a node's own literal Vars.
 func (e *Engine) checkType(edge blueprint.Edge, val any) error {
-	if err := e.checkVarType(edge.To.Node, edge.To.Name, val); err != nil {
+	sourceSensitive := e.Graph.Nodes[edge.From.Node].Schema.OutputDetails[edge.From.Name].Sensitive
+	if err := e.checkVarType(edge.To.Node, edge.To.Name, val, sourceSensitive); err != nil {
 		return fmt.Errorf("value from %s: %w", edge.From, err)
 	}
 	return nil
 }
 
 // checkVarType verifies val against the type constraint node.varName declares, if any. This is an exact runtime check, not static inference: by the time either a data edge or a literal Vars entry supplies a value it's already concrete, so it's decoded straight against the target's cty.Type using the same mechanism Terraform itself uses to load *.tfvars.json. A variable with no declared type constraint is skipped (nothing to check against).
-func (e *Engine) checkVarType(nodeName, varName string, val any) error {
+func (e *Engine) checkVarType(nodeName, varName string, val any, sourceSensitive bool) (err error) {
 	v, ok := e.Graph.Nodes[nodeName].Schema.Variables[varName]
 	if !ok || v.Type == "" {
 		return nil
@@ -99,6 +100,15 @@ func (e *Engine) checkVarType(nodeName, varName string, val any) error {
 	ctyType, diags := typeexpr.TypeConstraint(typeExpr)
 	if diags.HasErrors() {
 		return fmt.Errorf("node.%s.input.%s: internal error resolving declared type %q: %s", nodeName, varName, v.Type, diags.Error())
+	}
+
+	// Encoding and conversion errors can contain payload keys; replace the error rather than wrapping it so callers cannot recover sensitive details from the chain.
+	if v.Sensitive || sourceSensitive {
+		defer func() {
+			if err != nil {
+				err = fmt.Errorf("node.%s.input.%s: cannot validate sensitive value against declared type %s; value details withheld; check the input value against the module variable declaration", nodeName, varName, v.Type)
+			}
+		}()
 	}
 
 	data, err := json.Marshal(val)
