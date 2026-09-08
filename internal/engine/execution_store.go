@@ -34,6 +34,7 @@ type executionStore interface {
 }
 
 type executionObject struct {
+	// Revision is the store API token; the S3 body carries a fresh nonce to prevent identical-write ABA, but only the response ETag authorizes later writes.
 	Revision string `json:"revision"`
 	Data     []byte `json:"data"`
 }
