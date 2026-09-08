@@ -44,7 +44,11 @@ func (e *Engine) plan(opts Options, inspect, allowTextFallback bool) (runs []Nod
 		return nil, err
 	}
 	defer session.close()
-	defer func() { resultErr = errors.Join(resultErr, session.finish(resultErr)) }()
+	defer func() {
+		if finishErr := session.finish(resultErr); finishErr != nil {
+			resultErr = errors.Join(resultErr, finishErr)
+		}
+	}()
 
 	e.logger().Info("plan starting", "node", opts.Node, "parallelism", opts.parallelism())
 	var reviewMu sync.Mutex

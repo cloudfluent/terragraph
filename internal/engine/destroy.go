@@ -53,7 +53,11 @@ func (e *Engine) Destroy(opts Options) (runs []NodeRun, resultErr error) {
 		return nil, err
 	}
 	defer session.close()
-	defer func() { resultErr = errors.Join(resultErr, session.finish(resultErr)) }()
+	defer func() {
+		if finishErr := session.finish(resultErr); finishErr != nil {
+			resultErr = errors.Join(resultErr, finishErr)
+		}
+	}()
 
 	e.logger().Info("destroy starting", "node", opts.Node, "parallelism", opts.parallelism(), "autoApprove", opts.AutoApprove)
 
