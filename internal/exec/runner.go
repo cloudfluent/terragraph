@@ -3,6 +3,7 @@ package exec
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,8 +25,10 @@ const (
 
 // Runner executes one binary against one node's working directory.
 type Runner struct {
-	Binary Binary
-	Dir    string
+	// Context bounds subprocess lifetime so cancellation finishes before the engine releases its run lock.
+	Context context.Context
+	Binary  Binary
+	Dir     string
 	// DataDir, if set, becomes TF_DATA_DIR: it isolates where Terraform keeps .terraform/ (downloaded providers and, critically, its cached backend configuration) away from Dir. Without this, two nodes that reuse the same module Source but configure different backend_config would collide: Terraform stores which backend it was last configured with inside .terraform/, keyed by working directory, so the second node's init would fail with "Backend configuration changed" even though -backend-config correctly gave it its own state. DataDir sidesteps that by giving every node its own .terraform/ regardless of whether Dir is shared.
 	DataDir string
 	// Env overrides inherited variables, but an explicit TF_DATA_DIR (case-insensitive) conflicts with DataDir and fails before execution to prevent nodes sharing a backend cache.
@@ -92,7 +95,7 @@ func (r *Runner) run(args ...string) error {
 	cmd.Stdin = r.Stdin
 	cmd.Stdout = r.Stdout
 	cmd.Stderr = r.Stderr
-	return cmd.Run()
+	return runCommand(r.Context, cmd)
 }
 
 // Init runs `terraform init`. backendConfig entries are passed as -backend-config=key=value flags (Terraform's partial backend configuration mechanism), which lets the same module be reused by multiple nodes with distinct backend settings (e.g. state file path) without generating or editing any .tf file. A nil/empty map passes no such flags, leaving the module's own backend configuration as-is.
@@ -175,7 +178,7 @@ func (r *Runner) PlanChangeSet(planPath string) ([]ResourceChange, error) {
 	cmd.Env = env
 	cmd.Stdout = &stdout
 	cmd.Stderr = r.Stderr
-	if err := cmd.Run(); err != nil {
+	if err := runCommand(r.Context, cmd); err != nil {
 		return nil, fmt.Errorf("running %s show -json in %s: %w", r.Binary, r.Dir, err)
 	}
 
@@ -271,7 +274,7 @@ func (r *Runner) Outputs() (Outputs, error) {
 	cmd.Env = env
 	cmd.Stdout = &stdout
 	cmd.Stderr = r.Stderr
-	if err := cmd.Run(); err != nil {
+	if err := runCommand(r.Context, cmd); err != nil {
 		return nil, fmt.Errorf("running %s output -json in %s: %w", r.Binary, r.Dir, err)
 	}
 
