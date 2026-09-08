@@ -225,8 +225,14 @@ func (r *Runner) Outputs() (map[string]any, error) {
 	}
 
 	var raw map[string]rawOutput
-	if err := json.Unmarshal(stdout.Bytes(), &raw); err != nil {
+	// Keep number tokens exact so an upstream output is not rounded before becoming a downstream input.
+	decoder := json.NewDecoder(&stdout)
+	decoder.UseNumber()
+	if err := decoder.Decode(&raw); err != nil {
 		return nil, fmt.Errorf("parsing %s output -json in %s: %w", r.Binary, r.Dir, err)
+	}
+	if decoder.Decode(new(any)) != io.EOF {
+		return nil, fmt.Errorf("parsing %s output -json in %s: expected a single JSON value", r.Binary, r.Dir)
 	}
 
 	outputs := make(map[string]any, len(raw))

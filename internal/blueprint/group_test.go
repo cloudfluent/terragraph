@@ -1,6 +1,9 @@
 package blueprint
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestParseFile_GroupDefinition(t *testing.T) {
 	path := writeTemp(t, `
@@ -185,7 +188,7 @@ use "eks-service" {
 	if u.Vars["cluster_name"] != "checkout" {
 		t.Fatalf("unexpected cluster_name: %+v", u.Vars["cluster_name"])
 	}
-	if u.Vars["az_count"] != float64(3) {
+	if got, err := json.Marshal(u.Vars["az_count"]); err != nil || string(got) != "3" {
 		t.Fatalf("unexpected az_count: %+v", u.Vars["az_count"])
 	}
 }

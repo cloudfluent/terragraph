@@ -1,6 +1,7 @@
 package blueprint
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -758,13 +759,15 @@ func parseVarsAttr(attr *hcl.Attribute) (map[string]any, error) {
 	it := val.ElementIterator()
 	for it.Next() {
 		k, v := it.Element()
-		// Round-trips through JSON rather than a direct cty->Go conversion: this is the exact inverse of how Engine.checkVarType later decodes a declared variable's cty.Type from a plain Go value, so a vars entry and a data edge's resolved value end up represented identically (map[string]any, []any, string, float64, bool, nil) by the time either reaches engine.resolveInputs.
+		// Preserve numeric tokens through JSON so large integers and precise decimals reach tfvars without float64 rounding, including inside nested collections.
 		data, err := ctyjson.Marshal(v, v.Type())
 		if err != nil {
 			return nil, fmt.Errorf("%s: vars.%s: %s", attr.Range, k.AsString(), err)
 		}
 		var goVal any
-		if err := json.Unmarshal(data, &goVal); err != nil {
+		decoder := json.NewDecoder(bytes.NewReader(data))
+		decoder.UseNumber()
+		if err := decoder.Decode(&goVal); err != nil {
 			return nil, fmt.Errorf("%s: vars.%s: %s", attr.Range, k.AsString(), err)
 		}
 		result[k.AsString()] = goVal

@@ -1,6 +1,7 @@
 package blueprint
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -242,7 +243,7 @@ node "data-apne2-dev-vpc" {
 	if node.Vars["nat_enabled"] != false {
 		t.Fatalf("unexpected nat_enabled: %+v", node.Vars["nat_enabled"])
 	}
-	if node.Vars["az_count"] != float64(3) {
+	if got, err := json.Marshal(node.Vars["az_count"]); err != nil || string(got) != "3" {
 		t.Fatalf("unexpected az_count: %+v", node.Vars["az_count"])
 	}
 	subnets, ok := node.Vars["private_subnets"].([]any)

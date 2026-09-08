@@ -1,8 +1,10 @@
 package engine
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -89,9 +91,15 @@ func (e *Engine) readSnapshot(name string) (snapshotFile, bool) {
 		return snapshotFile{}, false
 	}
 	var f snapshotFile
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
 	// Every writer emits an outputs object, even when empty; a missing or null object is corruption, not an output lookup miss.
-	if err := json.Unmarshal(data, &f); err != nil || f.Schema != 1 || f.Node != name || f.Outputs == nil {
+	if err := decoder.Decode(&f); err != nil || f.Schema != 1 || f.Node != name || f.Outputs == nil {
 		e.logger().Debug("output snapshot present but unreadable, ignoring it", "node", name, "err", err)
+		return snapshotFile{}, false
+	}
+	if decoder.Decode(new(any)) != io.EOF {
+		e.logger().Debug("output snapshot has trailing data, ignoring it", "node", name)
 		return snapshotFile{}, false
 	}
 	// The current module declaration also governs legacy files, including values published before an output became sensitive.
