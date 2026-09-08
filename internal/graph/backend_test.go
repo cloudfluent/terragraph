@@ -691,7 +691,7 @@ node "vpc" {
 	if problems[0].Severity != SeverityWarning {
 		t.Fatalf("got = %v, want warning", problems[0])
 	}
-	for _, want := range []string{"node.vpc.backend_config.path", "relative", g.Nodes["vpc"].Dir, "absolute path", "omit"} {
+	for _, want := range []string{"node.vpc.backend_config.path", "relative", fmt.Sprintf("%q", g.Nodes["vpc"].Dir), "absolute path", "omit"} {
 		if !strings.Contains(problems[0].Message, want) {
 			t.Fatalf("got = %q, want substring %q", problems[0].Message, want)
 		}

@@ -98,12 +98,12 @@ node "vpc" {
 func TestStateOrphans_ExplicitPathElsewhereDoesNotClaimTheStateDir(t *testing.T) {
 	baseDir := t.TempDir()
 	writeModule(t, filepath.Join(baseDir, "stacks", "vpc"))
-	path := writeBlueprint(t, baseDir, `
+	path := writeBlueprint(t, baseDir, fmt.Sprintf(`
 node "vpc" {
   source         = "./stacks/vpc"
-  backend_config = { path = "/somewhere/else/live.tfstate" }
+  backend_config = { path = %q }
 }
-`)
+`, filepath.Join(baseDir, "elsewhere", "live.tfstate")))
 
 	e, err := Load(path, exec.Terraform, io.Discard, io.Discard)
 	if err != nil {
