@@ -289,3 +289,53 @@ func TestAll_RootSourceWithAbsoluteExternalStateCanRefresh(t *testing.T) {
 		t.Fatalf("module = %s, err = %v, want fetched content", after, err)
 	}
 }
+
+func TestAll_BrokenVendoredMetadataReportsSafeRecovery(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		marker string
+	}{
+		{name: "malformed-json", marker: "{"},
+		{name: "escaping-path", marker: `{"subdir":"../other"}`},
+		{name: "missing-directory", marker: `{"subdir":"missing"}`},
+		{name: "file-instead-of-directory", marker: `{"subdir":"main.tf"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n, baseDir, dir := legacySubdirFixture(t, `output "id" { value = "legacy" }`)
+			marker := filepath.Join(dir, blueprint.VendoredSourceFilename)
+			state := filepath.Join(dir, "terraform.tfstate")
+			backup := state + ".backup"
+			mustWrite(t, marker, tc.marker)
+			mustWrite(t, state, `{"version":4,"serial":2}`)
+			mustWrite(t, backup, `{"version":4,"serial":1}`)
+			manifest := filepath.Join(baseDir, "vendor.yaml")
+			originals := make(map[string]string)
+			for _, path := range []string{marker, state, backup, manifest, filepath.Join(dir, "main.tf")} {
+				data, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				originals[path] = string(data)
+			}
+			results, err := All([]blueprint.Node{n}, baseDir, "vendor", manifest, Options{Force: true})
+			if err != nil || len(results) != 1 || results[0].Err == nil {
+				t.Fatalf("results = %+v, err = %v, want metadata refusal", results, err)
+			}
+			message := results[0].Err.Error()
+			for _, want := range []string{"verify local state and backups", "recover or migrate", "before removing that copy", "terragraph vendor again"} {
+				if !strings.Contains(message, want) {
+					t.Errorf("error = %q, want recovery step %q", message, want)
+				}
+			}
+			if strings.Contains(message, "--force") {
+				t.Errorf("error = %q, must not recommend retrying --force", message)
+			}
+			for path, want := range originals {
+				got, err := os.ReadFile(path)
+				if err != nil || string(got) != want {
+					t.Errorf("%s changed: got %q, err = %v, want %q", path, got, err, want)
+				}
+			}
+		})
+	}
+}
