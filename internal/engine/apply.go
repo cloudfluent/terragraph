@@ -25,6 +25,10 @@ func (e *Engine) Apply(opts Options) ([]NodeRun, error) {
 	}
 	defer unlock()
 
+	if err := e.checkRuntimeFiles(opts); err != nil {
+		return nil, err
+	}
+
 	unlockGraph, err := e.lockGraph()
 	if err != nil {
 		return nil, err
