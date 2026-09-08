@@ -2,6 +2,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -22,6 +23,12 @@ func main() {
 	defer stop()
 	if err := root.ExecuteContext(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
+		if name == "run" {
+			var native interface{ ExitCode() int }
+			if errors.As(err, &native) && native.ExitCode() > 0 {
+				os.Exit(native.ExitCode())
+			}
+		}
 		os.Exit(1)
 	}
 }

@@ -19,6 +19,7 @@ import (
 type ExecutionRecord struct {
 	SchemaVersion int             `json:"schema_version"`
 	Preparation   string          `json:"preparation,omitempty"`
+	Backup        bool            `json:"backup,omitempty"`
 	ID            string          `json:"id"`
 	Scope         string          `json:"scope"`
 	Binding       string          `json:"binding,omitempty"`
@@ -179,7 +180,7 @@ func executionNeedsRecovery(record ExecutionRecord) bool {
 	return false
 }
 
-func (e *Engine) beginExecution(operation string, names []string) (*executionSession, error) {
+func (e *Engine) beginExecution(operation string, names []string, readOnly ...bool) (*executionSession, error) {
 	store, err := e.openExecutionStore()
 	if err != nil {
 		return nil, err
@@ -194,7 +195,7 @@ func (e *Engine) beginExecution(operation string, names []string) (*executionSes
 	if err != nil {
 		return nil, err
 	}
-	if err := e.checkExecutionBarrier(store, scope, ""); err != nil {
+	if err := e.checkExecutionBarrier(store, scope, "", readOnly...); err != nil {
 		return nil, err
 	}
 	if _, err := e.pruneExecutions(store); err != nil {
@@ -374,7 +375,7 @@ func (e *Engine) GetExecution(id string) (ExecutionRecord, error) {
 	return record, nil
 }
 
-func (e *Engine) checkExecutionBarrier(store executionStore, scope, exceptID string) error {
+func (e *Engine) checkExecutionBarrier(store executionStore, scope, exceptID string, readOnly ...bool) error {
 	keys, err := store.list(e.context())
 	if err != nil {
 		return err
@@ -390,7 +391,7 @@ func (e *Engine) checkExecutionBarrier(store executionStore, scope, exceptID str
 		if old.Scope != scope {
 			return fmt.Errorf("execution %s belongs to another coordination scope; configure the same graph lock or separate prefixes", old.ID)
 		}
-		if old.ID != exceptID && executionNeedsRecovery(old) {
+		if old.ID != exceptID && executionNeedsRecovery(old) && !(len(readOnly) > 0 && readOnly[0]) {
 			return fmt.Errorf("execution %s has an unresolved mutation; inspect it with plan show and recover before changing infrastructure", old.ID)
 		}
 	}

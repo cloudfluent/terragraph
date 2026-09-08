@@ -64,6 +64,7 @@ func NewRootCmd(version string) *cobra.Command {
 	root.AddCommand(newObservationCmd("status", &blueprintPath, binaryOf))
 	root.AddCommand(newPlanCmd(&blueprintPath, binaryOf, loggerOf))
 	root.AddCommand(newApplyCmd(&blueprintPath, binaryOf, loggerOf))
+	root.AddCommand(newNodeOperationCmd(&blueprintPath, binaryOf, loggerOf))
 	root.AddCommand(newDestroyCmd(&blueprintPath, binaryOf, loggerOf))
 	root.AddCommand(newForceUnlockCmd(&blueprintPath))
 	root.AddCommand(newVendorCmd(&blueprintPath, loggerOf))

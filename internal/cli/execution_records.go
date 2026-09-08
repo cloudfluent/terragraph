@@ -19,6 +19,7 @@ type executionNodeDTO struct {
 type executionDTO struct {
 	ID          string             `json:"id"`
 	Preparation string             `json:"preparation,omitempty"`
+	Backup      bool               `json:"backup_available"`
 	Operation   string             `json:"operation"`
 	Status      string             `json:"status"`
 	CreatedAt   time.Time          `json:"created_at"`
@@ -35,7 +36,7 @@ type executionHistoryDTO struct {
 }
 
 func executionToDTO(record engine.ExecutionRecord) executionDTO {
-	dto := executionDTO{ID: record.ID, Preparation: record.Preparation, Operation: record.Operation, Status: record.Status, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt, FinishedAt: record.FinishedAt, RecoveryAt: record.RecoveryAt, Nodes: []executionNodeDTO{}}
+	dto := executionDTO{ID: record.ID, Preparation: record.Preparation, Backup: record.Backup, Operation: record.Operation, Status: record.Status, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt, FinishedAt: record.FinishedAt, RecoveryAt: record.RecoveryAt, Nodes: []executionNodeDTO{}}
 	for _, node := range record.Nodes {
 		dto.Nodes = append(dto.Nodes, executionNodeDTO{Node: node.Name, Review: reviewToDTO(node.Review), Phase: node.Phase, PlanID: node.PlanID, Code: node.Code})
 	}
@@ -44,6 +45,7 @@ func executionToDTO(record engine.ExecutionRecord) executionDTO {
 
 func newExecutionHistoryCmd(kind string, path *string) *cobra.Command {
 	var output string
+	var backup bool
 	usage, short := kind, "List execution records without reading infrastructure state"
 	argsCheck := cobra.NoArgs
 	if kind == "show" {
@@ -52,6 +54,9 @@ func newExecutionHistoryCmd(kind string, path *string) *cobra.Command {
 		argsCheck = cobra.ExactArgs(1)
 	}
 	cmd := &cobra.Command{Use: usage, Short: short, RunE: func(cmd *cobra.Command, args []string) (resultErr error) {
+		if backup && output != "text" {
+			return fmt.Errorf("--backup emits raw native state; omit --output json")
+		}
 		result := executionHistoryDTO{SchemaVersion: 1, Executions: []executionDTO{}, Diagnostics: []diagnosticDTO{}}
 		defer func() {
 			if resultErr != nil {
@@ -89,6 +94,9 @@ func newExecutionHistoryCmd(kind string, path *string) *cobra.Command {
 			return err
 		}
 		defer close()
+		if backup {
+			return e.ReadExecutionBackup(args[0], cmd.OutOrStdout())
+		}
 		if kind == "show" {
 			record, err := e.GetExecution(args[0])
 			if record.ID != "" {
@@ -102,6 +110,9 @@ func newExecutionHistoryCmd(kind string, path *string) *cobra.Command {
 		}
 		return err
 	}}
+	if kind == "show" {
+		cmd.Flags().BoolVar(&backup, "backup", false, "write the native state backup to stdout; may contain secrets")
+	}
 	cmd.Flags().StringVar(&output, "output", "text", "output format: text or json")
 	return cmd
 }

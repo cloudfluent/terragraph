@@ -140,6 +140,17 @@ func (e *Engine) pruneExecutions(store executionStore) ([]string, error) {
 		if now.Sub(*record.FinishedAt) < e.Blueprint.ExecutionSettings().RecordRetention {
 			continue
 		}
+		if record.Backup {
+			backup, err := store.read(e.context(), record.ID+".bin")
+			if err != nil && !errors.Is(err, errExecutionMissing) {
+				return removed, err
+			}
+			if err == nil {
+				if err := store.remove(e.context(), record.ID+".bin", backup.Revision); err != nil {
+					return removed, err
+				}
+			}
+		}
 		if err := store.remove(e.context(), key, revision); err != nil {
 			return removed, err
 		}

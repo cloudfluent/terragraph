@@ -9,7 +9,7 @@ import (
 )
 
 // InitRead requires a fresh caller-owned data directory and a backend whose initialization cannot create state.
-func (r *Runner) InitRead(backendConfig map[string]string) error {
+func (r *Runner) InitRead(backendConfig map[string]string, extraArgs ...string) error {
 	args := []string{"init", "-input=false", "-lockfile=readonly", "-reconfigure"}
 	keys := make([]string, 0, len(backendConfig))
 	for key := range backendConfig {
@@ -19,7 +19,7 @@ func (r *Runner) InitRead(backendConfig map[string]string) error {
 	for _, key := range keys {
 		args = append(args, fmt.Sprintf("-backend-config=%s=%s", key, backendConfig[key]))
 	}
-	return r.run(args...)
+	return r.run(append(args, extraArgs...)...)
 }
 
 // StateObservation retains only facts from the state document, never resource values or provider credentials.
