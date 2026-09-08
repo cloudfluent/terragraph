@@ -62,6 +62,7 @@ func TestExecutionJournal_PreservesAppliedWhenOutputReadFails(t *testing.T) {
 	if err := s.finish(errors.New("output read failed")); err != nil {
 		t.Fatal(err)
 	}
+	s.close()
 	records, err := e.ListExecutions()
 	if err != nil || len(records) != 1 || records[0].Nodes[0].Phase != "applied" || records[0].Status != "needs_recovery" {
 		t.Fatalf("got = %+v, %v", records, err)
@@ -85,6 +86,7 @@ func TestExecutionJournal_FinishedRunDoesNotCreatePlanBundle(t *testing.T) {
 	if err != nil || len(keys) != 1 || keys[0] != s.record.ID+".json" {
 		t.Fatalf("got = %v, %v", keys, err)
 	}
+	s.close()
 	next, err := e.beginExecution("apply", []string{"example"})
 	if err != nil {
 		t.Fatal(err)
