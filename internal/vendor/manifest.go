@@ -54,7 +54,7 @@ func LoadManifest(path string) (Manifest, error) {
 	return m, nil
 }
 
-// Save writes the manifest, with entries sorted by node name for a stable, diff-friendly result.
+// Save replaces the manifest only after encoding and writing it completely, preserving the last readable manifest if a write fails.
 func (m Manifest) Save(path string) error {
 	names := make([]string, 0, len(m))
 	for name := range m {
@@ -74,8 +74,24 @@ func (m Manifest) Save(path string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("creating vendor manifest directory: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	f, err := os.CreateTemp(filepath.Dir(path), ".terragraph-manifest-")
+	if err != nil {
+		return fmt.Errorf("staging vendor manifest: %w", err)
+	}
+	defer func() { _ = os.Remove(f.Name()) }()
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
 		return fmt.Errorf("writing vendor manifest: %w", err)
+	}
+	if err := f.Chmod(0o644); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("setting vendor manifest permissions: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("closing vendor manifest: %w", err)
+	}
+	if err := os.Rename(f.Name(), path); err != nil {
+		return fmt.Errorf("publishing vendor manifest: %w", err)
 	}
 	return nil
 }

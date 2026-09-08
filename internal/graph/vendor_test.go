@@ -67,3 +67,33 @@ output "vpc_id" { value = "x" }
 		t.Fatalf("expected Build to look under the configured vendor directory")
 	}
 }
+
+func TestBuild_InvalidVendoredMetadataIsRejected(t *testing.T) {
+	root := t.TempDir()
+	writeFixtureFile(t, filepath.Join(root, "vendor", "app", "main.tf"), `output "id" { value = "legacy" }`)
+	writeFixtureFile(t, filepath.Join(root, "vendor", "app", blueprint.VendoredSourceFilename), "{")
+	_, err := Build(&blueprint.Blueprint{Nodes: []blueprint.Node{{Name: "app", Source: "git::https://example.com/repo.git"}}}, root)
+	if err == nil {
+		t.Fatalf("Build accepted malformed source metadata")
+	}
+}
+
+func TestBuild_EscapingVendoredSubdirIsRejected(t *testing.T) {
+	root := t.TempDir()
+	writeFixtureFile(t, filepath.Join(root, "vendor", "app", blueprint.VendoredSourceFilename), `{"subdir":"../other"}`)
+	writeFixtureFile(t, filepath.Join(root, "vendor", "other", "main.tf"), `output "id" { value = "unrelated" }`)
+	_, err := Build(&blueprint.Blueprint{Nodes: []blueprint.Node{{Name: "app", Source: "git::https://example.com/repo.git"}}}, root)
+	if err == nil {
+		t.Fatalf("Build accepted a subdir outside the source package")
+	}
+}
+
+func TestBuild_LocalSourceIgnoresVendoredMetadata(t *testing.T) {
+	root := t.TempDir()
+	writeFixtureFile(t, filepath.Join(root, "module", "main.tf"), `output "id" { value = "local" }`)
+	writeFixtureFile(t, filepath.Join(root, "module", blueprint.VendoredSourceFilename), "{")
+	g, err := Build(&blueprint.Blueprint{Nodes: []blueprint.Node{{Name: "app", Source: "./module"}}}, root)
+	if err != nil || !g.Nodes["app"].Schema.HasOutput("id") {
+		t.Fatalf("Build = %v, want local module unchanged", err)
+	}
+}

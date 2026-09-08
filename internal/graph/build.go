@@ -3,7 +3,6 @@ package graph
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 
@@ -91,7 +90,7 @@ func Build(bp *blueprint.Blueprint, baseDir string, cliBinary ...string) (*Graph
 	if rt, ok := bp.DefaultRuntime(); ok {
 		fallback = rt.Binary
 	}
-	g, _, err := build(bp, baseDir, "", nil, nil, nil, "", &resolveContext{rootDir: baseDir, fallbackBinary: fallback})
+	g, _, err := build(bp, baseDir, "", nil, nil, nil, "", &resolveContext{rootDir: baseDir, rootVendorDir: filepath.Join(baseDir, bp.VendorDirectory()), fallbackBinary: fallback})
 	if g != nil {
 		g.Lock = bp.Lock
 		g.Snapshots = bp.Snapshots != nil && bp.Snapshots.Enabled
@@ -126,12 +125,7 @@ func build(bp *blueprint.Blueprint, baseDir, namespace string, ambient *blueprin
 		return nil, nil, err
 	}
 
-	qualify := func(name string) string {
-		if namespace == "" {
-			return name
-		}
-		return namespace + "." + name
-	}
+	qualify := func(name string) string { return qualifyName(namespace, name) }
 
 	// bp.Runtimes was already validated (every blueprint.Node.Runtime/blueprint.Use.Runtime in this same parse scope names an entry here) by blueprint.ParseFile/ParseDir before Build ever sees it, so a lookup miss below can't happen; runtimeFor's ok result exists only to satisfy the map-access form.
 	runtimeFor := func(name string) (blueprint.Runtime, bool) {
@@ -146,12 +140,10 @@ func build(bp *blueprint.Blueprint, baseDir, namespace string, ambient *blueprin
 	for _, n := range bp.Nodes {
 		dir := filepath.Join(baseDir, n.Source)
 		if blueprint.IsRemote(n.Source) {
-			dir = filepath.Join(baseDir, bp.VendorDirectory(), n.Name)
-			if _, err := os.Stat(dir); os.IsNotExist(err) {
-				return nil, nil, fmt.Errorf(
-					"node %q: source %q is not vendored yet; run \"terragraph vendor --node %s\"",
-					n.Name, n.Source, n.Name,
-				)
+			var err error
+			dir, err = remoteModuleDir(rc.rootVendorDir, baseDir, bp.VendorDirectory(), qualify(n.Name), n.Name)
+			if err != nil {
+				return nil, nil, fmt.Errorf("node %q: %w", qualify(n.Name), err)
 			}
 		}
 		resolved := ambient
@@ -241,13 +233,13 @@ func resolveUse(u blueprint.Use, referencingDir, instancePrefix string, ambient 
 		return useInfo{}, nil, err
 	}
 	defer pop()
-	def, groupRuntimes, dirContracts, err := loadGroupDef(rc, groupDir, u.GroupName)
+	def, groupRuntimes, dirContracts, groupVendor, err := loadGroupDef(rc, groupDir, u.GroupName)
 	if err != nil {
 		return useInfo{}, nil, err
 	}
 
 	// def.Nodes/Uses may reference a runtime by name (blueprint.Node.Runtime / blueprint.Use.Runtime); those names resolve against groupRuntimes, the `runtime` blocks declared in this same group source directory, never against whatever the outer scope that wrote u happens to have declared (see blueprint.validateRuntimes, which already enforced this scoping at parse time).
-	innerBP := &blueprint.Blueprint{Nodes: def.Nodes, Edges: def.Edges, Uses: def.Uses, Runtimes: groupRuntimes}
+	innerBP := &blueprint.Blueprint{Nodes: def.Nodes, Edges: def.Edges, Uses: def.Uses, Runtimes: groupRuntimes, Vendor: groupVendor}
 	internal, innerUses, err := build(innerBP, groupDir, instancePrefix, ambient, ambientEnv, ambientBackendConfig, ambientApprove, rc)
 	if err != nil {
 		return useInfo{}, nil, err
@@ -268,7 +260,7 @@ func resolveUse(u blueprint.Use, referencingDir, instancePrefix string, ambient 
 	}
 
 	// def.Export's own references may point at a plain internal node or at one of this group's own use instances (innerUses). Resolve through either, down to real leaf ports, exactly as an edge endpoint would be.
-	qualify := func(name string) string { return instancePrefix + "." + name }
+	qualify := func(name string) string { return qualifyName(instancePrefix, name) }
 	resolvedExport, err := resolveExport(def.Export, innerUses, qualify)
 	if err != nil {
 		return useInfo{}, nil, err

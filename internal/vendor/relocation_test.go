@@ -1,0 +1,341 @@
+package vendor
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/cloudfluent/terragraph/internal/blueprint"
+)
+
+func legacySubdirFixture(t *testing.T, contents string) (blueprint.Node, string, string) {
+	t.Helper()
+	repoDir := setupThrowawayGitRepo(t)
+	mustWrite(t, filepath.Join(repoDir, "modules", "app", "main.tf"), contents)
+	commitGitFixture(t, repoDir)
+	baseDir := t.TempDir()
+	dir := filepath.Join(baseDir, "vendor", "app")
+	mustWrite(t, filepath.Join(dir, "main.tf"), contents)
+	n := blueprint.Node{Name: "app", Source: "git::file://" + repoDir + "//modules/app?ref=HEAD"}
+	if err := (Manifest{"app": Entry{Source: n.Source}}).Save(filepath.Join(baseDir, "vendor.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	return n, baseDir, dir
+}
+
+func assertRelocationRefused(t *testing.T, n blueprint.Node, baseDir, dir string) {
+	t.Helper()
+	manifestPath := filepath.Join(baseDir, "vendor.yaml")
+	before, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	moduleBefore, err := os.ReadFile(filepath.Join(dir, "main.tf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, err := All([]blueprint.Node{n}, baseDir, "vendor", manifestPath, Options{Force: true})
+	if err != nil || len(results) != 1 || results[0].Err == nil || !strings.Contains(results[0].Err.Error(), "local state") {
+		t.Fatalf("results = %+v, err = %v, want local-state relocation refusal", results, err)
+	}
+	after, err := os.ReadFile(manifestPath)
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("manifest changed after refusal: %v", err)
+	}
+	moduleAfter, err := os.ReadFile(filepath.Join(dir, "main.tf"))
+	if err != nil || string(moduleAfter) != string(moduleBefore) {
+		t.Fatalf("module changed after refusal: %v", err)
+	}
+	assertMissing(t, filepath.Join(dir, blueprint.VendoredSourceFilename))
+}
+
+func TestAll_LegacySubdirWithImplicitLocalStateRefusesUpgrade(t *testing.T) {
+	n, baseDir, dir := legacySubdirFixture(t, `output "id" { value = "legacy" }`)
+	state := filepath.Join(dir, "terraform.tfstate")
+	mustWrite(t, state, `{"version":4,"terraform_version":"1.5.7","serial":1,"lineage":"legacy","outputs":{},"resources":[]}`)
+	assertRelocationRefused(t, n, baseDir, dir)
+	assertExists(t, state)
+}
+
+func TestAll_LegacySubdirWithRelativeBackendStateRefusesUpgrade(t *testing.T) {
+	n, baseDir, dir := legacySubdirFixture(t, `terraform {
+  backend "local" { path = "../shared.state" }
+}
+output "id" { value = "legacy" }`)
+	state := filepath.Join(dir, "..", "shared.state")
+	mustWrite(t, state, `{"version":4,"serial":1,"lineage":"legacy","outputs":{},"resources":[]}`)
+	assertRelocationRefused(t, n, baseDir, dir)
+	assertExists(t, state)
+}
+
+func TestAll_LegacySubdirWithRelativeBackendOverrideRefusesUpgrade(t *testing.T) {
+	n, baseDir, dir := legacySubdirFixture(t, `terraform {
+  backend "local" {}
+}`)
+	n.BackendConfig = map[string]string{"path": "runtime.state"}
+	mustWrite(t, filepath.Join(dir, "runtime.state"), `{"version":4}`)
+	assertRelocationRefused(t, n, baseDir, dir)
+}
+
+func TestAll_LegacySubdirWithAbsoluteExternalStateCanUpgrade(t *testing.T) {
+	n, baseDir, _ := legacySubdirFixture(t, `terraform {
+  backend "local" {}
+}`)
+	state := filepath.Join(t.TempDir(), "existing.state")
+	mustWrite(t, state, `{"version":4}`)
+	n.BackendConfig = map[string]string{"path": state}
+	results, err := All([]blueprint.Node{n}, baseDir, "vendor", filepath.Join(baseDir, "vendor.yaml"), Options{})
+	if err != nil || len(results) != 1 || results[0].Err != nil {
+		t.Fatalf("results = %+v, err = %v, want upgrade preserving absolute state", results, err)
+	}
+	assertExists(t, state)
+}
+
+func TestAll_LegacySubdirWithAbsoluteInTreeStateRefusesUpgrade(t *testing.T) {
+	n, baseDir, dir := legacySubdirFixture(t, `terraform {
+  backend "local" {}
+}`)
+	state := filepath.Join(dir, "existing.state")
+	mustWrite(t, state, `{"version":4}`)
+	n.BackendConfig = map[string]string{"path": state}
+	assertRelocationRefused(t, n, baseDir, dir)
+	assertExists(t, state)
+}
+
+func TestAll_LegacySubdirWithUnknownBackendPathRefusesUpgrade(t *testing.T) {
+	n, baseDir, dir := legacySubdirFixture(t, `terraform {
+  backend "local" { path = var.state_path }
+}`)
+	results, err := All([]blueprint.Node{n}, baseDir, "vendor", filepath.Join(baseDir, "vendor.yaml"), Options{})
+	if err != nil || len(results) != 1 || results[0].Err == nil || !strings.Contains(results[0].Err.Error(), "cannot be determined") {
+		t.Fatalf("results = %+v, err = %v, want unknown state path refusal", results, err)
+	}
+	assertMissing(t, filepath.Join(dir, blueprint.VendoredSourceFilename))
+}
+
+func TestAll_LegacySubdirWithLocalStateBackupRefusesUpgrade(t *testing.T) {
+	n, baseDir, dir := legacySubdirFixture(t, `output "id" { value = "legacy" }`)
+	state := filepath.Join(dir, "terraform.tfstate.backup")
+	mustWrite(t, state, `{"version":4}`)
+	assertRelocationRefused(t, n, baseDir, dir)
+	assertExists(t, state)
+}
+
+func TestAll_LegacySubdirWithWorkspaceStateRefusesUpgrade(t *testing.T) {
+	n, baseDir, dir := legacySubdirFixture(t, `output "id" { value = "legacy" }`)
+	state := filepath.Join(dir, "terraform.tfstate.d", "prod", "terraform.tfstate")
+	mustWrite(t, state, `{"version":4}`)
+	assertRelocationRefused(t, n, baseDir, dir)
+	assertExists(t, state)
+}
+
+func TestAll_LegacySubdirWithDivergentTofuStateRefusesUpgrade(t *testing.T) {
+	n, baseDir, dir := legacySubdirFixture(t, `output "id" { value = "legacy" }`)
+	mustWrite(t, filepath.Join(dir, "backend.tofu"), `terraform {
+   backend "local" { path = "tofu-state/custom.json" }
+ }`)
+	state := filepath.Join(dir, "tofu-state", "custom.json.backup")
+	mustWrite(t, state, `{"version":4}`)
+	manifestPath := filepath.Join(baseDir, "vendor.yaml")
+	before, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, err := All([]blueprint.Node{n}, baseDir, "vendor", manifestPath, Options{})
+	if err != nil || len(results) != 1 || results[0].Err == nil || !strings.Contains(results[0].Err.Error(), "declarations differ") {
+		t.Fatalf("results = %+v, err = %v, want ambiguous runtime relocation refusal", results, err)
+	}
+	after, err := os.ReadFile(manifestPath)
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("manifest changed: %v", err)
+	}
+	stateAfter, err := os.ReadFile(state)
+	if err != nil || string(stateAfter) != `{"version":4}` {
+		t.Fatalf("state changed: %s, %v", stateAfter, err)
+	}
+	assertExists(t, filepath.Join(dir, "backend.tofu"))
+	assertMissing(t, filepath.Join(dir, blueprint.VendoredSourceFilename))
+}
+
+func TestAll_PackagedSubdirStateRefusesChangingToRoot(t *testing.T) {
+	n, baseDir, dir := legacySubdirFixture(t, `output "id" { value = "legacy" }`)
+	manifestPath := filepath.Join(baseDir, "vendor.yaml")
+	results, err := All([]blueprint.Node{n}, baseDir, "vendor", manifestPath, Options{})
+	if err != nil || len(results) != 1 || results[0].Err != nil {
+		t.Fatalf("initial package vendor = %+v, %v", results, err)
+	}
+	moduleDir := filepath.Join(dir, "modules", "app")
+	state := filepath.Join(moduleDir, "terraform.tfstate")
+	mustWrite(t, state, `{"version":4}`)
+	before, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n.Source = strings.Replace(n.Source, "//modules/app", "", 1)
+	results, err = All([]blueprint.Node{n}, baseDir, "vendor", manifestPath, Options{})
+	if err != nil || len(results) != 1 || results[0].Err == nil || !strings.Contains(results[0].Err.Error(), "local state") {
+		t.Fatalf("results = %+v, err = %v, want packaged state refusal", results, err)
+	}
+	after, err := os.ReadFile(manifestPath)
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("manifest changed: %v", err)
+	}
+	after, err = os.ReadFile(state)
+	if err != nil || string(after) != `{"version":4}` {
+		t.Fatalf("state changed: %s, %v", after, err)
+	}
+	assertExists(t, filepath.Join(moduleDir, "main.tf"))
+	assertExists(t, filepath.Join(dir, blueprint.VendoredSourceFilename))
+}
+
+func TestAll_PackagedSubdirSiblingStateRefusesRefresh(t *testing.T) {
+	n, baseDir, dir := legacySubdirFixture(t, `terraform {
+   backend "local" {}
+ }`)
+	manifestPath := filepath.Join(baseDir, "vendor.yaml")
+	results, err := All([]blueprint.Node{n}, baseDir, "vendor", manifestPath, Options{})
+	if err != nil || len(results) != 1 || results[0].Err != nil {
+		t.Fatalf("initial package vendor = %+v, %v", results, err)
+	}
+	state := filepath.Join(dir, "state", "existing.json.backup")
+	mustWrite(t, state, `{"version":4}`)
+	n.BackendConfig = map[string]string{"path": strings.TrimSuffix(state, ".backup")}
+	before, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, err = All([]blueprint.Node{n}, baseDir, "vendor", manifestPath, Options{Force: true})
+	if err != nil || len(results) != 1 || results[0].Err == nil || !strings.Contains(results[0].Err.Error(), "local state") {
+		t.Fatalf("results = %+v, err = %v, want sibling state refusal", results, err)
+	}
+	after, err := os.ReadFile(manifestPath)
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("manifest changed: %v", err)
+	}
+	after, err = os.ReadFile(state)
+	if err != nil || string(after) != `{"version":4}` {
+		t.Fatalf("state changed: %s, %v", after, err)
+	}
+	assertExists(t, filepath.Join(dir, "modules", "app", "main.tf"))
+}
+
+func rootSourceFixture(t *testing.T, contents string) (blueprint.Node, string, string) {
+	t.Helper()
+	n, baseDir, dir := legacySubdirFixture(t, contents)
+	n.Source = strings.Replace(n.Source, "//modules/app", "", 1)
+	if err := (Manifest{"app": Entry{Source: n.Source}}).Save(filepath.Join(baseDir, "vendor.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	return n, baseDir, dir
+}
+
+func TestAll_RootSourceStateRefusesForcedRefresh(t *testing.T) {
+	n, baseDir, dir := rootSourceFixture(t, `output "id" { value = "legacy" }`)
+	state := filepath.Join(dir, "terraform.tfstate")
+	mustWrite(t, state, `{"version":4}`)
+	assertRelocationRefused(t, n, baseDir, dir)
+	after, err := os.ReadFile(state)
+	if err != nil || string(after) != `{"version":4}` {
+		t.Fatalf("state = %s, err = %v", after, err)
+	}
+}
+
+func TestAll_RootSourceBackupRefusesSourceChange(t *testing.T) {
+	n, baseDir, dir := rootSourceFixture(t, `output "id" { value = "legacy" }`)
+	state := filepath.Join(dir, "terraform.tfstate.backup")
+	mustWrite(t, state, `{"version":4}`)
+	n.Source = strings.Replace(n.Source, "?ref=HEAD", "?ref=v1.0.0", 1)
+	manifestPath := filepath.Join(baseDir, "vendor.yaml")
+	before, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, err := All([]blueprint.Node{n}, baseDir, "vendor", manifestPath, Options{})
+	if err != nil || len(results) != 1 || results[0].Err == nil || !strings.Contains(results[0].Err.Error(), "local state") {
+		t.Fatalf("results = %+v, err = %v, want state refusal on changed source", results, err)
+	}
+	after, err := os.ReadFile(manifestPath)
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("manifest changed: %v", err)
+	}
+	after, err = os.ReadFile(state)
+	if err != nil || string(after) != `{"version":4}` {
+		t.Fatalf("state = %s, err = %v", after, err)
+	}
+	after, err = os.ReadFile(filepath.Join(dir, "main.tf"))
+	if err != nil || string(after) != `output "id" { value = "legacy" }` {
+		t.Fatalf("module = %s, err = %v", after, err)
+	}
+}
+
+func TestAll_RootSourceWithAbsoluteExternalStateCanRefresh(t *testing.T) {
+	n, baseDir, dir := rootSourceFixture(t, `terraform {
+   backend "local" {}
+ }`)
+	state := filepath.Join(t.TempDir(), "existing.state")
+	mustWrite(t, state, `{"version":4}`)
+	n.BackendConfig = map[string]string{"path": state}
+	results, err := All([]blueprint.Node{n}, baseDir, "vendor", filepath.Join(baseDir, "vendor.yaml"), Options{Force: true})
+	if err != nil || len(results) != 1 || results[0].Err != nil || results[0].Skipped {
+		t.Fatalf("results = %+v, err = %v, want refresh with external state", results, err)
+	}
+	after, err := os.ReadFile(state)
+	if err != nil || string(after) != `{"version":4}` {
+		t.Fatalf("state = %s, err = %v", after, err)
+	}
+	after, err = os.ReadFile(filepath.Join(dir, "main.tf"))
+	if err != nil || string(after) != `output "id" { value = "x" }` {
+		t.Fatalf("module = %s, err = %v, want fetched content", after, err)
+	}
+}
+
+func TestAll_BrokenVendoredMetadataReportsSafeRecovery(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		marker string
+	}{
+		{name: "malformed-json", marker: "{"},
+		{name: "escaping-path", marker: `{"subdir":"../other"}`},
+		{name: "missing-directory", marker: `{"subdir":"missing"}`},
+		{name: "file-instead-of-directory", marker: `{"subdir":"main.tf"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n, baseDir, dir := legacySubdirFixture(t, `output "id" { value = "legacy" }`)
+			marker := filepath.Join(dir, blueprint.VendoredSourceFilename)
+			state := filepath.Join(dir, "terraform.tfstate")
+			backup := state + ".backup"
+			mustWrite(t, marker, tc.marker)
+			mustWrite(t, state, `{"version":4,"serial":2}`)
+			mustWrite(t, backup, `{"version":4,"serial":1}`)
+			manifest := filepath.Join(baseDir, "vendor.yaml")
+			originals := make(map[string]string)
+			for _, path := range []string{marker, state, backup, manifest, filepath.Join(dir, "main.tf")} {
+				data, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				originals[path] = string(data)
+			}
+			results, err := All([]blueprint.Node{n}, baseDir, "vendor", manifest, Options{Force: true})
+			if err != nil || len(results) != 1 || results[0].Err == nil {
+				t.Fatalf("results = %+v, err = %v, want metadata refusal", results, err)
+			}
+			message := results[0].Err.Error()
+			for _, want := range []string{"verify local state and backups", "recover or migrate", "before removing that copy", "terragraph vendor again"} {
+				if !strings.Contains(message, want) {
+					t.Errorf("error = %q, want recovery step %q", message, want)
+				}
+			}
+			if strings.Contains(message, "--force") {
+				t.Errorf("error = %q, must not recommend retrying --force", message)
+			}
+			for path, want := range originals {
+				got, err := os.ReadFile(path)
+				if err != nil || string(got) != want {
+					t.Errorf("%s changed: got %q, err = %v, want %q", path, got, err, want)
+				}
+			}
+		})
+	}
+}
