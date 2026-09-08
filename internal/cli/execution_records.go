@@ -27,9 +27,9 @@ type executionDTO struct {
 }
 
 type executionHistoryDTO struct {
-	SchemaVersion int            `json:"schema_version"`
-	Executions    []executionDTO `json:"executions"`
-	Diagnostic    *diagnosticDTO `json:"diagnostic,omitempty"`
+	SchemaVersion int             `json:"schema_version"`
+	Executions    []executionDTO  `json:"executions"`
+	Diagnostics   []diagnosticDTO `json:"diagnostics"`
 }
 
 func executionToDTO(record engine.ExecutionRecord) executionDTO {
@@ -50,11 +50,11 @@ func newExecutionHistoryCmd(kind string, path *string) *cobra.Command {
 		argsCheck = cobra.ExactArgs(1)
 	}
 	cmd := &cobra.Command{Use: usage, Short: short, RunE: func(cmd *cobra.Command, args []string) (resultErr error) {
-		result := executionHistoryDTO{SchemaVersion: 1, Executions: []executionDTO{}}
+		result := executionHistoryDTO{SchemaVersion: 1, Executions: []executionDTO{}, Diagnostics: []diagnosticDTO{}}
 		defer func() {
 			if resultErr != nil {
 				diagnostic := diagnosticToDTO(engine.Diagnostic{Code: "execution_read_failed", Phase: "history", Subject: "execution", Message: resultErr.Error(), Remedy: "check the selected execution store and restore missing records; do not infer that infrastructure was unchanged"})
-				result.Diagnostic = &diagnostic
+				result.Diagnostics = append(result.Diagnostics, diagnostic)
 			}
 			if output == "json" {
 				if err := writeJSON(cmd.OutOrStdout(), result); resultErr == nil {
@@ -84,19 +84,18 @@ func newExecutionHistoryCmd(kind string, path *string) *cobra.Command {
 			return err
 		}
 		defer close()
-		records, err := e.ListExecutions()
-		if err != nil {
-			return err
-		}
-		for _, record := range records {
-			if kind == "list" || record.ID == args[0] {
+		if kind == "show" {
+			record, err := e.GetExecution(args[0])
+			if record.ID != "" {
 				result.Executions = append(result.Executions, executionToDTO(record))
 			}
+			return err
 		}
-		if kind == "show" && len(result.Executions) == 0 {
-			return fmt.Errorf("execution %q was not found; use plan list with the same blueprint and store", args[0])
+		records, err := e.ListExecutions()
+		for _, record := range records {
+			result.Executions = append(result.Executions, executionToDTO(record))
 		}
-		return nil
+		return err
 	}}
 	cmd.Flags().StringVar(&output, "output", "text", "output format: text or json")
 	return cmd

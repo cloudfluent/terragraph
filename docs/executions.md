@@ -8,9 +8,9 @@ terragraph plan list --output json
 terragraph plan show run-0123456789abcdef0123456789abcdef --output json
 ```
 
-Both commands only inspect stored records. They do not run Terraform/OpenTofu, retry a failed operation, or initialize a backend. Records remain readable when a node's module is missing or its wiring is broken, provided the selected blueprint can still be parsed. An absent record is an error for `show`; it does not mean that nothing was applied. `list` returns an empty collection if this store has no records.
+Both commands only inspect stored records. They do not run Terraform/OpenTofu, retry a failed operation, or initialize a backend. Records remain readable when a node's module is missing or its wiring is broken, provided the selected blueprint can still be parsed. An absent record is an error for `show`; it does not mean that nothing was applied. `list` returns an empty collection if this store has no records. It returns readable records newest first even if a sibling object is corrupt, with a diagnostic and nonzero exit status for the damaged object. `show` reads its requested ID directly. Foreign coordination-scope records remain visible with a diagnostic naming the conflict; inspection never silently hides records that would block a mutation.
 
-The record format has its own `schema_version: 1`. JSON results use explicit public fields; private coordination and target fingerprints are not included. An argument, configuration, or storage failure emits a diagnostic under `--output json` and exits nonzero. The existing node `status` command continues to observe Terraform state and does not read execution history.
+The record format has its own `schema_version: 1`. JSON results use explicit public fields; private coordination and target fingerprints are not included. An argument, configuration, or storage failure emits a `diagnostics` array under `--output json` and exits nonzero. The existing node `status` command continues to observe Terraform state and does not read execution history.
 
 This interface introduces record storage and inspection. Existing ordinary `apply` still uses its temporary runtime plan; durable recording and retained-plan execution are separate command integrations.
 

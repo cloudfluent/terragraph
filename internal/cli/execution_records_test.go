@@ -39,6 +39,9 @@ func TestPlanHistory_ShowsRecordDespiteMissingModule(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, id+".json"), object, 0600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(root, "run-"+strings.Repeat("b", 32)+".json"), []byte("truncated"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	cmd := NewRootCmd("test")
 	var out, diagnostics bytes.Buffer
 	cmd.SetOut(&out)
@@ -50,6 +53,18 @@ func TestPlanHistory_ShowsRecordDespiteMissingModule(t *testing.T) {
 	if !strings.Contains(out.String(), `"phase":"applied"`) || strings.Contains(out.String(), "CANARY") || diagnostics.Len() != 0 {
 		t.Fatalf("got = %s, diagnostics %s", out.String(), diagnostics.String())
 	}
+	list := NewRootCmd("test")
+	out.Reset()
+	list.SetOut(&out)
+	list.SetErr(&bytes.Buffer{})
+	list.SetArgs([]string{"--blueprint", path, "plan", "list", "--output", "json"})
+	if err := list.Execute(); err == nil {
+		t.Fatal("corrupt sibling was not diagnosed")
+	}
+	if !strings.Contains(out.String(), id) || !strings.Contains(out.String(), "execution_read_failed") {
+		t.Fatalf("got = %s", out.String())
+	}
+
 }
 
 func TestPlanHistory_MissingRecordReturnsStructuredError(t *testing.T) {

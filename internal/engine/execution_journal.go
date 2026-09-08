@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -294,21 +295,56 @@ func (e *Engine) ListExecutions() ([]ExecutionRecord, error) {
 		return nil, err
 	}
 	records := []ExecutionRecord{}
+	var issues []error
 	for _, key := range keys {
 		if !strings.HasPrefix(key, "run-") || !strings.HasSuffix(key, ".json") {
 			continue
 		}
 		record, _, err := readExecutionRecord(e.context(), store, strings.TrimSuffix(key, ".json"))
 		if err != nil {
-			return nil, err
+			issues = append(issues, fmt.Errorf("execution %s: %w", strings.TrimSuffix(key, ".json"), err))
+			continue
 		}
-		if record.Scope == scope {
-			records = append(records, record)
+		records = append(records, record)
+		if record.Scope != scope {
+			issues = append(issues, fmt.Errorf("execution %s belongs to a different coordination scope; restore the original lock configuration or use a dedicated prefix", record.ID))
 		}
 	}
-	return records, nil
+	sort.Slice(records, func(i, j int) bool {
+		if records[i].CreatedAt.Equal(records[j].CreatedAt) {
+			return records[i].ID < records[j].ID
+		}
+		return records[i].CreatedAt.After(records[j].CreatedAt)
+	})
+	return records, errors.Join(issues...)
 }
 
 func (s *executionSession) fail(name, phase string, cause error) error {
 	return errors.Join(cause, s.transition(name, phase, "runtime_failed", ""))
+}
+
+// GetExecution reads only the requested object so corrupt siblings cannot hide recovery evidence.
+func (e *Engine) GetExecution(id string) (ExecutionRecord, error) {
+	unlock, err := e.lockRun()
+	if err != nil {
+		return ExecutionRecord{}, err
+	}
+	defer unlock()
+	store, err := e.openExecutionStore()
+	if err != nil {
+		return ExecutionRecord{}, err
+	}
+	defer func() { _ = store.close() }()
+	record, _, err := readExecutionRecord(e.context(), store, id)
+	if err != nil {
+		return ExecutionRecord{}, fmt.Errorf("execution %s: %w", id, err)
+	}
+	scope, err := e.executionScope()
+	if err != nil {
+		return record, err
+	}
+	if record.Scope != scope {
+		return record, fmt.Errorf("execution %s belongs to a different coordination scope; restore the original lock configuration or use a dedicated prefix", id)
+	}
+	return record, nil
 }
