@@ -1,17 +1,16 @@
-## terragraph plan show
+## terragraph run
 
-Show an execution's recorded phases without rerunning it
+Run a supported native operation in one node's runtime and backend context
 
 ```
-terragraph plan show <execution-id> [flags]
+terragraph run --node <leaf> -- <native-command> [arguments] [flags]
 ```
 
 ### Options
 
 ```
-      --backup          write the native state backup to stdout; may contain secrets
-  -h, --help            help for show
-      --output string   output format: text or json (default "text")
+  -h, --help          help for run
+      --node string   one exact expanded leaf; groups are not expanded
 ```
 
 ### Options inherited from parent commands
@@ -24,4 +23,4 @@ terragraph plan show <execution-id> [flags]
 
 ### SEE ALSO
 
-* [terragraph plan](terragraph_plan.md)	 - Review node plans, actions, approval policy, and evidence limitations
+* [terragraph](terragraph.md)	 - Graph-based orchestration for independent Terraform/OpenTofu root modules

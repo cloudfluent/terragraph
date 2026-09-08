@@ -58,3 +58,13 @@ resource "terraform_data" "second" {}
 		t.Fatal("native state backups were not archived")
 	}
 }
+
+func TestRunNode_RealUsesOrdinaryApplyInitialization(t *testing.T) {
+	e := savedRuntimeFixture(t)
+	if _, err := e.Apply(Options{Node: "upstream", AutoApprove: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.RunNode("upstream", []string{"state", "pull"}); err != nil {
+		t.Fatal(err)
+	}
+}

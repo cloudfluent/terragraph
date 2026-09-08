@@ -36,7 +36,7 @@ func (e *Engine) rememberBackendContext(name string, r *exec.Runner) error {
 	if err != nil {
 		return err
 	}
-	prepare, err := prepareSavedPlan(filepath.Join(filepath.Dir(e.dataDir(name)), ".prepare"))
+	prepare, err := prepareSavedPlan(filepath.Join(filepath.Dir(e.dataDir(name)), ".prepare-"+newExecutionID("context")))
 	if err != nil {
 		return err
 	}

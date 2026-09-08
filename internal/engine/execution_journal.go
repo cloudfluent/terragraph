@@ -391,7 +391,7 @@ func (e *Engine) checkExecutionBarrier(store executionStore, scope, exceptID str
 		if old.Scope != scope {
 			return fmt.Errorf("execution %s belongs to another coordination scope; configure the same graph lock or separate prefixes", old.ID)
 		}
-		if old.ID != exceptID && executionNeedsRecovery(old) && !(len(readOnly) > 0 && readOnly[0]) {
+		if old.ID != exceptID && executionNeedsRecovery(old) && (len(readOnly) == 0 || !readOnly[0]) {
 			return fmt.Errorf("execution %s has an unresolved mutation; inspect it with plan show and recover before changing infrastructure", old.ID)
 		}
 	}

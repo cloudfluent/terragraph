@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -140,17 +142,19 @@ func (e *Engine) pruneExecutions(store executionStore) ([]string, error) {
 		if now.Sub(*record.FinishedAt) < e.Blueprint.ExecutionSettings().RecordRetention {
 			continue
 		}
-		if record.Backup {
-			backup, err := store.read(e.context(), record.ID+".bin")
-			if err != nil && !errors.Is(err, errExecutionMissing) {
+		backup, backupErr := store.read(e.context(), record.ID+".bin")
+		if backupErr != nil && !errors.Is(backupErr, errExecutionMissing) {
+			return removed, backupErr
+		}
+		if backupErr == nil {
+			if err := store.remove(e.context(), record.ID+".bin", backup.Revision); err != nil {
 				return removed, err
 			}
-			if err == nil {
-				if err := store.remove(e.context(), record.ID+".bin", backup.Revision); err != nil {
-					return removed, err
-				}
-			}
 		}
+		if err := os.Remove(filepath.Join(e.BaseDir, ".terragraph", "backups", record.ID+".tfstate")); err != nil && !os.IsNotExist(err) {
+			return removed, err
+		}
+
 		if err := store.remove(e.context(), key, revision); err != nil {
 			return removed, err
 		}

@@ -84,6 +84,9 @@ func (e *Engine) RunNode(name string, args []string) (resultErr error) {
 		}
 		defer func() { _ = os.Remove(path) }()
 		flags := exec.VarFileArgs(path, vars)
+		if op.name == "import" {
+			flags = append(flags, "-input=false")
+		}
 		native = append(append([]string{args[0]}, flags...), args[1:]...)
 	}
 	var backupPath string
