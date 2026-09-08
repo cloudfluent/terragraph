@@ -238,6 +238,14 @@ func joinNames(names []string) string {
 	return out
 }
 
+// validateRunArgs rejects positional targets before loading or locking the graph, since ignoring one would silently execute every node.
+func validateRunArgs(cmd *cobra.Command, args []string) error {
+	if len(args) != 0 {
+		return fmt.Errorf("%s: unexpected arguments %q; use --node <name> to select a single node", cmd.Name(), args)
+	}
+	return nil
+}
+
 func newPlanCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf func() *slog.Logger) *cobra.Command {
 	var node string
 	var parallelism int
@@ -245,6 +253,7 @@ func newPlanCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fun
 	cmd := &cobra.Command{
 		Use:   "plan",
 		Short: "Run terraform/tofu plan across the graph in dependency order",
+		Args:  validateRunArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if output != "text" && output != "json" {
 				return fmt.Errorf("unknown output %q (want \"text\" or \"json\")", output)
@@ -281,6 +290,7 @@ func newApplyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fu
 	cmd := &cobra.Command{
 		Use:   "apply",
 		Short: "Run terraform/tofu apply across the graph in dependency order, wiring outputs to inputs",
+		Args:  validateRunArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if output != "text" && output != "json" {
 				return fmt.Errorf("unknown output %q (want \"text\" or \"json\")", output)
@@ -328,6 +338,7 @@ func newDestroyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf 
 	cmd := &cobra.Command{
 		Use:   "destroy",
 		Short: "Run terraform/tofu destroy across the graph in reverse dependency order",
+		Args:  validateRunArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if output != "text" && output != "json" {
 				return fmt.Errorf("unknown output %q (want \"text\" or \"json\")", output)
