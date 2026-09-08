@@ -9,11 +9,12 @@ terragraph plan recover <execution-id> [flags]
 ### Options
 
 ```
-      --confirm-stopped   confirm the previous executor has stopped; does not force-unlock anything
-  -h, --help              help for recover
-      --output string     output format: text or json (default "text")
-      --replan            retire the attempt while preserving its recorded outcome; requires a fresh plan
-      --state-reviewed    confirm actual state and affected resources have been inspected
+      --confirm-stopped      confirm the previous executor has stopped; does not force-unlock anything
+  -h, --help                 help for recover
+      --initialize-backend   allow journaled backend initialization for recovery when read-only preparation is unsupported
+      --output string        output format: text or json (default "text")
+      --replan               retire the attempt while preserving its recorded outcome; requires a fresh plan
+      --state-reviewed       confirm actual state and affected resources have been inspected
 ```
 
 ### Options inherited from parent commands

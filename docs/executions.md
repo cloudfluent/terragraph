@@ -12,7 +12,7 @@ Both commands only inspect stored records. They do not run Terraform/OpenTofu, r
 
 The record format has its own `schema_version: 1`. JSON results use explicit public fields; private coordination and target fingerprints are not included. An argument, configuration, or storage failure emits a `diagnostics` array under `--output json` and exits nonzero. The existing node `status` command continues to observe Terraform state and does not read execution history.
 
-Ordinary `apply` and `destroy` now record their attempts by default. Ordinary `apply` still uses a temporary runtime plan and does not package or upload a retained plan bundle. Failure to publish a required transition prevents the next mutation. Unresolved mutations block subsequent apply and destroy commands sharing this store.
+Ordinary `plan`, `apply`, and `destroy` now record their attempts by default. Ordinary `apply` still uses a temporary runtime plan and does not package or upload a retained plan bundle. Failure to publish a required transition prevents the next mutation. Unresolved mutations block subsequent plan, apply, and destroy commands sharing this store.
 
 ## Storage configuration
 
@@ -71,7 +71,9 @@ When the record says `applied`, retry only output collection:
 terragraph plan recover <run-id> --confirm-stopped
 ```
 
-This checks the configured target and reads outputs without init, plan, or apply. Restore the original backend configuration if it changed. It does not automatically start downstream nodes.
+This checks the configured target and reads outputs without plan or apply. It prepares an isolated temporary backend cache with a read-only provider lockfile, then removes the cache. Default-workspace local and HTTP backends have verified read-only preparation. Other backends or workspaces require explicit `--initialize-backend`; that preparation is journaled as potentially changing work, and interruption keeps the recovery barrier. Restore the original backend configuration if it changed. No downstream nodes start automatically.
+
+Mixed records recover readable `applied` siblings even when unknown peers remain. The command returns a nonzero status for unresolved peers; `plan show` displays the completed output collection. The recovery barrier remains until those peers are inspected and retired. Backend preparation uncertainty is recorded separately so a previously confirmed apply remains confirmed.
 
 When the outcome is unknown, inspect the real backend state and affected resources using your normal runtime/backend tools. After reconciling any partial changes, explicitly retire the attempt:
 

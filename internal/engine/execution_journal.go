@@ -18,6 +18,7 @@ import (
 // ExecutionRecord records observed command outcomes, never a second copy of infrastructure state.
 type ExecutionRecord struct {
 	SchemaVersion int             `json:"schema_version"`
+	Preparation   string          `json:"preparation,omitempty"`
 	ID            string          `json:"id"`
 	Scope         string          `json:"scope"`
 	Binding       string          `json:"binding,omitempty"`
@@ -150,6 +151,9 @@ func readExecutionRecord(ctx context.Context, store executionStore, id string) (
 func executionNeedsRecovery(record ExecutionRecord) bool {
 	if record.RecoveryAt != nil {
 		return false
+	}
+	if record.Preparation != "" {
+		return true
 	}
 	for _, node := range record.Nodes {
 		switch node.Phase {

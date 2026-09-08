@@ -10,7 +10,7 @@ import (
 )
 
 func newExecutionRecoveryCmd(path *string, binaryOf func() exec.Binary, loggerOf func() *slog.Logger) *cobra.Command {
-	var confirmStopped, stateReviewed, replan bool
+	var confirmStopped, stateReviewed, replan, initializeBackend bool
 	var output string
 	cmd := &cobra.Command{Use: "recover <execution-id>", Short: "Recover outputs or retire an inspected uncertain attempt without replaying it", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		if output != "text" && output != "json" {
@@ -28,7 +28,7 @@ func newExecutionRecoveryCmd(path *string, binaryOf func() exec.Binary, loggerOf
 			return err
 		}
 		defer close()
-		record, err := e.RecoverExecution(args[0], confirmStopped, stateReviewed, replan)
+		record, err := e.RecoverExecution(args[0], confirmStopped, stateReviewed, replan, initializeBackend)
 		if err != nil {
 			return err
 		}
@@ -38,6 +38,7 @@ func newExecutionRecoveryCmd(path *string, binaryOf func() exec.Binary, loggerOf
 		_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s: %s; create a fresh plan before continuing\n", record.ID, record.Status)
 		return err
 	}}
+	cmd.Flags().BoolVar(&initializeBackend, "initialize-backend", false, "allow journaled backend initialization for recovery when read-only preparation is unsupported")
 	cmd.Flags().BoolVar(&confirmStopped, "confirm-stopped", false, "confirm the previous executor has stopped; does not force-unlock anything")
 	cmd.Flags().BoolVar(&stateReviewed, "state-reviewed", false, "confirm actual state and affected resources have been inspected")
 	cmd.Flags().BoolVar(&replan, "replan", false, "retire the attempt while preserving its recorded outcome; requires a fresh plan")
