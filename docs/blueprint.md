@@ -52,10 +52,11 @@ When `lock` is present, every node must use a remote backend (`s3` / `gcs` / `az
 An optional empty `snapshots { }` block opts the graph into local output
 snapshots. Activation is the block itself, not a CLI flag; at most one
 `snapshots` per blueprint; the body accepts nothing in this release. With
-it, `apply` records exactly the outputs a data edge consumes from each node
-into the gitignored `.terragraph/outputs/`, and input resolution gains a
-source of **last** resort — after this run's applied outputs and after live
-`terraform output`, never ahead of either. Without the block, nothing is
+it, `apply` records the non-sensitive outputs a data edge consumes from each
+node into the gitignored `.terragraph/outputs/`. Sensitive outputs and outputs
+without sensitivity metadata are withheld; only their port names are recorded.
+Input resolution gains a source of **last** resort — after this run's applied
+outputs and after live `terraform output`, never ahead of either. Without the block, nothing is
 written and resolution is unchanged. See
 [execution-model.md](execution-model.md#output-snapshots) for the ordering
 rationale.
