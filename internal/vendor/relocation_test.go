@@ -129,3 +129,31 @@ func TestAll_LegacySubdirWithWorkspaceStateRefusesUpgrade(t *testing.T) {
 	assertRelocationRefused(t, n, baseDir, dir)
 	assertExists(t, state)
 }
+
+func TestAll_LegacySubdirWithDivergentTofuStateRefusesUpgrade(t *testing.T) {
+	n, baseDir, dir := legacySubdirFixture(t, `output "id" { value = "legacy" }`)
+	mustWrite(t, filepath.Join(dir, "backend.tofu"), `terraform {
+   backend "local" { path = "tofu-state/custom.json" }
+ }`)
+	state := filepath.Join(dir, "tofu-state", "custom.json.backup")
+	mustWrite(t, state, `{"version":4}`)
+	manifestPath := filepath.Join(baseDir, "vendor.yaml")
+	before, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, err := All([]blueprint.Node{n}, baseDir, "vendor", manifestPath, Options{})
+	if err != nil || len(results) != 1 || results[0].Err == nil || !strings.Contains(results[0].Err.Error(), "declarations differ") {
+		t.Fatalf("results = %+v, err = %v, want ambiguous runtime relocation refusal", results, err)
+	}
+	after, err := os.ReadFile(manifestPath)
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("manifest changed: %v", err)
+	}
+	stateAfter, err := os.ReadFile(state)
+	if err != nil || string(stateAfter) != `{"version":4}` {
+		t.Fatalf("state changed: %s, %v", stateAfter, err)
+	}
+	assertExists(t, filepath.Join(dir, "backend.tofu"))
+	assertMissing(t, filepath.Join(dir, blueprint.VendoredSourceFilename))
+}
