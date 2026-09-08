@@ -136,3 +136,60 @@ func TestGitFetcher_SourceChangeRefetchesWithoutForce(t *testing.T) {
 	}
 	assertMissing(t, filepath.Join(dst, "README.md"))
 }
+
+func TestAll_FailedGitRefLeavesNoVendoredTree(t *testing.T) {
+	repoDir := setupThrowawayGitRepo(t)
+	baseDir := t.TempDir()
+	nodes := []blueprint.Node{{Name: "vpc", Source: "git::file://" + repoDir + "?ref=missing-ref"}}
+	manifestPath := filepath.Join(baseDir, "vendor.yaml")
+	for attempt := 0; attempt < 2; attempt++ {
+		results, err := All(nodes, baseDir, "vendor", manifestPath, Options{})
+		if err != nil || len(results) != 1 || results[0].Err == nil || results[0].Skipped {
+			t.Fatalf("attempt %d: results = %+v, err = %v, want failed fetch", attempt, results, err)
+		}
+		assertMissing(t, filepath.Join(baseDir, "vendor", "vpc"))
+		assertMissing(t, manifestPath)
+	}
+}
+
+func TestAll_FailedRefBumpPreservesTree(t *testing.T) {
+	repoDir := setupThrowawayGitRepo(t)
+	baseDir := t.TempDir()
+	nodes := []blueprint.Node{{Name: "vpc", Source: "git::file://" + repoDir + "?ref=v1.0.0"}}
+	manifestPath := filepath.Join(baseDir, "vendor.yaml")
+	results, err := All(nodes, baseDir, "vendor", manifestPath, Options{})
+	if err != nil || len(results) != 1 || results[0].Err != nil {
+		t.Fatalf("results = %+v, err = %v", results, err)
+	}
+	dst := filepath.Join(baseDir, "vendor", "vpc")
+	mustWrite(t, filepath.Join(dst, "review-notes.md"), "local review")
+	manifestBefore, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes[0].Source = "git::file://" + repoDir + "?ref=missing-ref"
+	results, err = All(nodes, baseDir, "vendor", manifestPath, Options{})
+	if err != nil || len(results) != 1 || results[0].Err == nil {
+		t.Fatalf("results = %+v, err = %v, want failed fetch", results, err)
+	}
+	assertExists(t, filepath.Join(dst, "review-notes.md"))
+	assertExists(t, filepath.Join(dst, "main.tf"))
+	manifestAfter, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(manifestBefore) != string(manifestAfter) {
+		t.Fatalf("manifest changed after failed fetch")
+	}
+}
+
+func TestAll_ExistingTreeWithoutManifestIsPreserved(t *testing.T) {
+	baseDir := t.TempDir()
+	dst := filepath.Join(baseDir, "vendor", "vpc")
+	mustWrite(t, filepath.Join(dst, "main.tf"), `output "id" { value = "local" }`)
+	results, err := All([]blueprint.Node{{Name: "vpc", Source: "git::file:///missing/repository"}}, baseDir, "vendor", filepath.Join(baseDir, "vendor.yaml"), Options{})
+	if err != nil || len(results) != 1 || !results[0].Skipped || results[0].Err != nil {
+		t.Fatalf("results = %+v, err = %v, want preserved legacy tree", results, err)
+	}
+	assertExists(t, filepath.Join(dst, "main.tf"))
+}

@@ -34,3 +34,5 @@ vendor {
 Only git sources are supported today; the fetch mechanism is an interface so a Terraform/OpenTofu Registry backend can be added later without changing anything above it.
 
 See it end to end in [`examples/vendored`](../examples/vendored).
+
+A fetch is prepared and pruned in a temporary directory before replacing the existing vendored copy. A failed fetch leaves the previous copy and manifest intact; a failed first fetch leaves no runnable node directory. Existing manually populated directories without a manifest entry are still left alone unless `--force` is requested.

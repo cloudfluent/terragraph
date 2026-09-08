@@ -89,18 +89,48 @@ func All(nodes []blueprint.Node, baseDir, vendorDir, manifestPath string, opts O
 	return results, nil
 }
 
-// vendorOne fetches n.Source into dst (clearing it first, if present) and prunes it (existing.Exclude, plus .git always). existing.Exclude is carried through unchanged; Source is refreshed to n.Source.
+// vendorOne stages the complete fetch and prune before replacing dst, so a failed checkout cannot publish partial source or erase the last usable copy.
 func vendorOne(ctx context.Context, n blueprint.Node, dst string, existing Entry) (Entry, error) {
-	if err := os.RemoveAll(dst); err != nil {
-		return Entry{}, fmt.Errorf("clearing %s: %w", dst, err)
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return Entry{}, fmt.Errorf("creating vendor directory: %w", err)
 	}
-
-	if err := fetch(ctx, n.Source, dst); err != nil {
+	stage, err := os.MkdirTemp(filepath.Dir(dst), ".terragraph-vendor-")
+	if err != nil {
+		return Entry{}, fmt.Errorf("staging vendor source: %w", err)
+	}
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.RemoveAll(stage)
+		}
+	}()
+	fetched := filepath.Join(stage, "source")
+	if err := fetch(ctx, n.Source, fetched); err != nil {
 		return Entry{}, fmt.Errorf("fetching: %w", err)
 	}
 
-	if err := prune(dst, existing.Exclude); err != nil {
+	if err := prune(fetched, existing.Exclude); err != nil {
 		return Entry{}, fmt.Errorf("pruning: %w", err)
+	}
+
+	previous := filepath.Join(stage, "previous")
+	hadPrevious := false
+	if _, err := os.Lstat(dst); err == nil {
+		if err := os.Rename(dst, previous); err != nil {
+			return Entry{}, fmt.Errorf("preserving previous source: %w", err)
+		}
+		hadPrevious = true
+	} else if !os.IsNotExist(err) {
+		return Entry{}, fmt.Errorf("inspecting previous source: %w", err)
+	}
+	if err := os.Rename(fetched, dst); err != nil {
+		if hadPrevious {
+			if restoreErr := os.Rename(previous, dst); restoreErr != nil {
+				cleanup = false
+				return Entry{}, fmt.Errorf("publishing source: %w; restore %s to %s after rollback failed: %w", err, previous, dst, restoreErr)
+			}
+		}
+		return Entry{}, fmt.Errorf("publishing source: %w", err)
 	}
 
 	return Entry{
