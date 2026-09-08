@@ -35,6 +35,9 @@ func TestInspect_OpenTofuReplacesOnlySameFormatCounterparts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !tofu.RequiresTofuFiles {
+		t.Fatal("OpenTofu-selected files did not require runtime support")
+	}
 	for _, name := range []string{"tofu_hcl", "tofu_json", "cross_tf", "cross_tofu_json", "cross_tf_json", "cross_tofu"} {
 		if !tofu.HasOutput(name) {
 			t.Fatalf("missing OpenTofu output %q", name)
@@ -46,6 +49,9 @@ func TestInspect_OpenTofuReplacesOnlySameFormatCounterparts(t *testing.T) {
 	terraform, err := Inspect(dir, TerraformFiles)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if terraform.RequiresTofuFiles {
+		t.Fatal("Terraform selection must not require OpenTofu file support")
 	}
 	if !terraform.HasOutput("ignored_tf") || !terraform.HasOutput("ignored_json") || terraform.HasOutput("tofu_hcl") || terraform.HasOutput("tofu_json") {
 		t.Fatalf("Terraform outputs = %v", terraform.Outputs)
@@ -66,8 +72,10 @@ func TestInspect_UnknownRuntimeAcceptsEquivalentDeclarations(t *testing.T) {
 	dir := t.TempDir()
 	writeInspectionFile(t, dir, "main.tf.json", `{"variable":{"input":{"type":"number","default":9007199254740993}},"output":{"value":{"value":1}},"terraform":{"backend":{"s3":{"bucket":"fixture"}}}}`)
 	writeInspectionFile(t, dir, "main.tofu.json", `{"terraform":{"backend":{"s3":{"bucket":"fixture"}}},"output":{"value":{"value":2}},"variable":{"input":{"default":9007199254740993,"type":"number"}}}`)
-	if _, err := Inspect(dir, UnknownFiles); err != nil {
+	if schema, err := Inspect(dir, UnknownFiles); err != nil {
 		t.Fatalf("equivalent declarations: %v", err)
+	} else if schema.RequiresTofuFiles {
+		t.Fatal("unknown runtime must not claim OpenTofu-only support")
 	}
 }
 
@@ -122,5 +130,18 @@ func TestInspect_OpenTofuSparseOverridePreservesPortMetadata(t *testing.T) {
 	v := schema.Variables["v"]
 	if v.Type != "string" || v.Required || !v.Sensitive || v.Description != "overridden" || !schema.OutputDetails["value"].Sensitive {
 		t.Fatalf("sparse override lost metadata: input=%+v output=%+v", v, schema.OutputDetails["value"])
+	}
+}
+
+func TestInspect_TFOnlyDoesNotRequireTofuSupport(t *testing.T) {
+	dir := t.TempDir()
+	writeInspectionFile(t, dir, "main.tf", `output "v" { value = 1 }`)
+	writeInspectionFile(t, dir, ".hidden.tofu", `invalid ignored file`)
+	schema, err := Inspect(dir, OpenTofuFiles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if schema.RequiresTofuFiles {
+		t.Fatal("unselected .tofu file must not require runtime support")
 	}
 }
