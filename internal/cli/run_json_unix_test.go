@@ -12,11 +12,13 @@ import (
 	"testing"
 )
 
-// writeRunFakeTerraform writes a stand-in terraform that succeeds at init and plan only; TG_FAKE_PLAN_FAIL=1 makes plan exit 1, so a test can drive the failed-node path without a real binary.
+// writeRunFakeTerraform emits identifiable output on both streams so JSON tests catch routing regressions; init and plan succeed unless TG_FAKE_PLAN_FAIL=1, and other commands fail.
 func writeRunFakeTerraform(t *testing.T, dir string) string {
 	t.Helper()
 	path := filepath.Join(dir, "terraform-fake")
 	script := `#!/bin/sh
+printf 'terraform %s stdout\n' "$1"
+printf 'terraform %s stderr\n' "$1" >&2
 case "$1" in
   init) exit 0 ;;
   plan)
@@ -57,14 +59,28 @@ func runCmdAt(t *testing.T, blueprintPath string, args ...string) (stdout, stder
 	return outBuf.String(), errBuf.String(), err
 }
 
+// assertRunDiagnostics requires both subprocess streams to reach stderr, catching output that is discarded as well as output that corrupts the JSON payload.
+func assertRunDiagnostics(t *testing.T, stderr string, commands ...string) {
+	t.Helper()
+	for _, command := range commands {
+		for _, stream := range []string{"stdout", "stderr"} {
+			marker := fmt.Sprintf("terraform %s %s\n", command, stream)
+			if !strings.Contains(stderr, marker) {
+				t.Fatalf("stderr = %q, want Terraform output %q", stderr, marker)
+			}
+		}
+	}
+}
+
 // TestPlan_OutputJSON_Planned proves stdout carries exactly one JSON document — no terraform output, no level headers — describing the node as planned.
 func TestPlan_OutputJSON_Planned(t *testing.T) {
 	bp := writeRunFixture(t)
 
-	stdout, _, err := runCmdAt(t, bp, "plan", "--output", "json")
+	stdout, stderr, err := runCmdAt(t, bp, "plan", "--output", "json")
 	if err != nil {
 		t.Fatalf("plan --output json: %v", err)
 	}
+	assertRunDiagnostics(t, stderr, "init", "plan")
 	if strings.Contains(stdout, "===") {
 		t.Fatalf("stdout carries non-JSON run output: %q", stdout)
 	}
@@ -82,10 +98,11 @@ func TestPlan_OutputJSON_FailedNodeStillReports(t *testing.T) {
 	bp := writeRunFixture(t)
 	t.Setenv("TG_FAKE_PLAN_FAIL", "1")
 
-	stdout, _, err := runCmdAt(t, bp, "plan", "--output", "json")
+	stdout, stderr, err := runCmdAt(t, bp, "plan", "--output", "json")
 	if err == nil {
 		t.Fatal("expected the failed plan to fail the command")
 	}
+	assertRunDiagnostics(t, stderr, "init", "plan")
 	var got runResult
 	if jerr := json.Unmarshal([]byte(stdout), &got); jerr != nil {
 		t.Fatalf("stdout is not a single JSON document: %v\n%q", jerr, stdout)
@@ -100,10 +117,11 @@ func TestApply_OutputJSON_FailedNodeStillReports(t *testing.T) {
 	bp := writeRunFixture(t)
 	t.Setenv("TG_FAKE_PLAN_FAIL", "1")
 
-	stdout, _, err := runCmdAt(t, bp, "apply", "--output", "json", "--auto-approve")
+	stdout, stderr, err := runCmdAt(t, bp, "apply", "--output", "json", "--auto-approve")
 	if err == nil {
 		t.Fatal("expected the failed plan to fail the apply")
 	}
+	assertRunDiagnostics(t, stderr, "init", "plan")
 	var got runResult
 	if jerr := json.Unmarshal([]byte(stdout), &got); jerr != nil {
 		t.Fatalf("stdout is not a single JSON document: %v\n%q", jerr, stdout)
@@ -117,10 +135,11 @@ func TestApply_OutputJSON_FailedNodeStillReports(t *testing.T) {
 func TestDestroy_OutputJSON_FailedNodeStillReports(t *testing.T) {
 	bp := writeRunFixture(t)
 
-	stdout, _, err := runCmdAt(t, bp, "destroy", "--output", "json", "--auto-approve")
+	stdout, stderr, err := runCmdAt(t, bp, "destroy", "--output", "json", "--auto-approve")
 	if err == nil {
 		t.Fatal("expected the failing destroy to fail the command")
 	}
+	assertRunDiagnostics(t, stderr, "destroy")
 	var got runResult
 	if jerr := json.Unmarshal([]byte(stdout), &got); jerr != nil {
 		t.Fatalf("stdout is not a single JSON document: %v\n%q", jerr, stdout)
