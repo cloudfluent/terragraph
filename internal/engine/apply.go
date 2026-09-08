@@ -62,66 +62,12 @@ func (e *Engine) Apply(opts Options) ([]NodeRun, error) {
 			return nil, "", savedPlanUnsupportedError(name, r.BackendType())
 		}
 
-		savedPlan := e.planPath(name)
-		removePlan, err := prepareSavedPlan(savedPlan)
+		plan, err := e.prepareNodePlan(name, r, varFileArgs...)
 		if err != nil {
 			return nil, "", err
 		}
-		defer removePlan()
-
-		changes, err := r.PlanChanges(savedPlan, varFileArgs...)
-		if err != nil {
-			return nil, "", fmt.Errorf("plan: %w", err)
-		}
-		if !changes {
-			e.logger().Debug("plan reports no changes, skipping apply", "node", name)
-			_, _ = fmt.Fprintf(out, "node %s: unchanged, skipping apply\n", name)
-			outputs, err := r.Outputs()
-			if err != nil {
-				return nil, "", fmt.Errorf("plan says unchanged but outputs are unreadable: %w", err)
-			}
-			if err := e.writeSnapshot(name, outputs); err != nil {
-				return nil, "", err
-			}
-			return outputs, StatusUnchanged, nil
-		}
-
-		// What the plan actually does, read back from the file before any of it happens. Local only: no state is refreshed and no provider is called.
-		changeSet, err := r.PlanChangeSet(savedPlan)
-		if err != nil {
-			return nil, "", fmt.Errorf("reading plan: %w", err)
-		}
-		_, _ = fmt.Fprintf(out, "node %s: %s\n", name, summarizeChanges(changeSet))
-
-		// Levels run in order, so refusing here means nothing downstream runs either: the cascade is cut at the node that caused it rather than audited after the fact.
-		level := e.approveFor(name, opts.Approve)
-		if blocked := notPermitted(changeSet, level); len(blocked) > 0 {
-			return nil, "", e.gateError(name, level, blocked)
-		}
-
-		// The plan Terraform just printed is the plan about to be applied, so this asks about something the user has actually seen — which is the whole reason approval belongs here rather than inside a second `apply` that would plan again from scratch.
-		if !opts.AutoApprove {
-			approved, err := e.approve(name, out)
-			if err != nil {
-				return nil, "", err
-			}
-			if !approved {
-				return nil, "", fmt.Errorf("apply cancelled: node %s was not approved", name)
-			}
-		}
-		if err := r.ApplyPlan(savedPlan); err != nil {
-			return nil, "", fmt.Errorf("apply: %w", err)
-		}
-
-		outputs, err := r.Outputs()
-		if err != nil {
-			return nil, "", fmt.Errorf("reading outputs after apply: %w", err)
-		}
-		// Both exits that produce current reality publish the same snapshot (the unchanged branch does too), so nothing about the file reveals which path wrote it.
-		if err := e.writeSnapshot(name, outputs); err != nil {
-			return nil, "", err
-		}
-		return outputs, StatusApplied, nil
+		defer plan.cleanup()
+		return e.applyPreparedPlan(plan, opts)
 	}, nil)
 }
 
