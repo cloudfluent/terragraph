@@ -32,24 +32,14 @@ func checkSourceRelocation(n blueprint.Node, dir string) error {
 			}
 		}
 	}
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(dir, path)
-	} else if !pathWithin(dir, path) {
-		path = ""
+	if err := checkLocalStatePath(n.Name, dir, path); err != nil {
+		return err
 	}
-	if path != "" {
-		if err := refuseExistingState(n.Name, path); err != nil {
-			return err
-		}
+	workspacePath := workspaceDir
+	if !filepath.IsAbs(workspacePath) {
+		workspacePath = filepath.Join(dir, workspacePath)
 	}
-	if filepath.IsAbs(workspaceDir) {
-		if !pathWithin(dir, workspaceDir) {
-			return nil
-		}
-	} else {
-		workspaceDir = filepath.Join(dir, workspaceDir)
-	}
-	entries, err := os.ReadDir(workspaceDir)
+	entries, err := os.ReadDir(workspacePath)
 	if os.IsNotExist(err) {
 		return nil
 	}
@@ -57,49 +47,62 @@ func checkSourceRelocation(n blueprint.Node, dir string) error {
 		return fmt.Errorf("checking local workspaces before changing source directory: %w", err)
 	}
 	for _, entry := range entries {
-		if err := refuseExistingState(n.Name, filepath.Join(workspaceDir, entry.Name(), "terraform.tfstate")); err != nil {
+		if err := checkLocalStatePath(n.Name, dir, filepath.Join(workspaceDir, entry.Name(), "terraform.tfstate")); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func refuseExistingState(name, path string) error {
+// checkLocalStatePath checks each existing backup independently because its primary state may no longer exist.
+func checkLocalStatePath(name, dir, path string) error {
+	relative := !filepath.IsAbs(path)
+	if relative {
+		path = filepath.Join(dir, path)
+	}
 	for _, candidate := range []string{path, path + ".backup"} {
 		if _, err := os.Stat(candidate); os.IsNotExist(err) {
 			continue
 		} else if err != nil {
 			return fmt.Errorf("checking local state before changing source directory: %w", err)
 		}
+		if !relative {
+			within, err := pathWithin(dir, candidate)
+			if err != nil {
+				return fmt.Errorf("checking absolute local state before changing source directory: %w", err)
+			}
+			if !within {
+				continue
+			}
+		}
 		return fmt.Errorf("node.%s: changing the source directory would remove or change the local state path %s; migrate state outside the vendored tree and configure an absolute backend path before re-vendoring", name, candidate)
 	}
 	return nil
 }
 
-// pathWithin also covers absolute state paths that would disappear when the old vendor tree is replaced.
-func pathWithin(dir, path string) bool {
-	rel, err := filepath.Rel(dir, path)
-	if err == nil && filepath.IsLocal(rel) {
-		return true
-	}
-	resolvedDir, dirErr := filepath.EvalSymlinks(dir)
-	resolvedPath, pathErr := filepath.EvalSymlinks(path)
-	if dirErr == nil && pathErr == nil {
-		rel, err = filepath.Rel(resolvedDir, resolvedPath)
-		if err == nil && filepath.IsLocal(rel) {
-			return true
-		}
-	}
+// pathWithin compares real ancestor identities so case aliases and symlinked paths cannot hide state inside the tree being replaced.
+func pathWithin(dir, path string) (bool, error) {
 	rootInfo, err := os.Stat(dir)
 	if err != nil {
-		return false
+		return false, err
 	}
-	for parent := filepath.Dir(path); ; parent = filepath.Dir(parent) {
-		if info, err := os.Stat(parent); err == nil && os.SameFile(rootInfo, info) {
-			return true
-		}
-		if filepath.Dir(parent) == parent {
-			return false
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return false, err
+	}
+	for _, spelling := range []string{path, resolved} {
+		for parent := filepath.Dir(spelling); ; parent = filepath.Dir(parent) {
+			info, err := os.Stat(parent)
+			if err != nil {
+				return false, err
+			}
+			if os.SameFile(rootInfo, info) {
+				return true, nil
+			}
+			if filepath.Dir(parent) == parent {
+				break
+			}
 		}
 	}
+	return false, nil
 }
