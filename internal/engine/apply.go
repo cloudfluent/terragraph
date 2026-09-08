@@ -37,7 +37,7 @@ func (e *Engine) Apply(opts Options) ([]NodeRun, error) {
 
 	e.logger().Info("apply starting", "node", opts.Node, "parallelism", opts.parallelism(), "autoApprove", opts.AutoApprove)
 
-	return e.runLevels(opts, false, func(name string, applied map[string]map[string]any, out io.Writer) (map[string]any, string, error) {
+	return e.runLevels(opts, false, func(name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
 		vars, err := e.resolveInputs(name, applied)
 		if err != nil {
 			return nil, "", err
@@ -83,7 +83,7 @@ func (e *Engine) Apply(opts Options) ([]NodeRun, error) {
 			if err := e.writeSnapshot(name, outputs); err != nil {
 				return nil, "", err
 			}
-			return outputs.Values(), StatusUnchanged, nil
+			return outputs, StatusUnchanged, nil
 		}
 
 		// What the plan actually does, read back from the file before any of it happens. Local only: no state is refreshed and no provider is called.
@@ -121,7 +121,7 @@ func (e *Engine) Apply(opts Options) ([]NodeRun, error) {
 		if err := e.writeSnapshot(name, outputs); err != nil {
 			return nil, "", err
 		}
-		return outputs.Values(), StatusApplied, nil
+		return outputs, StatusApplied, nil
 	}, nil)
 }
 

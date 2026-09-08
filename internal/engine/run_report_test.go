@@ -8,12 +8,13 @@ import (
 	"testing"
 
 	"github.com/cloudfluent/terragraph/internal/blueprint"
+	"github.com/cloudfluent/terragraph/internal/exec"
 )
 
 // TestRunLevels_ReportsFailedAndNotRun proves the report covers the whole selection: the failing node is recorded as failed at its level, and every node the aborted run never reached is recorded as not run rather than simply missing.
 func TestRunLevels_ReportsFailedAndNotRun(t *testing.T) {
 	e := newTestEngine([]string{"a", "b"}, []blueprint.Edge{orderEdge("a", "b")})
-	action := func(name string, applied map[string]map[string]any, out io.Writer) (map[string]any, string, error) {
+	action := func(name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
 		if name == "a" {
 			return nil, "", fmt.Errorf("boom")
 		}
@@ -38,7 +39,7 @@ func TestRunLevels_ReportsFailedAndNotRun(t *testing.T) {
 // TestRunLevels_ReportsSuccessStatuses proves the status an action returns is what the report carries, level numbers follow execution order, and a successful run reports every selected node.
 func TestRunLevels_ReportsSuccessStatuses(t *testing.T) {
 	e := newTestEngine([]string{"a", "b"}, []blueprint.Edge{orderEdge("a", "b")})
-	action := func(name string, applied map[string]map[string]any, out io.Writer) (map[string]any, string, error) {
+	action := func(name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
 		return nil, StatusPlanned, nil
 	}
 
@@ -80,7 +81,7 @@ func TestRunLevels_ReportsInExecutionOrder(t *testing.T) {
 
 			failure := errors.New("boom")
 			lastStarted := make(chan struct{})
-			action := func(name string, applied map[string]map[string]any, out io.Writer) (map[string]any, string, error) {
+			action := func(name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
 				// At parallelism 2, the middle node must be recorded before the last can start and release the first, forcing completion order away from name order without sleeps.
 				if name == first[0] {
 					<-lastStarted

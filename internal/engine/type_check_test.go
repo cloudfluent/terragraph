@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/cloudfluent/terragraph/internal/blueprint"
+	"github.com/cloudfluent/terragraph/internal/exec"
 	"github.com/cloudfluent/terragraph/internal/module"
 )
 
@@ -19,7 +20,7 @@ func TestCheckType_MatchingTypePasses(t *testing.T) {
 	e.Graph.Nodes["b"].Schema.Variables["vpc_id"] = module.Variable{Name: "vpc_id", Type: "string"}
 
 	edge := dataEdge("a", "id", "b", "vpc_id")
-	if err := e.checkType(edge, "vpc-123"); err != nil {
+	if err := e.checkType(edge, exec.Output{Value: "vpc-123"}); err != nil {
 		t.Fatalf("expected no error for a matching string value, got %v", err)
 	}
 }
@@ -29,7 +30,7 @@ func TestCheckType_MismatchedTypeFails(t *testing.T) {
 	e.Graph.Nodes["b"].Schema.Variables["subnet_ids"] = module.Variable{Name: "subnet_ids", Type: "list(string)"}
 
 	edge := dataEdge("a", "id", "b", "subnet_ids")
-	if err := e.checkType(edge, "vpc-123"); err == nil {
+	if err := e.checkType(edge, exec.Output{Value: "vpc-123"}); err == nil {
 		t.Fatalf("expected an error feeding a string into a list(string) variable")
 	}
 }
@@ -40,7 +41,7 @@ func TestCheckType_ListValueIntoListTypePasses(t *testing.T) {
 
 	edge := dataEdge("a", "ids", "b", "subnet_ids")
 	val := []any{"subnet-1", "subnet-2"}
-	if err := e.checkType(edge, val); err != nil {
+	if err := e.checkType(edge, exec.Output{Value: val}); err != nil {
 		t.Fatalf("expected no error for a matching list value, got %v", err)
 	}
 }
@@ -50,7 +51,7 @@ func TestCheckType_UntypedVariableAlwaysPasses(t *testing.T) {
 	e.Graph.Nodes["b"].Schema.Variables["anything"] = module.Variable{Name: "anything", Type: ""}
 
 	edge := dataEdge("a", "id", "b", "anything")
-	if err := e.checkType(edge, map[string]any{"nested": true}); err != nil {
+	if err := e.checkType(edge, exec.Output{Value: map[string]any{"nested": true}}); err != nil {
 		t.Fatalf("expected no error for an untyped variable, got %v", err)
 	}
 }

@@ -49,7 +49,7 @@ func (e *Engine) Destroy(opts Options) ([]NodeRun, error) {
 
 	e.logger().Info("destroy starting", "node", opts.Node, "parallelism", opts.parallelism(), "autoApprove", opts.AutoApprove)
 
-	return e.runLevels(opts, true, func(name string, applied map[string]map[string]any, out io.Writer) (map[string]any, string, error) {
+	return e.runLevels(opts, true, func(name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
 		// A destroy plan needs the same resolved input values an apply would have used (e.g. a variable feeding a resource's count or for_each), so it's evaluated identically here: every upstream dependency is still standing at this point, since destroy walks the graph in reverse topological order (downstream first).
 		vars, err := e.resolveInputs(name, applied)
 		if err != nil {

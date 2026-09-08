@@ -18,7 +18,9 @@ terragraph decodes each concrete value and uses cty's type conversion and option
 
 ## How values are passed
 
-Input validation errors omit value-derived details, including object and map keys, when the destination variable or the inspected upstream output is declared `sensitive`. The error still names the node, input, and declared type so you can check the value against the module's variable declaration. This applies to terragraph's encoding and type-checking errors, including their JSON run reports; it does not redact arbitrary Terraform/OpenTofu subprocess output.
+A node resolving multiple inputs from the same upstream reuses one successful live output read for those inputs, so they cannot mix different state revisions. A subsequent input resolution reads live outputs again.
+
+Input validation errors omit value-derived details, including object and map keys, when the destination variable or the inspected upstream output is declared `sensitive`, or when the runtime output is sensitive or omits sensitivity metadata. Runtime sensitivity is preserved both for live reads and for outputs produced earlier in the same run. The error still names the node, input, and declared type so you can check the value against the module's variable declaration. This applies to terragraph's encoding and type-checking errors, including their JSON run reports; it does not redact arbitrary Terraform/OpenTofu subprocess output.
 
 terragraph never writes or modifies `.tf` files. Before running a node, it writes the values resolved from its incoming data edges (and its own `vars`, including literals a `use.vars` rewrote onto that node; see [blueprint.md](blueprint.md#literal-input-values-vars)) to an ephemeral, engine-managed tfvars file, then passes it to Terraform explicitly via `-var-file`. Terraform's own `*.auto.tfvars.json` auto-loading is never relied on: two nodes can share a module directory (see `backend_config` in [blueprint.md](blueprint.md#reusing-the-same-module-across-instances)), and auto-loading by a fixed filename would let them clobber each other's values.
 
