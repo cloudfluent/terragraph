@@ -150,6 +150,15 @@ func inspectDeclarations(schema *Schema, files []moduleFile) {
 			}
 			inner, _, _ := block.Body.PartialContent(terraformBackendSchema)
 			for _, b := range inner.Blocks {
+				// A backend or cloud override replaces either predecessor, including its default-path projection and ambiguity evidence.
+				if selected.override {
+					schema.Backend = ""
+					schema.BackendConfig = nil
+					schema.BackendConfigKnown = true
+					cloud = false
+					delete(schema.comparison, "backend")
+					delete(schema.comparison, "cloud")
+				}
 				if b.Type == "cloud" {
 					cloud = true
 					schema.comparison["cloud"] = bodyIdentity(b.Body, src)
