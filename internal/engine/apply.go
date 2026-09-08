@@ -114,7 +114,7 @@ func (e *Engine) Apply(opts Options) ([]NodeRun, error) {
 		if err != nil {
 			return nil, "", fmt.Errorf("reading outputs after apply: %w", err)
 		}
-		// Both exits that produce current reality publish the same snapshot so the file does not depend on whether apply changed the node.
+		// Both exits that produce current reality publish the same snapshot (the unchanged branch does too), so nothing about the file reveals which path wrote it.
 		if err := e.writeSnapshot(name, outputs); err != nil {
 			return nil, "", err
 		}

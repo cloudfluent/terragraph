@@ -12,10 +12,7 @@ import (
 	"github.com/cloudfluent/terragraph/internal/exec"
 )
 
-// writeFallbackModule writes the two-node fixture's shared module: one
-// variable an edge can feed, one output it can read. The explicit local
-// backend is required when two nodes share a source directory (Build then
-// gives each its own state path).
+// writeFallbackModule writes the two-node fixture's shared module: one variable an edge can feed, one output it can read. The explicit local backend is required when two nodes share a source directory (Build then gives each its own state path).
 func writeFallbackModule(t *testing.T, dir string) {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -36,18 +33,7 @@ output "consumed" {
 	}
 }
 
-// writeFallbackFakeTerraform is a fake terraform whose `output` subcommand the
-// tests control through two env knobs, both inherited by the subprocess:
-//
-//   - TG_OUTPUT_FAIL_NODE: `output` exits 1 when run with the data dir of that
-//     node, modelling a live read that fails (state gone, backend unreachable).
-//   - TG_OUTPUT_FIRST / TG_OUTPUT_LATER: the value the first and every later
-//     `output` call returns for a given node, so a test can tell the read that
-//     populated the applied map from a re-read the engine should never make.
-//
-// Each node's `plan` copies the -var-file it was handed into its own data dir,
-// which is the observable for which source won input resolution: the tfvars
-// file is deleted after the run, but the copy survives.
+// writeFallbackFakeTerraform models live-read failures with TG_OUTPUT_FAIL_NODE and distinguishes applied values from rereads with TG_OUTPUT_FIRST/TG_OUTPUT_LATER; plan retains varfile-seen so source precedence remains observable after ephemeral tfvars cleanup.
 func writeFallbackFakeTerraform(t *testing.T, dir string) string {
 	t.Helper()
 	path := filepath.Join(dir, "terraform-fake")
@@ -108,9 +94,7 @@ exit 1
 	return path
 }
 
-// loadFallbackEngine loads the two-node fixture: a's "consumed" output feeds
-// b's "consumed" input. snapshots toggles the blueprint's opt-in block; the
-// graph is otherwise identical, so only the gate differs between the two.
+// loadFallbackEngine loads the two-node fixture: a's "consumed" output feeds b's "consumed" input. snapshots toggles the blueprint's opt-in block; the graph is otherwise identical, so only the gate differs between the two.
 func loadFallbackEngine(t *testing.T, snapshots bool) *Engine {
 	t.Helper()
 	baseDir := t.TempDir()
@@ -134,9 +118,7 @@ edge {
 	return e
 }
 
-// writeFallbackSnapshot hand-writes name's snapshot in the exact on-disk
-// format writeSnapshot produces (T2), as a prior run's apply would have left
-// behind.
+// writeFallbackSnapshot hand-writes name's snapshot in the exact on-disk format writeSnapshot produces (T2), as a prior run's apply would have left behind.
 func writeFallbackSnapshot(t *testing.T, e *Engine, name, value string) {
 	t.Helper()
 	path := e.snapshotPath(name)
@@ -149,8 +131,7 @@ func writeFallbackSnapshot(t *testing.T, e *Engine, name, value string) {
 	}
 }
 
-// varfileSeen returns what the fake terraform recorded as node's resolved
-// inputs, or fails the test if the node's plan never ran.
+// varfileSeen returns what the fake terraform recorded as node's resolved inputs, or fails the test if the node's plan never ran.
 func varfileSeen(t *testing.T, e *Engine, node string) string {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(e.dataDir(node), "varfile-seen"))
@@ -160,10 +141,7 @@ func varfileSeen(t *testing.T, e *Engine, node string) string {
 	return string(data)
 }
 
-// (a) opted in + live output fails + snapshot present: resolution succeeds
-// from the snapshot and the apply proceeds. The upstream node is never applied
-// in this run (node-scoped), so its outputs can only come from the live read
-// or the file — this is the fallback actually firing.
+// (a) opted in + live output fails + snapshot present: resolution succeeds from the snapshot and the apply proceeds. The upstream node is never applied in this run (node-scoped), so its outputs can only come from the live read or the file — this is the fallback actually firing.
 func TestResolveInputs_SnapshotFallsBackWhenLiveOutputFails(t *testing.T) {
 	e := loadFallbackEngine(t, true)
 	writeFallbackSnapshot(t, e, "a", "snap")
@@ -179,9 +157,7 @@ func TestResolveInputs_SnapshotFallsBackWhenLiveOutputFails(t *testing.T) {
 	}
 }
 
-// (b) live output succeeds + a stale snapshot is sitting there: the live value
-// wins. The snapshot must never preempt the live read, or the removed
-// incremental-apply cache returns under a new name.
+// (b) live output succeeds + a stale snapshot is sitting there: the live value wins. The snapshot must never preempt the live read, or the removed incremental-apply cache returns under a new name.
 func TestResolveInputs_LiveOutputBeatsStaleSnapshot(t *testing.T) {
 	e := loadFallbackEngine(t, true)
 	writeFallbackSnapshot(t, e, "a", "stale-snap")
@@ -200,11 +176,7 @@ func TestResolveInputs_LiveOutputBeatsStaleSnapshot(t *testing.T) {
 	}
 }
 
-// (c) applied map populated earlier in the same run: b resolves a's output from
-// what a's apply just produced, never re-reading it live. TG_OUTPUT_LATER
-// makes a live re-read return a different value, so the assertion can tell the
-// two apart; combined with (b) (live beats snapshot) this pins the whole order
-// applied > live > snapshot.
+// (c) applied map populated earlier in the same run: b resolves a's output from what a's apply just produced, never re-reading it live. TG_OUTPUT_LATER makes a live re-read return a different value, so the assertion can tell the two apart; combined with (b) (live beats snapshot) this pins the whole order applied > live > snapshot.
 func TestResolveInputs_AppliedMapBeatsLiveReread(t *testing.T) {
 	e := loadFallbackEngine(t, true)
 	t.Setenv("TG_OUTPUT_FIRST", "applied-value")
@@ -223,8 +195,7 @@ func TestResolveInputs_AppliedMapBeatsLiveReread(t *testing.T) {
 	}
 }
 
-// (d) opted out + live fails + a snapshot file exists anyway: still the
-// original failure. The gate is the blueprint block, not the file's existence.
+// (d) opted out + live fails + a snapshot file exists anyway: still the original failure. The gate is the blueprint block, not the file's existence.
 func TestResolveInputs_OptOutFailsDespiteSnapshotFile(t *testing.T) {
 	e := loadFallbackEngine(t, false)
 	writeFallbackSnapshot(t, e, "a", "snap")
@@ -242,9 +213,7 @@ func TestResolveInputs_OptOutFailsDespiteSnapshotFile(t *testing.T) {
 	}
 }
 
-// (e) opted in + live fails + the snapshot file is corrupt: the corrupt file
-// is ignored (debug log), and the failure is still the original one. A
-// fallback that errored on its own misses would be a second source of truth.
+// (e) opted in + live fails + the snapshot file is corrupt: the corrupt file is ignored (debug log), and the failure is still the original one. A fallback that errored on its own misses would be a second source of truth.
 func TestResolveInputs_CorruptSnapshotIsNotAnError(t *testing.T) {
 	e := loadFallbackEngine(t, true)
 	path := e.snapshotPath("a")

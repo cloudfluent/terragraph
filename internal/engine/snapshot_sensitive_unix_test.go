@@ -245,6 +245,8 @@ func TestResolveInputs_UnusableSnapshotPreservesLiveErrorForSensitiveOutput(t *t
 	}{
 		{name: "missing"},
 		{name: "corrupt", data: `{"schema":1,"node":"a","outputs":{`},
+		{name: "missing outputs", data: `{"schema":1,"node":"a"}`},
+		{name: "null outputs", data: `{"schema":1,"node":"a","outputs":null}`},
 		{name: "unknown schema", data: `{"schema":2,"node":"a","outputs":{}}`},
 		{name: "wrong node", data: `{"schema":1,"node":"other","outputs":{}}`},
 	} {
@@ -287,5 +289,32 @@ func TestApply_SensitiveSnapshotOptOutLeavesExistingFileUntouched(t *testing.T) 
 	_, err = e.Apply(Options{Node: "b", AutoApprove: true})
 	if err == nil || !strings.Contains(err.Error(), `upstream node "a" has not been applied yet`) || strings.Contains(err.Error(), "withheld") {
 		t.Fatal("opted-out Apply consulted a sensitive snapshot")
+	}
+}
+
+func TestResolveInputs_StructurallyCorruptSnapshotPreservesLiveError(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		data string
+	}{
+		{name: "missing outputs", data: `{"schema":1,"node":"a"}`},
+		{name: "null outputs", data: `{"schema":1,"node":"a","outputs":null}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			e := loadFallbackEngine(t, true)
+			writeFallbackSnapshot(t, e, "a", "public-fixture")
+			if err := os.WriteFile(e.snapshotPath("a"), []byte(test.data), 0o600); err != nil {
+				t.Fatalf("writing structurally corrupt snapshot: %v", err)
+			}
+			t.Setenv("TG_OUTPUT_FAIL_NODE", "a")
+			_, err := e.Apply(Options{Node: "b", AutoApprove: true})
+			var exitErr *osexec.ExitError
+			if !errors.As(err, &exitErr) {
+				t.Fatal("structurally corrupt snapshot discarded the live output error chain")
+			}
+			if !strings.Contains(err.Error(), `upstream node "a" has not been applied yet`) {
+				t.Fatal("structurally corrupt snapshot replaced the original live-read diagnostic")
+			}
+		})
 	}
 }

@@ -27,12 +27,7 @@ func (e *Engine) resolveInputs(name string, applied map[string]map[string]any) (
 			var err error
 			outputs, err = e.runner(edge.From.Node).Outputs()
 			if err != nil {
-				// The snapshot is a last resort, never a preference: consulted
-				// only after the live read has failed, and only when the graph
-				// opted in (Graph.Snapshots). Reading it any earlier resurrects
-				// the removed incremental-apply cache under a new name — worst
-				// on destroy, where these values feed a resource's count or
-				// for_each and a stale value changes what gets torn down.
+				// The snapshot is a last resort, never a preference: consulted only after the live read has failed, and only when the graph opted in (Graph.Snapshots). Reading it any earlier resurrects the removed incremental-apply cache under a new name — worst on destroy, where these values feed a resource's count or for_each and a stale value changes what gets torn down.
 				found := false
 				if e.Graph.Snapshots {
 					var snapshot snapshotFile

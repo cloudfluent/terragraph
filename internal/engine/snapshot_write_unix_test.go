@@ -12,11 +12,7 @@ import (
 	"github.com/cloudfluent/terragraph/internal/exec"
 )
 
-// writeSnapshotModule writes a module declaring two outputs — one an edge
-// consumes, one nothing does — so the filtering rule has something real to
-// filter. The shared-source two-node fixture needs the explicit local backend
-// (two nodes instantiating one module without it is a graph validation error;
-// with it, Build gives each node its own state path).
+// writeSnapshotModule writes a module declaring two outputs — one an edge consumes, one nothing does — so the filtering rule has something real to filter. The shared-source two-node fixture needs the explicit local backend (two nodes instantiating one module without it is a graph validation error; with it, Build gives each node its own state path).
 func writeSnapshotModule(t *testing.T, dir string) {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -43,10 +39,7 @@ output "internal" {
 	}
 }
 
-// writeSnapshotFakeTerraform is writeFakeTerraform trimmed to the apply flow,
-// with `output` reporting two outputs instead of one: "consumed" (fed to node b
-// by the fixture's edge) and "internal" (declared, published by terraform, read
-// by no edge).
+// writeSnapshotFakeTerraform is writeFakeTerraform trimmed to the apply flow, with `output` reporting two outputs instead of one: "consumed" (fed to node b by the fixture's edge) and "internal" (declared, published by terraform, read by no edge).
 func writeSnapshotFakeTerraform(t *testing.T, dir string) string {
 	t.Helper()
 	path := filepath.Join(dir, "terraform-fake")
@@ -100,9 +93,7 @@ exit 1
 	return path
 }
 
-// loadSnapshotTestEngine loads the two-node fixture: a's "consumed" output
-// feeds b's input, a's "internal" output feeds nothing. snapshots toggles the
-// blueprint's opt-in block; everything else about the graph is identical.
+// loadSnapshotTestEngine loads the two-node fixture: a's "consumed" output feeds b's input, a's "internal" output feeds nothing. snapshots toggles the blueprint's opt-in block; everything else about the graph is identical.
 func loadSnapshotTestEngine(t *testing.T, snapshots bool) (*Engine, string) {
 	t.Helper()
 	baseDir := t.TempDir()
@@ -133,8 +124,7 @@ func TestApply_SnapshotsOptOutWritesNothing(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 
-	// The gate is the blueprint block, not the graph's shape: this same graph
-	// with `snapshots { }` does write, so opting out must leave no trace.
+	// The gate is the blueprint block, not the graph's shape: this same graph with `snapshots { }` does write, so opting out must leave no trace.
 	if _, err := os.Stat(filepath.Join(e.BaseDir, ".terragraph", "outputs")); !os.IsNotExist(err) {
 		t.Fatalf("opted-out graph wrote under .terragraph/outputs (stat err = %v), want nothing", err)
 	}
@@ -147,8 +137,7 @@ func TestApply_SnapshotsWriteConsumedOutputsOnly(t *testing.T) {
 		t.Fatalf("fresh Apply: %v", err)
 	}
 
-	// Both apply paths must leave the same artifact behind, so read the file
-	// after the changed-node apply and again after an unchanged one.
+	// Both apply paths must leave the same artifact behind, so read the file after the changed-node apply and again after an unchanged one.
 	path := e.snapshotPath("a")
 	first, err := os.ReadFile(path)
 	if err != nil {
@@ -192,8 +181,7 @@ func TestApply_SnapshotsWriteConsumedOutputsOnly(t *testing.T) {
 		t.Fatalf("node b has no consumers, want no snapshot (stat err = %v)", err)
 	}
 
-	// Re-apply over an unchanged graph: the unchanged branch must write too,
-	// byte-identically — nothing about the file may reveal which path wrote it.
+	// Re-apply over an unchanged graph: the unchanged branch must write too, byte-identically — nothing about the file may reveal which path wrote it.
 	if _, err := e.Apply(Options{AutoApprove: true}); err != nil {
 		t.Fatalf("unchanged Apply: %v", err)
 	}
