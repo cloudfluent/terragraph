@@ -73,6 +73,9 @@ func newExecutionHistoryCmd(kind string, path *string) *cobra.Command {
 				for _, record := range result.Executions {
 					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s  %s  %s\n", record.ID, record.Operation, record.Status)
 					if kind == "show" {
+						if record.Backup {
+							_, _ = fmt.Fprintln(cmd.OutOrStdout(), "  backup: available (export with plan show --backup)")
+						}
 						if record.Preparation != "" {
 							_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  backend preparation: %s\n", record.Preparation)
 						}

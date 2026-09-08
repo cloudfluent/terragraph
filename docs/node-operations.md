@@ -13,7 +13,7 @@ terragraph run --node checkout.database -- state mv 'aws_db_instance.old' 'aws_d
 terragraph run --node checkout.database -- state rm 'aws_db_instance.old'
 ```
 
-The node supplies its runtime, source directory, environment, backend configuration, and isolated `TF_DATA_DIR`. A group name is not expanded. `--` is required between terragraph flags and the native command. Native stdout, stderr, stdin, and positive exit codes are preserved; stdout is not wrapped in a terragraph JSON envelope.
+The node supplies its runtime, source directory, environment, backend configuration, and isolated `TF_DATA_DIR`. A group name is not expanded. Scoped operations require statically known backend configuration so native state commands cannot silently retain a different dynamic target. `--` is required between terragraph flags and the native command. Native stdout, stderr, stdin, and positive exit codes are preserved; stdout is not wrapped in a terragraph JSON envelope.
 
 | Native command | Preparation | Effect |
 |---|---|---|

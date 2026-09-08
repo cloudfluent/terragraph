@@ -34,6 +34,9 @@ func (e *Engine) RunNode(name string, args []string) (resultErr error) {
 	if node.ObservationError != nil || node.Schema == nil {
 		return fmt.Errorf("node.%s: module is unavailable; restore or vendor this node's source", name)
 	}
+	if !node.Schema.BackendConfigKnown {
+		return fmt.Errorf("node.%s: scoped operations require statically known backend configuration; use literal backend settings", name)
+	}
 	r := e.runner(name)
 	r.Stdin = e.Stdin
 	if err := r.ValidateOperationEnvironment(); err != nil {

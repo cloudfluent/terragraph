@@ -92,25 +92,15 @@ func (e *Engine) executionTarget(name string) (string, error) {
 			identity[key] = value
 		}
 	}
-	workspace, set := node.Env["TF_WORKSPACE"]
-	if !set {
-		workspace = os.Getenv("TF_WORKSPACE")
-		if workspace == "" {
-			data, err := os.ReadFile(filepath.Join(e.dataDir(name), "environment"))
-			if err != nil && !os.IsNotExist(err) {
-				return "", fmt.Errorf("node.%s: reading selected workspace: %w", name, err)
-			}
-			workspace = strings.TrimSpace(string(data))
-		}
-	}
-	if workspace == "" {
-		workspace = "default"
+	workspace, err := e.executionWorkspace(name)
+	if err != nil {
+		return "", err
 	}
 	identity["workspace"] = workspace
 	if backend == "http" && identity["address"] == "" {
-		address, ok := node.Env["TF_HTTP_ADDRESS"]
-		if !ok {
-			address = os.Getenv("TF_HTTP_ADDRESS")
+		address, _, err := e.runner(name).EnvironmentValue("TF_HTTP_ADDRESS")
+		if err != nil {
+			return "", err
 		}
 		identity["address"] = address
 	}
@@ -410,4 +400,22 @@ func (s *executionSession) setReview(name string, review *PlanReview) error {
 		}
 	}
 	return fmt.Errorf("node.%s: absent from execution", name)
+}
+
+func (e *Engine) executionWorkspace(name string) (string, error) {
+	workspace, _, err := e.runner(name).EnvironmentValue("TF_WORKSPACE")
+	if err != nil {
+		return "", err
+	}
+	if workspace == "" {
+		data, err := os.ReadFile(filepath.Join(e.dataDir(name), "environment"))
+		if err != nil && !os.IsNotExist(err) {
+			return "", fmt.Errorf("node.%s: reading selected workspace: %w", name, err)
+		}
+		workspace = strings.TrimSpace(string(data))
+	}
+	if workspace == "" {
+		workspace = "default"
+	}
+	return workspace, nil
 }

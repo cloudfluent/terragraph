@@ -118,6 +118,17 @@ func TestPlanHistory_BackupExportIsExplicitAndRaw(t *testing.T) {
 		t.Fatalf("got = %s", out.String())
 	}
 	out.Reset()
+	plain := NewRootCmd("test")
+	plain.SetOut(&out)
+	plain.SetErr(&bytes.Buffer{})
+	plain.SetArgs([]string{"--blueprint", path, "plan", "show", id})
+	if err := plain.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "backup: available") || strings.Contains(out.String(), "PRIVATE_NATIVE_BACKUP") {
+		t.Fatalf("got = %s", out.String())
+	}
+	out.Reset()
 	export := NewRootCmd("test")
 	export.SetOut(&out)
 	export.SetErr(&bytes.Buffer{})

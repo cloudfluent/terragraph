@@ -19,10 +19,11 @@ func (e *Engine) recoverNodeOutputs(session *executionSession, name string, allo
 	if env == nil {
 		env = map[string]string{}
 	}
-	workspace, ok := env["TF_WORKSPACE"]
-	if !ok {
-		workspace = os.Getenv("TF_WORKSPACE")
+	workspace, err := e.executionWorkspace(name)
+	if err != nil {
+		return err
 	}
+	env["TF_WORKSPACE"] = workspace
 	for _, entry := range os.Environ() {
 		key, _, _ := strings.Cut(entry, "=")
 		if strings.HasPrefix(strings.ToUpper(key), "TF_CLI_ARGS") || strings.HasPrefix(strings.ToUpper(key), "TF_LOG") {
