@@ -522,3 +522,46 @@ edge {
 		t.Fatalf("message = %q, want %q", problems[0].Message, want)
 	}
 }
+
+func TestBuild_OrderingBetweenGroupsWaitsForEveryLeaf(t *testing.T) {
+	root := t.TempDir()
+	writeBackendModule(t, filepath.Join(root, "module"), localBackend)
+	writeFixtureFile(t, filepath.Join(root, "groups", "group.hcl"), `
+group "g" {
+  node "a" { source = "../module" }
+  node "b" { source = "../module" }
+}
+`)
+	writeFixtureFile(t, filepath.Join(root, "blueprint.hcl"), `
+use "g" {
+  as = "first"
+  source = "./groups"
+}
+use "g" {
+  as = "second"
+  source = "./groups"
+}
+edge {
+  from = use.first
+  to = use.second
+}
+`)
+	bp, err := blueprint.ParseFile(filepath.Join(root, "blueprint.hcl"))
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	g, err := Build(bp, root)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if problems := Validate(g); len(problems) != 0 {
+		t.Fatalf("got = %v, want no problems", problems)
+	}
+	levels, err := Levels(g)
+	if err != nil {
+		t.Fatalf("Levels: %v", err)
+	}
+	if len(levels) != 2 || len(levels[0]) != 2 || len(levels[1]) != 2 || levels[0][0] != "first.a" || levels[0][1] != "first.b" || levels[1][0] != "second.a" || levels[1][1] != "second.b" {
+		t.Fatalf("got = %v, want [[first.a first.b] [second.a second.b]]", levels)
+	}
+}

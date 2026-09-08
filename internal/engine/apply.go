@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 
 	"github.com/cloudfluent/terragraph/internal/exec"
 )
@@ -48,7 +47,7 @@ func (e *Engine) Apply(opts Options) ([]NodeRun, error) {
 		defer func() { _ = os.Remove(varsPath) }()
 		varFileArgs := exec.VarFileArgs(varsPath, vars)
 
-		r := &exec.Runner{Binary: e.runtimeFor(name), Dir: e.nodeDir(name), DataDir: e.dataDir(name), Env: e.envFor(name), Stdout: out, Stderr: out}
+		r := &exec.Runner{Context: e.context(), Binary: e.runtimeFor(name), Dir: e.nodeDir(name), DataDir: e.dataDir(name), Env: e.envFor(name), Stdout: out, Stderr: out}
 		if err := r.Init(e.Graph.Nodes[name].BackendConfig); err != nil {
 			return nil, "", fmt.Errorf("init: %w", err)
 		}
@@ -60,11 +59,11 @@ func (e *Engine) Apply(opts Options) ([]NodeRun, error) {
 		}
 
 		savedPlan := e.planPath(name)
-		if err := os.MkdirAll(filepath.Dir(savedPlan), 0o755); err != nil {
-			return nil, "", fmt.Errorf("creating plan directory: %w", err)
+		removePlan, err := prepareSavedPlan(savedPlan)
+		if err != nil {
+			return nil, "", err
 		}
-		// Removed however this node exits: the file holds resolved input values in cleartext, and a plan left behind is only ever stale by the next run.
-		defer func() { _ = os.Remove(savedPlan) }()
+		defer removePlan()
 
 		changes, err := r.PlanChanges(savedPlan, varFileArgs...)
 		if err != nil {

@@ -63,7 +63,7 @@ directory is per-instance (`vendor/<node-name>`) while the contract belongs
 to the source everything was vendored from. Every node sharing a source
 shares its contract: a group instantiated twice, one module reused through
 `backend_config`, or two vendored instances of the same remote module inherit
-the same contract everywhere they appear.
+the same contract everywhere they appear. Every actual module copy is checked against that contract, so updating only one vendored instance cannot hide a contradiction behind another copy. Repeated identical findings are grouped and name all affected nodes.
 
 ## Facts, and who declares them
 
