@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -69,12 +70,12 @@ func TestStateOrphans_NoStrayFileNoNewProblems(t *testing.T) {
 func TestStateOrphans_ExplicitBackendPathClaimsItsFile(t *testing.T) {
 	baseDir := t.TempDir()
 	writeModule(t, filepath.Join(baseDir, "stacks", "vpc"))
-	path := writeBlueprint(t, baseDir, `
+	path := writeBlueprint(t, baseDir, fmt.Sprintf(`
 node "vpc" {
   source = "./stacks/vpc"
-  backend_config = { path = ".terragraph/state/prod.tfstate" }
+  backend_config = { path = %q }
 }
-`)
+`, filepath.Join(baseDir, ".terragraph", "state", "prod.tfstate")))
 
 	e, err := Load(path, exec.Terraform, io.Discard, io.Discard)
 	if err != nil {

@@ -90,7 +90,9 @@ Either endpoint may be a group instance (`use.<name>`), and each expanded edge t
 
 ## Reusing the same module across instances
 
-A node can reuse one module `source` across multiple instances (e.g. the same `./stacks/vpc` for both `dev` and `prod`) without their state colliding. If the module declares `backend "local"` (an empty block is enough) and the node does not set `path`, terragraph fills `path` to `<blueprint dir>/.terragraph/state/<node>.tfstate` (absolute) and passes it as `terraform init -backend-config=path=...`. An explicit `path` wins.
+A node can reuse one module `source` across multiple instances (e.g. the same `./stacks/vpc` for both `dev` and `prod`) without their state colliding. If the module declares `backend "local"` (an empty block is enough) and the node does not set `path`, terragraph fills `path` to `<blueprint dir>/.terragraph/state/<node>.tfstate` (absolute) and passes it as `terraform init -backend-config=path=...`. An explicit `backend_config.path` wins.
+
+An explicit relative local-backend `backend_config.path` is passed through unchanged: Terraform/OpenTofu resolves it for the default workspace from the node's module directory, **not** the blueprint directory. For example, with `source = "./modules/vpc"`, `path = ".terragraph/state/vpc.tfstate"` places state under `modules/vpc/.terragraph/state/`. `terragraph validate` warns about this relative path. Omit `backend_config.path` to use the automatic absolute path above, or supply an absolute path outside the module directory when choosing a custom location. Changing a path does not move existing state; migrate existing state before running against the new location.
 
 ```hcl
 node "vpc_prod" {
@@ -185,9 +187,6 @@ An edge wires one node's real output into another node's input, but not every in
 ```hcl
 node "data-apne2-dev-vpc" {
   source = "./modules/vpc"
-  backend_config = {
-    path = ".terragraph/state/data-apne2-dev-vpc.tfstate"
-  }
   vars = {
     name            = "dpl-apne2-vpc-dev"
     cidr            = "10.16.0.0/20"

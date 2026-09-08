@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -357,6 +358,9 @@ node "c" {
 	if err != nil {
 		t.Fatalf("LoadPath: %v", err)
 	}
+	for i := range bp.Nodes {
+		bp.Nodes[i].BackendConfig["path"] = filepath.Join(root, bp.Nodes[i].BackendConfig["path"])
+	}
 	g, err := Build(bp, dir)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
@@ -466,6 +470,9 @@ node "b" {
 	bp, dir, err := blueprint.LoadPath(filepath.Join(root, "blueprint.hcl"))
 	if err != nil {
 		t.Fatalf("LoadPath: %v", err)
+	}
+	for i := range bp.Nodes {
+		bp.Nodes[i].BackendConfig["path"] = filepath.Join(root, bp.Nodes[i].BackendConfig["path"])
 	}
 	g, err := Build(bp, dir)
 	if err != nil {
@@ -655,11 +662,71 @@ node "b" {
 	if err != nil {
 		t.Fatalf("ParseFile: %v", err)
 	}
+	for i := range bp.Nodes {
+		bp.Nodes[i].BackendConfig["path"] = filepath.Join(root, bp.Nodes[i].BackendConfig["path"])
+	}
 	g, err := Build(bp, root)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
 	if problems := Validate(g); len(problems) != 0 {
 		t.Fatalf("got = %v, want separate workspace states", problems)
+	}
+}
+
+func TestValidate_RelativeLocalBackendPathWarns(t *testing.T) {
+	root := t.TempDir()
+	writeBackendModule(t, filepath.Join(root, "modules", "vpc"), localBackend)
+	writeFixtureFile(t, filepath.Join(root, "blueprint.hcl"), `
+node "vpc" {
+ source = "./modules/vpc"
+ backend_config = { path = ".terragraph/state/vpc.tfstate" }
+}
+`)
+	g := parseAndBuild(t, root)
+	problems := Validate(g)
+	if len(problems) != 1 {
+		t.Fatalf("got = %v, want one relative-path warning", problems)
+	}
+	if problems[0].Severity != SeverityWarning {
+		t.Fatalf("got = %v, want warning", problems[0])
+	}
+	for _, want := range []string{"node.vpc.backend_config.path", "relative", g.Nodes["vpc"].Dir, "absolute path", "omit"} {
+		if !strings.Contains(problems[0].Message, want) {
+			t.Fatalf("got = %q, want substring %q", problems[0].Message, want)
+		}
+	}
+	if got := g.Nodes["vpc"].BackendConfig["path"]; got != ".terragraph/state/vpc.tfstate" {
+		t.Fatalf("got = %q, want original relative path", got)
+	}
+}
+
+func TestValidate_AbsoluteLocalBackendPathDoesNotWarn(t *testing.T) {
+	root := t.TempDir()
+	writeBackendModule(t, filepath.Join(root, "modules", "vpc"), localBackend)
+	writeFixtureFile(t, filepath.Join(root, "blueprint.hcl"), fmt.Sprintf(`
+node "vpc" {
+ source = "./modules/vpc"
+ backend_config = { path = %q }
+}
+`, filepath.Join(root, "state", "vpc.tfstate")))
+	if problems := Validate(parseAndBuild(t, root)); len(problems) != 0 {
+		t.Fatalf("got = %v, want no problems", problems)
+	}
+}
+
+func TestValidate_RemoteBackendRelativePathDoesNotWarn(t *testing.T) {
+	root := t.TempDir()
+	writeBackendModule(t, filepath.Join(root, "modules", "vpc"), `terraform {
+ backend "http" {}
+}`)
+	writeFixtureFile(t, filepath.Join(root, "blueprint.hcl"), `
+node "vpc" {
+ source = "./modules/vpc"
+ backend_config = { path = "state/vpc" }
+}
+`)
+	if problems := Validate(parseAndBuild(t, root)); len(problems) != 0 {
+		t.Fatalf("got = %v, want no problems", problems)
 	}
 }

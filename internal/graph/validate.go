@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -219,6 +220,13 @@ func backendProblems(g *Graph) []Problem {
 					Message:  fmt.Sprintf("node.%s: backend_config is set but the module declares no backend block", name),
 				})
 			}
+		}
+		// Terraform resolves explicit relative paths from the module directory, which can put state inside a vendored source tree.
+		if statePath := node.BackendConfig["path"]; node.Schema != nil && node.Schema.Backend == "local" && statePath != "" && !filepath.IsAbs(statePath) {
+			problems = append(problems, Problem{
+				Severity: SeverityWarning,
+				Message:  fmt.Sprintf("node.%s.backend_config.path: relative path %q for the default workspace is resolved from module directory %q, not the blueprint directory; use an absolute path outside the module or omit backend_config.path to use the managed state path", name, statePath, node.Dir),
+			})
 		}
 		if node.Dir != "" {
 			byDir[node.Dir] = append(byDir[node.Dir], name)
