@@ -215,7 +215,10 @@ func (e *Engine) ApplySavedPlans(id string, opts Options) (runs []NodeRun, resul
 	if err := s.publish(next); err != nil {
 		return runs, err
 	}
-	return runs, e.cleanupExecution(s.store, next)
+	if err := e.cleanupExecution(s.store, next); err != nil {
+		e.logger().Warn("execution artifact cleanup deferred", "execution", next.ID, "error", err)
+	}
+	return runs, nil
 }
 
 func (e *Engine) applySavedNode(s *executionSession, node ExecutionNode, opts Options) (string, error) {
@@ -349,6 +352,9 @@ func (e *Engine) resolveLiveInputs(name string) (map[string]any, error) {
 func (s *executionSession) finishSaved(runErr error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.record.FinishedAt != nil && !executionNeedsRecovery(s.record) {
+		return nil
+	}
 	next := s.record
 	next.Nodes = append([]ExecutionNode(nil), next.Nodes...)
 	next.UpdatedAt = time.Now().UTC()
