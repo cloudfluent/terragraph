@@ -1,5 +1,50 @@
 # Changelog
 
+## [0.2.2](https://github.com/cloudfluent/terragraph/compare/v0.2.1...v0.2.2) (2026-09-08)
+
+
+### Features
+
+* add --output json to plan, apply, and destroy ([#64](https://github.com/cloudfluent/terragraph/issues/64)) ([1f02aca](https://github.com/cloudfluent/terragraph/commit/1f02aca4ae6db25384deb8358e6167be96a16f2a))
+* add two-sided contracts keyed by module source ([1e5f342](https://github.com/cloudfluent/terragraph/commit/1e5f3420f53e7c0a9b0eb4aecc4eabb4aeb9a4d0)), closes [#49](https://github.com/cloudfluent/terragraph/issues/49)
+* opt-in output snapshots with last-resort resolution ([#65](https://github.com/cloudfluent/terragraph/issues/65)) ([2b8b746](https://github.com/cloudfluent/terragraph/commit/2b8b746cc572b91e2dcaa28ca06f95c940bbf31b))
+* terragraph force-unlock releases a leftover graph lock (--yes required) ([5cee803](https://github.com/cloudfluent/terragraph/commit/5cee80340be14a20836a967a1d0312cd2cc7f3d5))
+
+
+### Bug Fixes
+
+* a node's explicit backend path no longer claims a same-named orphan ([7872629](https://github.com/cloudfluent/terragraph/commit/7872629c2cdc5118e15bb32cc16b3093e4b1169c))
+* accept Terraform-compatible input values ([#74](https://github.com/cloudfluent/terragraph/issues/74)) ([8274208](https://github.com/cloudfluent/terragraph/commit/8274208156c4aa5b1dda46257304717e52d54dd9))
+* align module inspection and graph composition checks ([#76](https://github.com/cloudfluent/terragraph/issues/76)) ([fde76b5](https://github.com/cloudfluent/terragraph/commit/fde76b5b23ee07efd27bbbf67ddada4e73b71dd1))
+* align runtime inspection and verify OpenTofu file support ([#82](https://github.com/cloudfluent/terragraph/issues/82)) ([493fb8e](https://github.com/cloudfluent/terragraph/commit/493fb8e38848a7fa12c8a417aa66cee2552716a7))
+* C007 allows a contract narrower than the module it describes ([9d4545b](https://github.com/cloudfluent/terragraph/commit/9d4545bfabb77dd9020293db7051eede1608ba77))
+* contract diagnostics no longer depend on map iteration order ([6497330](https://github.com/cloudfluent/terragraph/commit/64973304956effc90b23a4470dc72cedb661471f))
+* destroy refuses --auto-approve when a node's approve level does not permit teardown ([7361b66](https://github.com/cloudfluent/terragraph/commit/7361b66e2bf9562d013b72b09dc66f3b94e734b4))
+* destroy's approve gate checks what a node declared ([d91f66a](https://github.com/cloudfluent/terragraph/commit/d91f66aeb834cbea99b878331ef05f9e57230247))
+* finish runtime cancellation before releasing graph locks ([#79](https://github.com/cloudfluent/terragraph/issues/79)) ([b0740a6](https://github.com/cloudfluent/terragraph/commit/b0740a6d81774d53f0d9aab6edd922672b4f3333))
+* force-unlock works on an unvendored checkout and names the lock holder ([2d9f247](https://github.com/cloudfluent/terragraph/commit/2d9f247a9080a4a71f68b8008c93ed7261e73ebd))
+* honor runtime sensitivity in output snapshots ([#72](https://github.com/cloudfluent/terragraph/issues/72)) ([98b68bf](https://github.com/cloudfluent/terragraph/commit/98b68bf8f8eec2cb2a35f4521ec14b7c337b29e8))
+* make approval remedies actionable and correct documentation ([#78](https://github.com/cloudfluent/terragraph/issues/78)) ([a045678](https://github.com/cloudfluent/terragraph/commit/a04567878451b9e35ff55f6a49df18dc53a00eba))
+* preserve input values and reject unsafe execution inputs ([#70](https://github.com/cloudfluent/terragraph/issues/70)) ([2fc9543](https://github.com/cloudfluent/terragraph/commit/2fc9543678419920c068651791c7d0541a70761b))
+* preserve LSP scopes and refresh editor state ([#77](https://github.com/cloudfluent/terragraph/issues/77)) ([34b5c58](https://github.com/cloudfluent/terragraph/commit/34b5c58633c64b5441d18684b4237b3cca1b72de))
+* preserve managed node data directory isolation ([#75](https://github.com/cloudfluent/terragraph/issues/75)) ([80e05e5](https://github.com/cloudfluent/terragraph/commit/80e05e579ba35e06f67950ac34fe5257691fd014))
+* preserve output sensitivity and consistent input reads ([#88](https://github.com/cloudfluent/terragraph/issues/88)) ([53a2628](https://github.com/cloudfluent/terragraph/commit/53a2628185d5042816bfdce39434d9194b65f7c6))
+* preserve vendored package identity and existing state ([#80](https://github.com/cloudfluent/terragraph/issues/80)) ([ea89069](https://github.com/cloudfluent/terragraph/commit/ea89069afe5913ffeaa597556ea45ffc08fc2be8))
+* protect saved plans before terraform writes ([#73](https://github.com/cloudfluent/terragraph/issues/73)) ([fd12509](https://github.com/cloudfluent/terragraph/commit/fd1250947fb7a68e2e30d5af0a0b268c598cd00b))
+* redact sensitive input validation errors ([#71](https://github.com/cloudfluent/terragraph/issues/71)) ([a7a20cb](https://github.com/cloudfluent/terragraph/commit/a7a20cb4fb1bb8853b3b9630f4abbaab27a7712b))
+* support arbitrary HCL filenames in VS Code and clarify docs ([#86](https://github.com/cloudfluent/terragraph/issues/86)) ([a8d89f7](https://github.com/cloudfluent/terragraph/commit/a8d89f7c35c08f15c905fa9160b6c0a06c03a4bd))
+* tfvars are owner-only and removed when the run ends ([e1192b3](https://github.com/cloudfluent/terragraph/commit/e1192b37c4dae09c0d62845347b14383eaf5e55c))
+* validate graph storage identity and contract types ([#81](https://github.com/cloudfluent/terragraph/issues/81)) ([2865810](https://github.com/cloudfluent/terragraph/commit/286581098b327c1fa11a3ff0aa81d2bc35fa8748))
+* warn about relative local backend paths ([#83](https://github.com/cloudfluent/terragraph/issues/83)) ([b820cb4](https://github.com/cloudfluent/terragraph/commit/b820cb481e1a79e38ba9a69ae3bf3cbe76b5abe3))
+* warn when a renamed node orphans its local-backend state ([e0d95a9](https://github.com/cloudfluent/terragraph/commit/e0d95a90dd11ff358dc43ed6efa6dcdabda54530))
+
+
+### Documentation
+
+* add active development warning to README ([#85](https://github.com/cloudfluent/terragraph/issues/85)) ([6f95ed6](https://github.com/cloudfluent/terragraph/commit/6f95ed6f26751805e0b45a46f609deb8f8311756))
+* align the user guide with supported behavior ([#89](https://github.com/cloudfluent/terragraph/issues/89)) ([d405b52](https://github.com/cloudfluent/terragraph/commit/d405b52e313ec0cb6ff9f9e375907d50eea4169e))
+* correct the write-path invariant in AGENTS.md ([cc28581](https://github.com/cloudfluent/terragraph/commit/cc28581797fb0f4a41c4345b077adb459a8d5418))
+
 ## [0.2.1](https://github.com/cloudfluent/terragraph/compare/v0.2.0...v0.2.1) (2026-09-03)
 
 
