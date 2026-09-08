@@ -2,6 +2,7 @@ package lsp_test
 
 import (
 	"context"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -186,5 +187,83 @@ func TestServe_GroupExportEditsRefreshConsumerDiagnostics(t *testing.T) {
 	got := waitDiagnostics(t, ctx, client, root)
 	if len(got) != 1 || !strings.Contains(string(got[0].Message.(protocol.String)), "Unknown input old") {
 		t.Fatalf("consumer diagnostics = %#v, want unknown old input", got)
+	}
+}
+
+func TestServe_ShutdownThenExitStopsWithoutClientEOF(t *testing.T) {
+	ctx, remote, _, done := startProtocol(t)
+	if err := remote.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := remote.Exit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Serve error = %v, want clean shutdown", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("server is still running after shutdown and exit with client transport open")
+	}
+}
+
+func TestServe_ExitWithoutShutdownReportsFailure(t *testing.T) {
+	ctx, remote, _, done := startProtocol(t)
+	if err := remote.Exit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("Serve error = nil, want exit without shutdown failure")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("server is still running after exit")
+	}
+}
+
+func TestServe_RequestsAfterShutdownAreRejected(t *testing.T) {
+	ctx, remote, _, _ := startProtocol(t)
+	if err := remote.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	_, err := remote.Completion(ctx, &protocol.CompletionParams{})
+	if !errors.Is(err, jsonrpc2.ErrInvalidRequest) {
+		t.Fatalf("completion after shutdown error = %v, want InvalidRequest", err)
+	}
+}
+
+func TestServe_CompletionClampsToTheRequestedLine(t *testing.T) {
+	ctx, remote, client, _ := startProtocol(t)
+	document := uri.File(filepath.Join(t.TempDir(), "blueprint.hcl"))
+	text := "# 한글 😀\r\nnode \"a\" {\r\n source = \"./m\"\r\n}\r\n"
+	if err := remote.DidOpen(ctx, &protocol.DidOpenTextDocumentParams{TextDocument: protocol.TextDocumentItem{URI: document, Text: text}}); err != nil {
+		t.Fatal(err)
+	}
+	_ = waitDiagnostics(t, ctx, client, document)
+	result, err := remote.Completion(ctx, &protocol.CompletionParams{TextDocumentPositionParams: protocol.TextDocumentPositionParams{TextDocument: protocol.TextDocumentIdentifier{URI: document}, Position: protocol.Position{Line: 1, Character: 999}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, ok := result.(protocol.CompletionItemSlice)
+	if !ok {
+		t.Fatalf("completion = %#v, want node attributes", result)
+	}
+	found := false
+	for _, item := range items {
+		if item.Label == "node" {
+			t.Fatalf("completion = %#v, want node attributes rather than top-level blocks", items)
+		}
+		if item.Label == "source" {
+			found = true
+		}
+		edit := item.TextEdit.(*protocol.TextEdit)
+		if edit.Range.Start.Line != 1 || edit.Range.End.Line != 1 {
+			t.Fatalf("edit range = %#v, want requested line 1", edit.Range)
+		}
+	}
+	if !found {
+		t.Fatalf("completion = %#v, want source", items)
 	}
 }

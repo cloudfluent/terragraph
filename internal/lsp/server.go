@@ -4,6 +4,7 @@ package lsp
 
 import (
 	"context"
+	"errors"
 	"io"
 	"runtime"
 	"sort"
@@ -19,16 +20,26 @@ import (
 	"github.com/cloudfluent/terragraph/internal/language"
 )
 
-// Serve runs one LSP connection until the client closes stdin.
+// Serve closes its input transport on exit so a client need not close stdin before waiting for the server process.
 func Serve(ctx context.Context, in io.Reader, out io.Writer) error {
-	server := &server{workspace: language.NewWorkspace(""), documents: map[string][]byte{}}
+	server := &server{workspace: language.NewWorkspace(""), documents: map[string][]byte{}, exit: make(chan struct{})}
 	// NewServer starts dispatching immediately, so diagnostic handlers must wait until their client is installed.
 	server.mu.Lock()
 	_, conn, client := protocol.NewServer(ctx, server, jsonrpc2.NewStream(stdio{Reader: in, Writer: out}))
 	server.client = client
 	server.mu.Unlock()
-	<-conn.Done()
-	return conn.Err()
+	select {
+	case <-conn.Done():
+		return conn.Err()
+	case <-server.exit:
+		if err := conn.Close(); err != nil {
+			return err
+		}
+		if !server.hasShutdown() {
+			return errors.New("language-server: exit received before shutdown; send shutdown before exit")
+		}
+		return nil
+	}
 }
 
 type stdio struct {
@@ -36,7 +47,12 @@ type stdio struct {
 	io.Writer
 }
 
-func (stdio) Close() error { return nil }
+func (s stdio) Close() error {
+	if closer, ok := s.Reader.(io.Closer); ok {
+		return closer.Close()
+	}
+	return nil
+}
 
 type server struct {
 	protocol.UnimplementedServer
@@ -46,9 +62,14 @@ type server struct {
 	workspace  *language.Workspace
 	documents  map[string][]byte
 	client     protocol.Client
+	shutdown   bool
+	exit       chan struct{}
 }
 
 func (s *server) Initialize(_ context.Context, params *protocol.InitializeParams) (*protocol.InitializeResult, error) {
+	if s.hasShutdown() {
+		return nil, jsonrpc2.ErrInvalidRequest
+	}
 	if folders, ok := params.WorkspaceFolders.Get(); ok && len(folders) > 0 {
 		s.workspace.SetRoot(filePath(string(folders[0].URI)))
 	}
@@ -63,8 +84,34 @@ func (s *server) DidOpen(ctx context.Context, params *protocol.DidOpenTextDocume
 	return nil
 }
 
-func (s *server) Shutdown(context.Context) error { return nil }
-func (s *server) Exit(context.Context) error     { return nil }
+func (s *server) Shutdown(context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.shutdown {
+		return jsonrpc2.ErrInvalidRequest
+	}
+	s.shutdown = true
+	return nil
+}
+
+func (s *server) Exit(context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.exit != nil {
+		select {
+		case <-s.exit:
+		default:
+			close(s.exit)
+		}
+	}
+	return nil
+}
+
+func (s *server) hasShutdown() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.shutdown
+}
 func (s *server) DidChange(ctx context.Context, params *protocol.DidChangeTextDocumentParams) error {
 	s.documentMu.Lock()
 	defer s.documentMu.Unlock()
@@ -93,6 +140,9 @@ func (s *server) DidClose(ctx context.Context, params *protocol.DidCloseTextDocu
 }
 
 func (s *server) Completion(ctx context.Context, params *protocol.CompletionParams) (protocol.CompletionResult, error) {
+	if s.hasShutdown() {
+		return nil, jsonrpc2.ErrInvalidRequest
+	}
 	s.documentMu.Lock()
 	defer s.documentMu.Unlock()
 	path := filePath(string(params.TextDocument.URI))
@@ -112,6 +162,9 @@ func (s *server) Completion(ctx context.Context, params *protocol.CompletionPara
 }
 
 func (s *server) Definition(ctx context.Context, params *protocol.DefinitionParams) (protocol.DefinitionResult, error) {
+	if s.hasShutdown() {
+		return nil, jsonrpc2.ErrInvalidRequest
+	}
 	s.documentMu.Lock()
 	defer s.documentMu.Unlock()
 	path := filePath(string(params.TextDocument.URI))
@@ -206,7 +259,7 @@ func positionOffset(text []byte, position protocol.Position) int {
 		}
 		offset++
 	}
-	for offset < len(text) && character < position.Character {
+	for offset < len(text) && character < position.Character && text[offset] != '\n' && text[offset] != '\r' {
 		r, size := utf8.DecodeRune(text[offset:])
 		units := uint32(1)
 		if r > 0xffff {
