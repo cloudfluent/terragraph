@@ -35,6 +35,8 @@ func setupThrowawayGitRepo(t *testing.T) (repoDir string) {
 	}
 
 	run("init", "-q", "-b", "main")
+	// Keep exact source-byte assertions independent of the host's core.autocrlf checkout policy.
+	mustWrite(t, filepath.Join(repoDir, ".gitattributes"), "*.tf text eol=lf\n")
 	mustWrite(t, filepath.Join(repoDir, "main.tf"), `output "id" { value = "x" }`)
 	mustWrite(t, filepath.Join(repoDir, "README.md"), "# throwaway fixture module")
 	run("add", ".")
