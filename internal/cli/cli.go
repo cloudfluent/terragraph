@@ -54,7 +54,7 @@ func NewRootCmd(version string) *cobra.Command {
 			return nil
 		},
 	}
-	root.PersistentFlags().StringVar(&blueprintPath, "blueprint", "blueprint.hcl", "path to the blueprint file, or a directory whose .hcl files are merged into one blueprint")
+	root.PersistentFlags().StringVar(&blueprintPath, "blueprint", ".", "path to a blueprint file or a directory whose .hcl files are merged, excluding .terraform.lock.hcl")
 	root.PersistentFlags().BoolVar(&useTofu, "tofu", false, "use the tofu binary instead of terraform")
 	root.PersistentFlags().StringVar(&logLevel, "log-level", "warn", "log verbosity for internal diagnostics on stderr: debug, info, warn, or error")
 

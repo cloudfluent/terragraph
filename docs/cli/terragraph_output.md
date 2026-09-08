@@ -19,7 +19,7 @@ terragraph output [name] [flags]
 ### Options inherited from parent commands
 
 ```
-      --blueprint string   path to the blueprint file, or a directory whose .hcl files are merged into one blueprint (default "blueprint.hcl")
+      --blueprint string   path to a blueprint file or a directory whose .hcl files are merged, excluding .terraform.lock.hcl (default ".")
       --log-level string   log verbosity for internal diagnostics on stderr: debug, info, warn, or error (default "warn")
       --tofu               use the tofu binary instead of terraform
 ```

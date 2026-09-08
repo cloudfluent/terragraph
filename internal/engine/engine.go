@@ -140,7 +140,7 @@ func (e *Engine) lockGraph() (func(), error) {
 	}, nil
 }
 
-// Load parses the blueprint at blueprintPath and builds its graph. blueprintPath may name a single file or a directory (every .hcl file directly inside it is merged, see blueprint.LoadPath); node sources are resolved relative to the resulting base directory. It does not take the process lock; use LoadLocked for plan/apply/destroy so graph.Build cannot inspect module files while vendor rewrites them.
+// Load parses the blueprint at blueprintPath and builds its graph. blueprintPath may name a single file or a directory (eligible .hcl files directly inside it are merged, see blueprint.LoadPath); node sources are resolved relative to the resulting base directory. It does not take the process lock; use LoadLocked for plan/apply/destroy so graph.Build cannot inspect module files while vendor rewrites them.
 func Load(blueprintPath string, binary exec.Binary, stdout, stderr io.Writer) (*Engine, error) {
 	e, _, err := load(context.Background(), blueprintPath, binary, stdout, stderr, false)
 	return e, err

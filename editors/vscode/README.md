@@ -2,7 +2,7 @@
 
 This extension starts `terragraph language-server` and supplies completion with port metadata, definition navigation, and diagnostics for Terragraph `.hcl` files opened as HCL. Filenames are flexible: `nodes.hcl`, `edges.hcl`, `contracts.hcl`, and files in group source directories receive the same editing support as the conventional `blueprint.hcl` and `group.hcl` names.
 
-Open-file edits are sent to the server without saving. It also reads neighboring `.hcl` files for context. When running a split blueprint in the CLI, use `--blueprint .`; omitting the flag still loads only `blueprint.hcl`. See [files and loading](../../docs/blueprint.md#files-and-loading).
+Open-file edits are sent to the server without saving. It also reads neighboring `.hcl` files for context, excluding `.terraform.lock.hcl` on disk and in unsaved documents. The CLI defaults to the same directory file selection, using saved files; save your edits before running commands. Use `--blueprint <file>` to read one file explicitly. See [files and loading](../../docs/blueprint.md#files-and-loading).
 
 Marketplace releases contain a matching `terragraph language-server` binary, so no separate CLI installation is required for editor features. Set `terragraph.languageServer.path` only to override that bundled binary.
 

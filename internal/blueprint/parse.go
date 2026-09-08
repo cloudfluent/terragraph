@@ -156,11 +156,22 @@ func ParseFile(path string) (*Blueprint, error) {
 	return bp, nil
 }
 
-// ParseDir reads and parses every .hcl file directly inside dir (not recursively) and merges them into a single Blueprint, the same way loadGroupDef already treats a group source directory: node/group/use names, the vendor block, and each contract (role, source, port) must be unique across the whole directory, not just within one file, and an edge in one file may reference a node or use instance declared in another. There are no reserved filenames: every .hcl file merges, whatever it is called. Files are visited in the order os.ReadDir returns them (lexical by name), so a duplicate-name error always names the second file, deterministically.
+// IsBlueprintFilename keeps Terraform's provider lock file out of both executable configuration and editor context without excluding user-authored hidden HCL files.
+func IsBlueprintFilename(name string) bool {
+	return strings.HasSuffix(name, ".hcl") && name != ".terraform.lock.hcl"
+}
+
+// ParseDir merges eligible files directly inside dir in lexical order so cross-file references work and duplicate errors identify the same file deterministically; empty group source directories remain valid parse results.
 func ParseDir(dir string) (*Blueprint, error) {
+	bp, _, err := parseDir(dir)
+	return bp, err
+}
+
+// parseDir reports the file count so command inputs can reject missing configuration without rejecting empty files or scanning a directory twice.
+func parseDir(dir string) (*Blueprint, int, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, fmt.Errorf("reading blueprint directory: %w", err)
+		return nil, 0, fmt.Errorf("reading blueprint directory: %w", err)
 	}
 
 	bp := &Blueprint{}
@@ -169,33 +180,38 @@ func ParseDir(dir string) (*Blueprint, error) {
 	seenUses := map[string]bool{}
 	seenRuntimes := map[string]bool{}
 	seenContractPorts := map[string]bool{}
+	fileCount := 0
 
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".hcl") {
+		if e.IsDir() || !IsBlueprintFilename(e.Name()) {
 			continue
 		}
 		if err := parseOneFile(filepath.Join(dir, e.Name()), bp, seenNodes, seenGroups, seenUses, seenRuntimes, seenContractPorts); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
+		fileCount++
 	}
 
 	if err := validateEdges(bp, seenNodes, seenUses); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if err := validateRuntimes(bp); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return bp, nil
+	return bp, fileCount, nil
 }
 
-// LoadPath resolves path to a Blueprint and the base directory its node/group sources resolve against. If path names a directory, every .hcl file directly inside it is parsed and merged (see ParseDir) and baseDir is path itself. If path names a file, only that file is parsed (see ParseFile) and baseDir is its parent directory.
+// LoadPath preserves the source base directory for either input form and rejects directories with no configuration so a command in the wrong directory cannot silently succeed.
 func LoadPath(path string) (*Blueprint, string, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, "", fmt.Errorf("resolving blueprint path: %w", err)
 	}
 	if info.IsDir() {
-		bp, err := ParseDir(path)
+		bp, fileCount, err := parseDir(path)
+		if err == nil && fileCount == 0 {
+			err = fmt.Errorf("blueprint directory %q: no configuration files; add a .hcl file or use --blueprint to select a file or directory", path)
+		}
 		return bp, path, err
 	}
 	bp, err := ParseFile(path)

@@ -634,9 +634,7 @@ func relativeOutputCompletions(m workspaceModel, text []byte, fragment string, s
 	})
 }
 
-// Definition resolves the node or runtime segment under offset. It searches
-// every .hcl file directly in the same blueprint directory, matching the
-// parser's multi-file blueprint layout.
+// Definition follows directory loading's filename filter so excluded files cannot supply destinations that execution never reads.
 func (w *Workspace) Definition(_ context.Context, path string, offset int) (Location, bool) {
 	path = absolute(path)
 	text := w.document(path)
@@ -886,7 +884,12 @@ func referenceAt(text []byte, offset int) (string, string, bool) {
 }
 
 func (w *Workspace) blueprintFiles(path string) []string {
-	return uniqueSorted(append(w.hclFiles(filepath.Dir(path)), path))
+	files := w.hclFiles(filepath.Dir(path))
+	// Explicitly opened non-HCL filenames retain editor support, just as explicit CLI file selection bypasses directory discovery.
+	if filepath.Ext(path) != ".hcl" || blueprint.IsBlueprintFilename(filepath.Base(path)) {
+		files = append(files, path)
+	}
+	return uniqueSorted(files)
 }
 
 // Open file overlays remain part of their directory even before the first save or after a disk deletion.
@@ -894,13 +897,13 @@ func (w *Workspace) hclFiles(dir string) []string {
 	entries, _ := os.ReadDir(dir)
 	files := []string{}
 	for _, entry := range entries {
-		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".hcl" {
+		if !entry.IsDir() && blueprint.IsBlueprintFilename(entry.Name()) {
 			files = append(files, filepath.Join(dir, entry.Name()))
 		}
 	}
 	w.mu.RLock()
 	for path := range w.documents {
-		if filepath.Dir(path) == dir && filepath.Ext(path) == ".hcl" {
+		if filepath.Dir(path) == dir && blueprint.IsBlueprintFilename(filepath.Base(path)) {
 			files = append(files, path)
 		}
 	}

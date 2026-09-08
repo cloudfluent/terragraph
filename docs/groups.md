@@ -71,11 +71,11 @@ Groups can contain nested `use` blocks, and exports can forward nested ports suc
 
 `use.source` names a **local directory**, not an individual file or a remote module address. It is resolved from the directory containing the calling blueprint or group definition. Local internal node sources and nested `use` sources are relative to the group's own source directory. Remote sources are supported for the group's nodes through [vendoring](#vendoring-group-nodes).
 
-Terragraph reads every `.hcl` file directly inside the group directory, non-recursively, then selects the `group` whose label matches the `use` label. In the example, it looks for `group "eks-service"` anywhere in `./groups/eks-service`. `group.hcl` is a convention: renaming it to `components.hcl` needs no change to the `use` block, and the directory name need not match the group name.
+Terragraph reads `.hcl` files directly inside the group directory, excluding `.terraform.lock.hcl` and without recursion, then selects the `group` whose label matches the `use` label. In the example, it looks for `group "eks-service"` anywhere in `./groups/eks-service`. `group.hcl` is a convention: renaming it to `components.hcl` needs no change to the `use` block, and the directory name need not match the group name.
 
 All files use the same syntax rules. A group's nodes, edges, nested uses, and `export` must be inside its body to belong to it; top-level nodes in neighboring files are not included automatically. A `runtime` declaration belongs outside the group body, in the same file or another `.hcl` file in that directory. Defining the same `group` name in two files is rejected rather than merging their bodies.
 
-The calling blueprint can also span arbitrary filenames such as `nodes.hcl` and `edges.hcl`; run it with `--blueprint .` to include both. See [files and loading](blueprint.md#files-and-loading) for a complete split example. Directory loading is explicit for the calling blueprint and always used for group sources.
+The calling blueprint can also span arbitrary filenames such as `nodes.hcl` and `edges.hcl`; commands include both by default when run in that directory. See [files and loading](blueprint.md#files-and-loading) for a complete split example. The calling blueprint can select one file with `--blueprint <file>`; group sources always use directory loading with the same filename filter.
 
 ## Setting literal inputs for an instance
 
