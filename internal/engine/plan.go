@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -19,7 +20,7 @@ func (e *Engine) ReviewPlan(opts Options, allowTextFallback bool) ([]NodeRun, er
 	return e.plan(opts, true, allowTextFallback)
 }
 
-func (e *Engine) plan(opts Options, inspect, allowTextFallback bool) ([]NodeRun, error) {
+func (e *Engine) plan(opts Options, inspect, allowTextFallback bool) (runs []NodeRun, resultErr error) {
 	unlock, err := e.lockRun()
 	if err != nil {
 		return nil, err
@@ -37,6 +38,17 @@ func (e *Engine) plan(opts Options, inspect, allowTextFallback bool) ([]NodeRun,
 		return nil, err
 	}
 	defer unlockGraph()
+
+	session, err := e.startExecution("plan", opts, false)
+	if err != nil {
+		return nil, err
+	}
+	defer session.close()
+	defer func() {
+		if finishErr := session.finish(resultErr); finishErr != nil {
+			resultErr = errors.Join(resultErr, finishErr)
+		}
+	}()
 
 	e.logger().Info("plan starting", "node", opts.Node, "parallelism", opts.parallelism())
 	var reviewMu sync.Mutex
@@ -76,8 +88,15 @@ func (e *Engine) plan(opts Options, inspect, allowTextFallback bool) ([]NodeRun,
 		defer func() { _ = os.Remove(varsPath) }()
 
 		r := &exec.Runner{Context: e.context(), Binary: e.runtimeFor(name), Dir: nodeDir, DataDir: e.dataDir(name), Env: e.envFor(name), Stdout: out, Stderr: out}
+		if err := session.transition(name, "initializing", "", ""); err != nil {
+			return fail("journal_failed", "init", err)
+		}
 		if err := r.Init(e.Graph.Nodes[name].BackendConfig); err != nil {
-			return fail("initialization_failed", "init", fmt.Errorf("init: %w", err))
+			return fail("initialization_failed", "init", session.fail(name, "indeterminate", fmt.Errorf("init: %w", err)))
+		}
+
+		if err := session.transition(name, "preparing", "", ""); err != nil {
+			return fail("journal_failed", "init", err)
 		}
 
 		if inspect {
@@ -104,11 +123,17 @@ func (e *Engine) plan(opts Options, inspect, allowTextFallback bool) ([]NodeRun,
 					return fail("inspection_failed", "inspect", err)
 				}
 				review.normalize(changed)
+				if err := session.transition(name, "completed", "", ""); err != nil {
+					return fail("journal_failed", "plan", err)
+				}
 				return nil, StatusPlanned, nil
 			}
 		}
 		if err := r.Plan(exec.VarFileArgs(varsPath, vars)...); err != nil {
 			return fail("plan_failed", "plan", fmt.Errorf("plan: %w", err))
+		}
+		if err := session.transition(name, "completed", "", ""); err != nil {
+			return fail("journal_failed", "plan", err)
 		}
 		return nil, StatusPlanned, nil
 	}, nil, inspect)

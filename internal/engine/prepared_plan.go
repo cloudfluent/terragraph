@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/cloudfluent/terragraph/internal/exec"
@@ -13,6 +14,7 @@ type preparedNodePlan struct {
 	path    string
 	changed bool
 	cleanup func()
+	session *executionSession
 }
 
 func (e *Engine) prepareNodePlan(name string, runner *exec.Runner, args ...string) (*preparedNodePlan, error) {
@@ -42,6 +44,9 @@ func (e *Engine) applyPreparedPlan(plan *preparedNodePlan, opts Options) (exec.O
 		if err := e.writeSnapshot(name, outputs); err != nil {
 			return nil, "", err
 		}
+		if err := plan.record("completed"); err != nil {
+			return nil, "", err
+		}
 		return outputs, StatusUnchanged, nil
 	}
 
@@ -68,10 +73,16 @@ func (e *Engine) applyPreparedPlan(plan *preparedNodePlan, opts Options) (exec.O
 			return nil, "", fmt.Errorf("apply cancelled: node %s was not approved", name)
 		}
 	}
+	if err := plan.record("applying"); err != nil {
+		return nil, "", err
+	}
 	if err := plan.runner.ApplyPlan(plan.path); err != nil {
-		return nil, "", fmt.Errorf("apply: %w", err)
+		return nil, "", errors.Join(fmt.Errorf("apply: %w", err), plan.record("indeterminate"))
 	}
 
+	if err := plan.record("applied"); err != nil {
+		return nil, "", err
+	}
 	outputs, err := plan.runner.Outputs()
 	if err != nil {
 		return nil, "", fmt.Errorf("reading outputs after apply: %w", err)
@@ -80,5 +91,15 @@ func (e *Engine) applyPreparedPlan(plan *preparedNodePlan, opts Options) (exec.O
 	if err := e.writeSnapshot(name, outputs); err != nil {
 		return nil, "", err
 	}
+	if err := plan.record("completed"); err != nil {
+		return nil, "", err
+	}
 	return outputs, StatusApplied, nil
+}
+
+func (p *preparedNodePlan) record(phase string) error {
+	if p.session == nil {
+		return nil
+	}
+	return p.session.transition(p.name, phase, "", "")
 }

@@ -18,6 +18,7 @@ import (
 // ExecutionRecord records observed command outcomes, never a second copy of infrastructure state.
 type ExecutionRecord struct {
 	SchemaVersion int             `json:"schema_version"`
+	Preparation   string          `json:"preparation,omitempty"`
 	ID            string          `json:"id"`
 	Scope         string          `json:"scope"`
 	Operation     string          `json:"operation"`
@@ -149,6 +150,9 @@ func readExecutionRecord(ctx context.Context, store executionStore, id string) (
 func executionNeedsRecovery(record ExecutionRecord) bool {
 	if record.RecoveryAt != nil {
 		return false
+	}
+	if record.Preparation != "" {
+		return true
 	}
 	for _, node := range record.Nodes {
 		switch node.Phase {
@@ -321,6 +325,18 @@ func (e *Engine) ListExecutions() ([]ExecutionRecord, error) {
 
 func (s *executionSession) fail(name, phase string, cause error) error {
 	return errors.Join(cause, s.transition(name, phase, "runtime_failed", ""))
+}
+
+func (e *Engine) startExecution(operation string, opts Options, reverse bool) (*executionSession, error) {
+	levels, err := e.executionLevels(opts, reverse)
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, level := range levels {
+		names = append(names, level...)
+	}
+	return e.beginExecution(operation, names)
 }
 
 // GetExecution reads only the requested object so corrupt siblings cannot hide recovery evidence.

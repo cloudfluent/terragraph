@@ -12,7 +12,7 @@ Both commands only inspect stored records. They do not run Terraform/OpenTofu, r
 
 The record format has its own `schema_version: 1`. JSON results use explicit public fields; private coordination and target fingerprints are not included. An argument, configuration, or storage failure emits a `diagnostics` array under `--output json` and exits nonzero. The existing node `status` command continues to observe Terraform state and does not read execution history.
 
-This interface introduces record storage and inspection. Existing ordinary `apply` still uses its temporary runtime plan; durable recording and retained-plan execution are separate command integrations.
+Ordinary `plan`, `apply`, and `destroy` now record their attempts by default. Ordinary `apply` still uses a temporary runtime plan and does not package or upload a retained plan bundle. Failure to publish a required transition prevents the next mutation. Unresolved mutations block subsequent plan, apply, and destroy commands sharing this store.
 
 ## Storage configuration
 
@@ -60,3 +60,25 @@ Local data is written to a private pending file, flushed, and renamed before pub
 - `indeterminate` means the runtime result cannot establish the full effect of the operation.
 
 A record with an unresolved mutation is `needs_recovery`, not an ordinary retry instruction. Do not reapply a saved plan merely because a previous process exited or a record has no completion timestamp. Infrastructure changes and recording their outcome are not a single transaction.
+
+## Recovery
+
+First inspect `plan show <run-id>` and verify that the previous process or CI job has stopped. A timeout or released graph lock alone is insufficient. Never force-unlock a live executor.
+
+When the record says `applied`, retry only output collection:
+
+```sh
+terragraph plan recover <run-id> --confirm-stopped
+```
+
+This checks the configured target and reads outputs without plan or apply. It prepares an isolated temporary backend cache with a read-only provider lockfile, then removes the cache. Default-workspace local and HTTP backends have verified read-only preparation. Other backends or workspaces require explicit `--initialize-backend`; that preparation is journaled as potentially changing work, and interruption keeps the recovery barrier. Restore the original backend configuration if it changed. No downstream nodes start automatically.
+
+Mixed records recover readable `applied` siblings even when unknown peers remain. The command returns a nonzero status for unresolved peers; `plan show` displays the completed output collection. The recovery barrier remains until those peers are inspected and retired. Backend preparation uncertainty is recorded separately so a previously confirmed apply remains confirmed.
+
+When the outcome is unknown, inspect the real backend state and affected resources using your normal runtime/backend tools. After reconciling any partial changes, explicitly retire the attempt:
+
+```sh
+terragraph plan recover <run-id> --confirm-stopped --state-reviewed --replan
+```
+
+The command preserves the original node outcome, records recovery separately, and requires a fresh plan. It does not label an unknown operation successful, roll back changes, release native state locks, or prove what an external writer did. The acknowledgements are operator assertions, not automated verification. The replan path remains available with missing module sources so damaged checkouts cannot permanently hide recovery metadata.

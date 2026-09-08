@@ -16,14 +16,15 @@ type executionNodeDTO struct {
 }
 
 type executionDTO struct {
-	ID         string             `json:"id"`
-	Operation  string             `json:"operation"`
-	Status     string             `json:"status"`
-	CreatedAt  time.Time          `json:"created_at"`
-	UpdatedAt  time.Time          `json:"updated_at"`
-	FinishedAt *time.Time         `json:"finished_at,omitempty"`
-	RecoveryAt *time.Time         `json:"recovery_at,omitempty"`
-	Nodes      []executionNodeDTO `json:"nodes"`
+	ID          string             `json:"id"`
+	Preparation string             `json:"preparation,omitempty"`
+	Operation   string             `json:"operation"`
+	Status      string             `json:"status"`
+	CreatedAt   time.Time          `json:"created_at"`
+	UpdatedAt   time.Time          `json:"updated_at"`
+	FinishedAt  *time.Time         `json:"finished_at,omitempty"`
+	RecoveryAt  *time.Time         `json:"recovery_at,omitempty"`
+	Nodes       []executionNodeDTO `json:"nodes"`
 }
 
 type executionHistoryDTO struct {
@@ -33,7 +34,7 @@ type executionHistoryDTO struct {
 }
 
 func executionToDTO(record engine.ExecutionRecord) executionDTO {
-	dto := executionDTO{ID: record.ID, Operation: record.Operation, Status: record.Status, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt, FinishedAt: record.FinishedAt, RecoveryAt: record.RecoveryAt, Nodes: []executionNodeDTO{}}
+	dto := executionDTO{ID: record.ID, Preparation: record.Preparation, Operation: record.Operation, Status: record.Status, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt, FinishedAt: record.FinishedAt, RecoveryAt: record.RecoveryAt, Nodes: []executionNodeDTO{}}
 	for _, node := range record.Nodes {
 		dto.Nodes = append(dto.Nodes, executionNodeDTO{Node: node.Name, Phase: node.Phase, PlanID: node.PlanID, Code: node.Code})
 	}
@@ -66,6 +67,9 @@ func newExecutionHistoryCmd(kind string, path *string) *cobra.Command {
 				for _, record := range result.Executions {
 					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s  %s  %s\n", record.ID, record.Operation, record.Status)
 					if kind == "show" {
+						if record.Preparation != "" {
+							_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  backend preparation: %s\n", record.Preparation)
+						}
 						for _, node := range record.Nodes {
 							_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  %s: %s\n", node.Node, node.Phase)
 						}
