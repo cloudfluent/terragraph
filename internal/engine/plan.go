@@ -40,7 +40,7 @@ func (e *Engine) Plan(opts Options) ([]NodeRun, error) {
 		// Removed however this node exits: the file holds resolved input values in cleartext, and the next run rewrites it from scratch anyway.
 		defer func() { _ = os.Remove(varsPath) }()
 
-		r := &exec.Runner{Binary: e.runtimeFor(name), Dir: nodeDir, DataDir: e.dataDir(name), Env: e.envFor(name), Stdout: out, Stderr: out}
+		r := &exec.Runner{Context: e.context(), Binary: e.runtimeFor(name), Dir: nodeDir, DataDir: e.dataDir(name), Env: e.envFor(name), Stdout: out, Stderr: out}
 		if err := r.Init(e.Graph.Nodes[name].BackendConfig); err != nil {
 			return nil, "", fmt.Errorf("init: %w", err)
 		}

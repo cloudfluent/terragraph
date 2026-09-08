@@ -62,17 +62,23 @@ func (e *Engine) Destroy(opts Options) ([]NodeRun, error) {
 		// Removed however this node exits: the file holds resolved input values in cleartext, and the next run rewrites it from scratch anyway.
 		defer func() { _ = os.Remove(varsPath) }()
 
-		r := &exec.Runner{Binary: e.runtimeFor(name), Dir: e.nodeDir(name), DataDir: e.dataDir(name), Env: e.envFor(name), Stdout: out, Stderr: out}
+		r := &exec.Runner{Context: e.context(), Binary: e.runtimeFor(name), Dir: e.nodeDir(name), DataDir: e.dataDir(name), Env: e.envFor(name), Stdout: out, Stderr: out}
 		// Unlike apply, there is no saved plan here for terragraph to ask about itself, so terraform's own confirmation is the approval — and it needs somewhere to read the answer from. Left nil when auto-approving, so an unattended run can never block on a question.
 		var answered *countingReader
 		if !opts.AutoApprove && e.Stdin != nil {
-			answered = &countingReader{r: e.Stdin}
-			r.Stdin = answered
+			// Wrapping a file makes os/exec copy stdin in a goroutine that can block Wait forever when the runtime exits without reading it.
+			if input, ok := e.Stdin.(*os.File); ok {
+				r.Stdin = input
+			} else {
+				answered = &countingReader{r: e.Stdin}
+				r.Stdin = answered
+			}
 		}
 		if err := r.Destroy(opts.AutoApprove, exec.VarFileArgs(varsPath, vars)...); err != nil {
-			// Apply knows in advance whether a node has changes, because it plans first, so it can refuse with noApprovalError before running anything. Destroy has no such plan and cannot tell an unattended no-op (which succeeds, and should) from one about to ask a question nobody can answer. So the hint is attached to the failure rather than predicted.
-			//
-			// "Was there an answer to be had?" is not the same question as "is Stdin nil?": a CLI run always has one (cmd.InOrStdin()), and redirecting from /dev/null still produces a perfectly good reader that yields nothing. What separates the two is whether terraform got any bytes out of it, which is why this counts them rather than testing for nil.
+			// Direct file inheritance keeps reads inside Terraform, so a failed interactive run can only offer a conditional unattended-run remedy.
+			if !opts.AutoApprove && answered == nil && e.Stdin != nil {
+				return nil, "", fmt.Errorf("destroy: %w (if running unattended, pass --auto-approve to destroy without asking)", err)
+			}
 			if !opts.AutoApprove && (answered == nil || answered.n == 0) {
 				return nil, "", fmt.Errorf("destroy: %w (nothing was available to read approval from; pass --auto-approve to destroy without asking)", err)
 			}

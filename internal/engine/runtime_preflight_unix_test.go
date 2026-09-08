@@ -4,13 +4,19 @@ package engine
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/cloudfluent/terragraph/internal/exec"
+	"github.com/cloudfluent/terragraph/internal/runlock"
 )
 
 // installVersionedTofu records every command so a preflight cannot accidentally read outputs or write tfvars before refusing an incompatible runtime.
@@ -174,5 +180,82 @@ node "b" { source = "./unselected" }`)
 	observed, err := os.ReadFile(calls)
 	if err != nil || strings.Contains(string(observed), "version") {
 		t.Fatalf("unrelated runtime commands = %q, err=%v", observed, err)
+	}
+}
+
+func TestRun_CancelsTofuProbeBeforeReleasingRunLock(t *testing.T) {
+	dir := t.TempDir()
+	writeFallbackModule(t, filepath.Join(dir, "module"))
+	source, err := os.ReadFile(filepath.Join(dir, "module", "main.tf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "module", "main.tofu"), source, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	script := `#!/bin/sh
+[ "$1" = version ] || exit 91
+trap 'echo stopped > "${0%/*}/probe-stopped"; exit 0' INT TERM
+echo $$ > "${0%/*}/probe-started"
+while :; do sleep 0.05; done
+`
+	if err := os.WriteFile(filepath.Join(dir, "tofu"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	e, err := Load(writeBlueprint(t, dir, `node "a" { source = "./module" }`), exec.OpenTofu, io.Discard, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	e.Context = ctx
+	done := make(chan error, 1)
+	go func() { _, err := e.Apply(Options{AutoApprove: true}); done <- err }()
+	pid := 0
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if data, err := os.ReadFile(filepath.Join(dir, "probe-started")); err == nil {
+			pid, _ = strconv.Atoi(strings.TrimSpace(string(data)))
+			if pid > 0 {
+				break
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if pid == 0 {
+		t.Fatal("version probe did not start")
+	}
+	t.Cleanup(func() { _ = syscall.Kill(-pid, syscall.SIGKILL) })
+	waiting, stopWaiting := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	held, err := runlock.AcquireContext(waiting, dir, io.Discard)
+	stopWaiting()
+	if held != nil {
+		_ = held.Close()
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("concurrent lock acquisition = %v, want lock held during probe", err)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Apply = %v, want cancellation", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("version probe ignored cancellation")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "probe-stopped")); err != nil {
+		t.Fatal("Apply returned before version probe stopped")
+	}
+	released, stopReleased := context.WithTimeout(context.Background(), time.Second)
+	defer stopReleased()
+	held, err = runlock.AcquireContext(released, dir, io.Discard)
+	if err != nil {
+		t.Fatalf("lock after cancelled probe: %v", err)
+	}
+	_ = held.Close()
+	if _, err := os.Stat(e.tfVarsPath("a")); !os.IsNotExist(err) {
+		t.Fatal("cancelled preflight reached input file creation")
 	}
 }
