@@ -33,7 +33,7 @@ type observationDTO struct {
 	State       string                       `json:"state,omitempty"`
 	Resources   *int                         `json:"resource_count,omitempty"`
 	OutputCount *int                         `json:"output_count,omitempty"`
-	Outputs     map[string]observedOutputDTO `json:"outputs"`
+	Outputs     map[string]observedOutputDTO `json:"outputs,omitzero"`
 	Diagnostics []diagnosticDTO              `json:"diagnostics"`
 }
 
