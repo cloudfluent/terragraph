@@ -42,7 +42,7 @@ func (e *Engine) SavePlans(opts Options, continueID string) (record ExecutionRec
 	}
 	defer func() {
 		if resultErr != nil {
-			resultErr = errors.Join(resultErr, s.finish(resultErr))
+			resultErr = errors.Join(resultErr, s.finishSaved(resultErr))
 		}
 		record = s.record
 	}()
@@ -77,7 +77,7 @@ func (e *Engine) SavePlans(opts Options, continueID string) (record ExecutionRec
 			continue
 		}
 		if err := e.saveFrontierNode(s, node.Name, opts); err != nil {
-			return record, err
+			return record, errors.Join(err, s.noteSavedFailure(node.Name, "plan_step_failed"))
 		}
 		count++
 	}
@@ -184,7 +184,7 @@ func (e *Engine) ApplySavedPlans(id string, opts Options) (runs []NodeRun, resul
 	}
 	defer func() {
 		if resultErr != nil {
-			resultErr = errors.Join(resultErr, s.finish(resultErr))
+			resultErr = errors.Join(resultErr, s.finishSaved(resultErr))
 		}
 	}()
 	for _, node := range append([]ExecutionNode(nil), s.record.Nodes...) {
@@ -196,7 +196,7 @@ func (e *Engine) ApplySavedPlans(id string, opts Options) (runs []NodeRun, resul
 		run.Status, run.Err = status, err
 		if err != nil {
 			run.Status = StatusFailed
-			return append(runs, run), err
+			return append(runs, run), errors.Join(err, s.noteSavedFailure(node.Name, "apply_step_failed"))
 		}
 		runs = append(runs, run)
 	}
@@ -343,4 +343,49 @@ func (e *Engine) resolveLiveInputs(name string) (map[string]any, error) {
 		outputs[edge.From.Node] = live
 	}
 	return e.resolveInputs(name, outputs)
+}
+
+// finishSaved preserves resumable peers after a pre-mutation failure instead of treating a partial frontier as a disposable terminal run.
+func (s *executionSession) finishSaved(runErr error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	next := s.record
+	next.Nodes = append([]ExecutionNode(nil), next.Nodes...)
+	next.UpdatedAt = time.Now().UTC()
+	next.FinishedAt = nil
+	next.Status = "ready_for_next_plan"
+	planned, pending := false, false
+	for i := range next.Nodes {
+		if next.Nodes[i].Phase == "preparing" {
+			next.Nodes[i].Phase = "pending"
+		}
+		planned = planned || next.Nodes[i].Phase == "planned"
+		pending = pending || next.Nodes[i].Phase == "pending"
+	}
+	if executionNeedsRecovery(next) {
+		next.Status = "needs_recovery"
+	} else if planned {
+		next.Status = "waiting_for_apply"
+	} else if !pending {
+		next.Status = "completed"
+		if runErr != nil {
+			next.Status = "failed"
+		}
+		next.FinishedAt = &next.UpdatedAt
+	}
+	return s.publish(next)
+}
+
+func (s *executionSession) noteSavedFailure(name, code string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	next := s.record
+	next.Nodes = append([]ExecutionNode(nil), next.Nodes...)
+	for i := range next.Nodes {
+		if next.Nodes[i].Name == name {
+			next.Nodes[i].Code = code
+			return s.publish(next)
+		}
+	}
+	return fmt.Errorf("node.%s: absent from execution", name)
 }
