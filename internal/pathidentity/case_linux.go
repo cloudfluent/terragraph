@@ -14,7 +14,7 @@ func caseInsensitive(dir string) (bool, bool, error) {
 	if err != nil {
 		return false, false, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	var stat syscall.Statfs_t
 	if err := syscall.Fstatfs(int(f.Fd()), &stat); err != nil {
 		return false, false, err
