@@ -92,7 +92,7 @@ func (e *Engine) Apply(opts Options) ([]NodeRun, error) {
 		// Levels run in order, so refusing here means nothing downstream runs either: the cascade is cut at the node that caused it rather than audited after the fact.
 		level := e.approveFor(name, opts.Approve)
 		if blocked := notPermitted(changeSet, level); len(blocked) > 0 {
-			return nil, "", gateError(name, level, blocked)
+			return nil, "", e.gateError(name, level, blocked)
 		}
 
 		// The plan Terraform just printed is the plan about to be applied, so this asks about something the user has actually seen — which is the whole reason approval belongs here rather than inside a second `apply` that would plan again from scratch.

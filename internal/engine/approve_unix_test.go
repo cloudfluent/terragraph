@@ -102,6 +102,89 @@ func TestApply_DestructivePlanIsAllowedByTheRunLevel(t *testing.T) {
 	}
 }
 
+func TestApply_DeclaredApproveRemedyChangesNodePolicy(t *testing.T) {
+	e, commandLog := loadDestroyApproveEngine(t, `
+node "guarded" {
+  source  = "./module"
+  approve = "safe"
+}
+`)
+	t.Setenv("TG_PLAN_ACTIONS", `"delete"`)
+
+	_, err := e.Apply(Options{AutoApprove: true, Approve: blueprint.ApproveAll})
+	if err == nil {
+		t.Fatal("expected the declared safe policy to refuse delete")
+	}
+	if strings.Contains(err.Error(), "--approve=all") {
+		t.Fatalf("error suggests a flag that cannot override the declaration: %v", err)
+	}
+	if !strings.Contains(err.Error(), `set approve = "all" on the node or enclosing use declaration that sets this policy`) {
+		t.Fatalf("error does not explain how to change the declared policy: %v", err)
+	}
+
+	path := writeBlueprint(t, e.BaseDir, `
+node "guarded" {
+  source  = "./module"
+  approve = "all"
+}
+`)
+	e, err = Load(path, e.Binary, &bytes.Buffer{}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, err := e.Apply(Options{AutoApprove: true}); err != nil {
+		t.Fatalf("Apply after changing the node declaration: %v", err)
+	}
+	data, err := os.ReadFile(commandLog)
+	if err != nil {
+		t.Fatalf("reading command log: %v", err)
+	}
+	if got := strings.Count(string(data), "apply\n"); got != 1 {
+		t.Fatalf("apply count = %d, want 1; log:\n%s", got, data)
+	}
+}
+
+func TestApply_InheritedApproveRemedyChangesUsePolicy(t *testing.T) {
+	contents := `
+group "service" {
+  node "worker" { source = "./module" }
+}
+use "service" {
+  as      = "prod"
+  source  = "."
+  approve = "none"
+}
+`
+	e, commandLog := loadDestroyApproveEngine(t, contents)
+
+	_, err := e.Apply(Options{AutoApprove: true, Approve: blueprint.ApproveAll})
+	if err == nil {
+		t.Fatal("expected the inherited none policy to refuse create")
+	}
+	if strings.Contains(err.Error(), "--approve=all") {
+		t.Fatalf("error suggests a flag that cannot override the use declaration: %v", err)
+	}
+	if !strings.Contains(err.Error(), `set approve = "all" on the node or enclosing use declaration that sets this policy`) {
+		t.Fatalf("error does not explain how to change the inherited policy: %v", err)
+	}
+
+	path := writeBlueprint(t, e.BaseDir, strings.Replace(contents, `approve = "none"`, `approve = "all"`, 1))
+	e, err = Load(path, e.Binary, &bytes.Buffer{}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, err := e.Apply(Options{AutoApprove: true}); err != nil {
+		t.Fatalf("Apply after changing the use declaration: %v", err)
+	}
+	data, err := os.ReadFile(commandLog)
+	if err != nil {
+		t.Fatalf("reading command log: %v", err)
+	}
+	if got := strings.Count(string(data), "apply\n"); got != 1 {
+		t.Fatalf("apply count = %d, want 1; log:\n%s", got, data)
+	}
+}
+
 // The per-node declaration is the durable answer, and it is scoped to the node that needs it rather than the whole graph.
 func TestApproveFor_NodeDeclarationWinsOverTheRunLevel(t *testing.T) {
 	baseDir := t.TempDir()
