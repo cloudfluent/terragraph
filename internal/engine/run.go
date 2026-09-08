@@ -15,6 +15,8 @@ import (
 
 // Options controls the scope and execution behavior of a plan/apply/destroy run.
 type Options struct {
+	// RetainPlan persists optional plan artifacts without pausing ordinary apply.
+	RetainPlan bool
 	// Node restricts the operation to a single node. Empty means the whole graph, in topological (or, for Destroy, reverse topological) order.
 	Node string
 	// AutoApprove skips the interactive approval Apply would otherwise ask for, and is forwarded to `terraform destroy` as -auto-approve. It governs only whether a human is asked; what a node is permitted to do unattended is Approve's job, and the two are checked independently.

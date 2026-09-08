@@ -81,12 +81,25 @@ func (e *Engine) Apply(opts Options) (runs []NodeRun, resultErr error) {
 			return nil, "", savedPlanUnsupportedError(name, r.BackendType())
 		}
 
+		var binding string
+		if opts.RetainPlan {
+			binding, err = e.planBinding(name, r, vars)
+			if err != nil {
+				return nil, "", err
+			}
+		}
 		plan, err := e.prepareNodePlan(name, r, varFileArgs...)
 		if err != nil {
 			return nil, "", err
 		}
 		defer plan.cleanup()
 		plan.session = session
+		plan.binding = binding
+		if opts.RetainPlan {
+			if _, err := e.retainPlan(session, plan, vars); err != nil {
+				return nil, "", err
+			}
+		}
 		return e.applyPreparedPlan(plan, opts)
 	}, nil)
 }

@@ -20,6 +20,7 @@ type ExecutionRecord struct {
 	SchemaVersion int             `json:"schema_version"`
 	ID            string          `json:"id"`
 	Scope         string          `json:"scope"`
+	Binding       string          `json:"binding,omitempty"`
 	Operation     string          `json:"operation"`
 	Status        string          `json:"status"`
 	CreatedAt     time.Time       `json:"created_at"`

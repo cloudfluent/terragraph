@@ -15,6 +15,7 @@ type preparedNodePlan struct {
 	changed bool
 	cleanup func()
 	session *executionSession
+	binding string
 }
 
 func (e *Engine) prepareNodePlan(name string, runner *exec.Runner, args ...string) (*preparedNodePlan, error) {
