@@ -217,3 +217,73 @@ Reapplying a producer rewrites its snapshot, removing values that became sensiti
 New snapshots use schema version 2. Version 1 values did not verify runtime sensitivity and are treated as withheld. Restore live outputs or run `terragraph apply --node <producer>` to republish under the normal approval policy; a no-change apply also upgrades the snapshot. Reading an old file does not rewrite it. terragraph versions supporting only schema 1 cannot consume schema 2.
 
 Module inspection and compatibility checks follow the producer's [resolved runtime](blueprint.md#choosing-a-runtime-per-node-runtime), including upstream reads in a node-scoped run. Runtime-specific sensitivity declarations therefore apply to snapshot reads too; offline reads cannot refresh runtime output metadata.
+
+
+## Observing outputs
+
+`terragraph output` reads current outputs for every expanded leaf, in name order.
+Use `output --node checkout.cluster`, or select one value with
+`output --node checkout.cluster cluster_id`. A group prefix suggests leaf names;
+a positional output name requires `--node` and is never parsed as a dotted address.
+
+`--raw` prints one string, exact JSON number, or boolean without a newline.
+It rejects collections, null, and `--output json`. Values marked sensitive by
+the current module **or** the runtime are withheld by default, as are values
+whose runtime sensitivity is unknown. Text prints `(sensitive)`; JSON retains
+`sensitive` (including null for unknown) and `redacted`, but omits the value.
+Only `--show-sensitive` discloses these values; raw requests otherwise fail.
+
+Observation uses the existing exclusive local blueprint lock, including during
+module inspection. It waits for vendor/apply/other local observations and can be
+cancelled while waiting. It acquires no remote graph lock. The lock coordinates
+Terragraph processes on this blueprint, not editors, other checkouts, or native
+Terraform writers. Several node reads are not an atomic graph snapshot, and
+successful reads do not prove that no writer is active.
+
+Each session owns `.terragraph/tfdata-read/read-*/<node>`, separate from execution
+caches. The parent uses the saved-plan permission and symlink/reparse-point
+protections (0700 on Unix and a protected current-user DACL on Windows).
+Private session descendants inherit this boundary. Normal completion, failures,
+and supported cancellation remove the session before releasing the local lock.
+A crash or forced termination can leave backend credentials there: keep
+`.terragraph/` gitignored and remove abandoned read directories in a private
+checkout when no observation is active. Sources and execution caches are unchanged.
+
+Supported preparation is deliberately bounded:
+
+| Runtime evidence | Backend | Workspace | Preparation |
+| --- | --- | --- | --- |
+| Terraform 1.5.7, OpenTofu 1.11.0 | explicit or implicit local | default | Existing regular state file required; no replacement is created. |
+| Terraform 1.5.7, OpenTofu 1.11.0 | HTTP | default | Existing endpoint; real runtime tests verify GET-only requests, including HTTP 404 and authentication failure. |
+| Other backends or named workspaces | any | any | Refused with a capability diagnostic before init. |
+
+Other runtime versions using these backends must retain the same CLI behavior;
+the versions above are the tested evidence, not a blanket certification of future
+versions or custom wrappers. Both paths require the module's committed
+`.terraform.lock.hcl` (an empty committed file suffices with no external providers).
+Preparation uses `init -input=false -lockfile=readonly -reconfigure` in a fresh cache.
+It never selects/creates a workspace or requests migration. Inherited and node
+`TF_CLI_ARGS*` and `TF_LOG*` settings are cleared for observation so they cannot
+inject migration flags or write secret-bearing logs. Credentials remain available
+through ordinary backend configuration and environment variables.
+The lockfile flag protects dependency selections; the backend restriction and
+behavioral tests establish the narrower preparation guarantee.
+
+Runtime observation streams are withheld because backend diagnostics can echo
+credentials and values before sensitivity is known. Terragraph emits safe
+diagnostics on stderr for text, and in the result for JSON. Module inspection
+failures preserve other identifiable leaves. Broken blueprint/group syntax or
+unresolvable group identity can still prevent the entire load. Execution-only
+wiring, group exports, required inputs, and policy validation do not block reads.
+There is no automatic output-snapshot fallback.
+
+The JSON observation contract has `schema_version: 1`, deterministic `nodes`,
+and `diagnostics`. Node status is `observed` or `failed`; diagnostics have
+`code`, `phase`, `subject`, `message`, and an optional `remedy`.
+Unknown additive fields must be ignored; changing existing meanings requires
+a new schema version. Missing named outputs, unavailable state, credential,
+lockfile, preparation, and capability errors exit nonzero while retaining
+successful siblings. Successfully observed zero outputs is normal.
+Pre-execution load and selection failures produce the same envelope when JSON
+was selected and stdout is writable. Native flag-parser failures can occur
+before command dispatch and retain Cobra's ordinary stderr error contract.

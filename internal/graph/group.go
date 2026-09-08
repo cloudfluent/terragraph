@@ -11,9 +11,11 @@ import (
 
 // resolveContext tracks state for one Build() call: in-progress group resolutions (by absolute source directory + group name), to catch group self-reference cycles, plus per-directory caches so a group source directory or a node's module directory and file mode is only ever read and parsed once no matter how many times it's referenced (multiple `use` instances of the same group, or multiple nodes sharing one `source` via backend_config). Both caches are safe uncontended: Build runs entirely single-threaded, and every goroutine terragraph ever spawns (see engine.runLevels) starts only after the graph it walks has already been fully built.
 type resolveContext struct {
-	stack     []string
-	groupDirs map[string]*blueprint.Blueprint
-	schemas   map[schemaKey]*module.Schema
+	// observation skips execution-only validation while retaining the existing recursive source resolver.
+	observation bool
+	stack       []string
+	groupDirs   map[string]*blueprint.Blueprint
+	schemas     map[schemaKey]*module.Schema
 	// rootDir is the outer blueprint directory passed to Build, used for the local state default path. It is not the recursive baseDir used to resolve group-relative sources.
 	rootDir string
 	// fallbackBinary is the root default runtime or CLI fallback, shared by all expanded groups.

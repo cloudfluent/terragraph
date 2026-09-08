@@ -30,3 +30,5 @@ For your own modules, start with [nodes, edges, and literal inputs](blueprint.md
 | Preview a graph, control changes, run in CI, or recover from failure | [Execution model](execution-model.md) |
 | Use completion, definition navigation, and editor diagnostics | [VS Code IntelliSense](intellisense.md) |
 | Look up a command or flag | [CLI reference](cli/terragraph.md), generated from the CLI |
+
+Current-state reads are documented under [Observing outputs](execution-model.md#observing-outputs): `output`, redaction, backend support, partial results, and cache cleanup.
