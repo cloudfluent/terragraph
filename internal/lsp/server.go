@@ -5,8 +5,8 @@ package lsp
 import (
 	"context"
 	"io"
-	"os"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"unicode/utf16"
@@ -40,10 +40,12 @@ func (stdio) Close() error { return nil }
 
 type server struct {
 	protocol.UnimplementedServer
-	mu        sync.RWMutex
-	workspace *language.Workspace
-	documents map[string][]byte
-	client    protocol.Client
+	// An edit must not replace text between diagnostic calculation and byte-to-position conversion.
+	documentMu sync.Mutex
+	mu         sync.RWMutex
+	workspace  *language.Workspace
+	documents  map[string][]byte
+	client     protocol.Client
 }
 
 func (s *server) Initialize(_ context.Context, params *protocol.InitializeParams) (*protocol.InitializeResult, error) {
@@ -53,24 +55,30 @@ func (s *server) Initialize(_ context.Context, params *protocol.InitializeParams
 	full := protocol.TextDocumentSyncKindFull
 	return &protocol.InitializeResult{Capabilities: protocol.ServerCapabilities{TextDocumentSync: full, CompletionProvider: &protocol.CompletionOptions{TriggerCharacters: []string{"."}}, DefinitionProvider: protocol.Boolean(true), PositionEncoding: protocol.PositionEncodingKindUTF16}, ServerInfo: protocol.ServerInfo{Name: "terragraph"}}, nil
 }
-func (s *server) DidOpen(_ context.Context, params *protocol.DidOpenTextDocumentParams) error {
+func (s *server) DidOpen(ctx context.Context, params *protocol.DidOpenTextDocumentParams) error {
+	s.documentMu.Lock()
+	defer s.documentMu.Unlock()
 	s.set(string(params.TextDocument.URI), []byte(params.TextDocument.Text))
-	s.publishDiagnostics(context.Background(), params.TextDocument.URI)
+	s.publishDiagnostics(ctx)
 	return nil
 }
 
 func (s *server) Shutdown(context.Context) error { return nil }
 func (s *server) Exit(context.Context) error     { return nil }
-func (s *server) DidChange(_ context.Context, params *protocol.DidChangeTextDocumentParams) error {
+func (s *server) DidChange(ctx context.Context, params *protocol.DidChangeTextDocumentParams) error {
+	s.documentMu.Lock()
+	defer s.documentMu.Unlock()
 	for _, change := range params.ContentChanges {
 		if whole, ok := change.(*protocol.TextDocumentContentChangeWholeDocument); ok {
 			s.set(string(params.TextDocument.URI), []byte(whole.Text))
 		}
 	}
-	s.publishDiagnostics(context.Background(), params.TextDocument.URI)
+	s.publishDiagnostics(ctx)
 	return nil
 }
-func (s *server) DidClose(_ context.Context, params *protocol.DidCloseTextDocumentParams) error {
+func (s *server) DidClose(ctx context.Context, params *protocol.DidCloseTextDocumentParams) error {
+	s.documentMu.Lock()
+	defer s.documentMu.Unlock()
 	path := filePath(string(params.TextDocument.URI))
 	s.mu.Lock()
 	delete(s.documents, path)
@@ -78,19 +86,17 @@ func (s *server) DidClose(_ context.Context, params *protocol.DidCloseTextDocume
 	s.mu.Unlock()
 	s.workspace.CloseDocument(path)
 	if client != nil {
-		_ = client.PublishDiagnostics(context.Background(), &protocol.PublishDiagnosticsParams{URI: params.TextDocument.URI, Diagnostics: []protocol.Diagnostic{}})
+		_ = client.PublishDiagnostics(ctx, &protocol.PublishDiagnosticsParams{URI: params.TextDocument.URI, Diagnostics: []protocol.Diagnostic{}})
 	}
+	s.publishDiagnostics(ctx)
 	return nil
 }
 
 func (s *server) Completion(ctx context.Context, params *protocol.CompletionParams) (protocol.CompletionResult, error) {
+	s.documentMu.Lock()
+	defer s.documentMu.Unlock()
 	path := filePath(string(params.TextDocument.URI))
-	s.mu.RLock()
-	text := append([]byte(nil), s.documents[path]...)
-	s.mu.RUnlock()
-	if len(text) == 0 {
-		text, _ = os.ReadFile(path)
-	}
+	text := s.workspace.Document(path)
 	offset := positionOffset(text, params.Position)
 	candidates := s.workspace.Complete(ctx, path, offset)
 	items := make(protocol.CompletionItemSlice, 0, len(candidates))
@@ -106,13 +112,10 @@ func (s *server) Completion(ctx context.Context, params *protocol.CompletionPara
 }
 
 func (s *server) Definition(ctx context.Context, params *protocol.DefinitionParams) (protocol.DefinitionResult, error) {
+	s.documentMu.Lock()
+	defer s.documentMu.Unlock()
 	path := filePath(string(params.TextDocument.URI))
-	s.mu.RLock()
-	text := append([]byte(nil), s.documents[path]...)
-	s.mu.RUnlock()
-	if len(text) == 0 {
-		text, _ = os.ReadFile(path)
-	}
+	text := s.workspace.Document(path)
 	target, ok := s.workspace.Definition(ctx, path, positionOffset(text, params.Position))
 	if !ok {
 		return nil, nil
@@ -140,7 +143,21 @@ func (s *server) set(rawURI string, text []byte) {
 	s.workspace.SetDocument(path, text)
 }
 
-func (s *server) publishDiagnostics(ctx context.Context, documentURI uri.URI) {
+// A changed declaration or group export can affect any open consumer, including one in a different directory.
+func (s *server) publishDiagnostics(ctx context.Context) {
+	s.mu.RLock()
+	paths := make([]string, 0, len(s.documents))
+	for path := range s.documents {
+		paths = append(paths, path)
+	}
+	s.mu.RUnlock()
+	sort.Strings(paths)
+	for _, path := range paths {
+		s.publishDocumentDiagnostics(ctx, uri.File(path))
+	}
+}
+
+func (s *server) publishDocumentDiagnostics(ctx context.Context, documentURI uri.URI) {
 	s.mu.RLock()
 	client := s.client
 	s.mu.RUnlock()

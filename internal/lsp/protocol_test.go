@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -115,5 +116,75 @@ group "g" {
 	items, ok := resultCompletion.(protocol.CompletionItemSlice)
 	if !ok || len(items) != 1 || items[0].Label != "inner_id" {
 		t.Fatalf("completion = %#v, want inner_id", resultCompletion)
+	}
+}
+
+func TestServe_SiblingDiagnosticsRefreshOnChangeAndClose(t *testing.T) {
+	dir := t.TempDir()
+	declaration := uri.File(filepath.Join(dir, "group.hcl"))
+	reference := uri.File(filepath.Join(dir, "blueprint.hcl"))
+	old := `node "old" { source = "./m" }`
+	text := "edge {\n from = node.old\n to = node.old\n}"
+	protocolFile(t, filepath.Join(dir, "group.hcl"), old)
+	ctx, remote, client, _ := startProtocol(t)
+	if err := remote.DidOpen(ctx, &protocol.DidOpenTextDocumentParams{TextDocument: protocol.TextDocumentItem{URI: declaration, Text: old, Version: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	_ = waitDiagnostics(t, ctx, client, declaration)
+	if err := remote.DidOpen(ctx, &protocol.DidOpenTextDocumentParams{TextDocument: protocol.TextDocumentItem{URI: reference, Text: text, Version: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := waitDiagnostics(t, ctx, client, reference); len(got) != 0 {
+		t.Fatalf("initial diagnostics = %#v, want none", got)
+	}
+	if err := remote.DidChange(ctx, &protocol.DidChangeTextDocumentParams{TextDocument: protocol.VersionedTextDocumentIdentifier{URI: declaration, Version: 2}, ContentChanges: []protocol.TextDocumentContentChangeEvent{&protocol.TextDocumentContentChangeWholeDocument{Text: `node "new" { source = "./m" }`}}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := waitDiagnostics(t, ctx, client, reference); len(got) != 2 {
+		t.Fatalf("changed diagnostics = %#v, want two missing old references", got)
+	}
+	if err := remote.DidClose(ctx, &protocol.DidCloseTextDocumentParams{TextDocument: protocol.TextDocumentIdentifier{URI: declaration}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := waitDiagnostics(t, ctx, client, reference); len(got) != 0 {
+		t.Fatalf("closed overlay diagnostics = %#v, want disk declaration restored", got)
+	}
+}
+
+func TestServe_GroupExportEditsRefreshConsumerDiagnostics(t *testing.T) {
+	dir := t.TempDir()
+	groupPath := filepath.Join(dir, "g", "group.hcl")
+	group := uri.File(groupPath)
+	root := uri.File(filepath.Join(dir, "blueprint.hcl"))
+	original := `group "g" {
+ node "a" { source = "./m" }
+ export {
+  input "old" { to = node.a.input.id }
+ }
+}`
+	protocolFile(t, groupPath, original)
+	text := `use "g" {
+ as = "g"
+ source = "./g"
+ vars = { old = "value" }
+}`
+	ctx, remote, client, _ := startProtocol(t)
+	if err := remote.DidOpen(ctx, &protocol.DidOpenTextDocumentParams{TextDocument: protocol.TextDocumentItem{URI: group, Text: original, Version: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	_ = waitDiagnostics(t, ctx, client, group)
+	if err := remote.DidOpen(ctx, &protocol.DidOpenTextDocumentParams{TextDocument: protocol.TextDocumentItem{URI: root, Text: text, Version: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := waitDiagnostics(t, ctx, client, root); len(got) != 0 {
+		t.Fatalf("initial consumer diagnostics = %#v, want none", got)
+	}
+	changed := strings.ReplaceAll(original, "\"old\"", "\"fresh\"")
+	if err := remote.DidChange(ctx, &protocol.DidChangeTextDocumentParams{TextDocument: protocol.VersionedTextDocumentIdentifier{URI: group, Version: 2}, ContentChanges: []protocol.TextDocumentContentChangeEvent{&protocol.TextDocumentContentChangeWholeDocument{Text: changed}}}); err != nil {
+		t.Fatal(err)
+	}
+	got := waitDiagnostics(t, ctx, client, root)
+	if len(got) != 1 || !strings.Contains(string(got[0].Message.(protocol.String)), "Unknown input old") {
+		t.Fatalf("consumer diagnostics = %#v, want unknown old input", got)
 	}
 }

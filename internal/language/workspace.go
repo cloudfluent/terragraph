@@ -192,7 +192,7 @@ func (w *Workspace) addBodyToModel(m *workspaceModel, path string, body *hclsynt
 			}
 			as, source := literalAttribute(block, "as"), literalAttribute(block, "source")
 			if as != "" && source != "" {
-				m.uses[as] = inspectGroupPorts(filepath.Dir(path), source, block.Labels[0])
+				m.uses[as] = w.inspectGroupPorts(filepath.Dir(path), source, block.Labels[0])
 			}
 		case "runtime":
 			if len(block.Labels) == 1 {
@@ -224,25 +224,15 @@ func inspectPorts(base, source string) ports {
 	return p
 }
 
-func inspectGroupPorts(base, source, groupName string) ports {
+func (w *Workspace) inspectGroupPorts(base, source, groupName string) ports {
 	if blueprint.IsRemote(source) {
 		return ports{}
 	}
 	dir := filepath.Join(base, source)
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return ports{}
-	}
 	p := ports{inputsMeta: map[string]portMeta{}, outputsMeta: map[string]portMeta{}}
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".hcl" {
-			continue
-		}
-		contents, err := os.ReadFile(filepath.Join(dir, entry.Name()))
-		if err != nil {
-			continue
-		}
-		file, diags := hclsyntax.ParseConfig(contents, entry.Name(), hcl.InitialPos)
+	for _, candidate := range w.hclFiles(dir) {
+		contents := w.document(candidate)
+		file, diags := hclsyntax.ParseConfig(contents, candidate, hcl.InitialPos)
 		body, ok := file.Body.(*hclsyntax.Body)
 		if !ok {
 			continue
@@ -856,20 +846,25 @@ func referenceAt(text []byte, offset int) (string, string, bool) {
 }
 
 func (w *Workspace) blueprintFiles(path string) []string {
-	dir := filepath.Dir(path)
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return []string{path}
-	}
+	return uniqueSorted(append(w.hclFiles(filepath.Dir(path)), path))
+}
+
+// Open file overlays remain part of their directory even before the first save or after a disk deletion.
+func (w *Workspace) hclFiles(dir string) []string {
+	entries, _ := os.ReadDir(dir)
 	files := []string{}
 	for _, entry := range entries {
 		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".hcl" {
 			files = append(files, filepath.Join(dir, entry.Name()))
 		}
 	}
-	if !containsString(files, path) {
-		files = append(files, path)
+	w.mu.RLock()
+	for path := range w.documents {
+		if filepath.Dir(path) == dir && filepath.Ext(path) == ".hcl" {
+			files = append(files, path)
+		}
 	}
+	w.mu.RUnlock()
 	return uniqueSorted(files)
 }
 
