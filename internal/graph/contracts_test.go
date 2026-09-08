@@ -715,3 +715,18 @@ consumer "github.com/acme/module" {
 		}
 	}
 }
+
+func TestValidate_ConsumerContractAcceptsModuleOptionalDefaults(t *testing.T) {
+	g := writeReconcileFixture(t, `output "vpc_id" { value = {} }`,
+		`variable "vpc_id" {
+  type = object({ name = optional(string, "default") })
+  default = {}
+}`, `
+consumer "./modules/app" {
+  input "vpc_id" { type = "object({ name = string })" }
+}
+`)
+	if problems := Validate(g); len(problems) != 0 {
+		t.Fatalf("got = %v, want compatible module type with optional defaults", problems)
+	}
+}

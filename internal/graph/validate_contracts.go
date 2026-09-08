@@ -89,7 +89,7 @@ func contractProblems(g *Graph) []Problem {
 						reportForNode("contract.[C007] consumer %s.input.%s: %v", dc.Scope, name, err)
 						continue
 					}
-					mt, err := parseCtyType(v.Type)
+					mt, err := parseModuleCtyType(v.Type)
 					if err != nil {
 						reportForNode("contract.[C007] consumer %s.input.%s: module type %v", dc.Scope, name, err)
 						continue
@@ -189,4 +189,17 @@ func sortedPorts(m map[string]blueprint.PortContract) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// Module variable declarations permit optional attribute defaults even though blueprint contract type strings deliberately do not own default values.
+func parseModuleCtyType(s string) (cty.Type, error) {
+	expr, diags := hclsyntax.ParseExpression([]byte(s), "<module type constraint>", hcl.InitialPos)
+	if diags.HasErrors() {
+		return cty.Type{}, fmt.Errorf("type %q does not parse: %s", s, diags.Error())
+	}
+	t, _, diags := typeexpr.TypeConstraintWithDefaults(expr)
+	if diags.HasErrors() {
+		return cty.Type{}, fmt.Errorf("type %q does not parse: %s", s, diags.Error())
+	}
+	return t, nil
 }
