@@ -17,7 +17,7 @@ terragraph apply
 
 For a new graph, `apply` can create upstream resources and pass their outputs to downstream nodes in the same run. `plan` reads existing upstream outputs, so it cannot preview a consumer whose required output is unavailable, or propagate upstream's newly planned values. Read the [planning limitation](execution-model.md#known-limitation) before using a whole-graph plan as a change preview.
 
-For your own modules, start with [nodes, edges, and literal inputs](blueprint.md). If a node uses a remote source, run [vendoring](vendoring.md) before validation or execution. For a blueprint split across files, select its directory with `--blueprint .`; see [files and loading](blueprint.md#files-and-loading).
+For your own modules, start with [nodes, edges, and literal inputs](blueprint.md). If a node uses a remote source, run [vendoring](vendoring.md) before validation or execution. For a blueprint split across files, run commands in its directory or select another directory with `--blueprint <directory>`; see [files and loading](blueprint.md#files-and-loading).
 
 ## Find the next task
 

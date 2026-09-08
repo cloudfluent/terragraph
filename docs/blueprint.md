@@ -1,6 +1,6 @@
 # Blueprint
 
-A blueprint describes independent Terraform/OpenTofu root modules (`node` blocks) and the connections between them (`edge` blocks). The CLI reads `blueprint.hcl` by default; select another file or a directory with `--blueprint`.
+A blueprint describes independent Terraform/OpenTofu root modules (`node` blocks) and the connections between them (`edge` blocks). The CLI reads the current directory by default, merging its `.hcl` files except `.terraform.lock.hcl`; select a single file or another directory with `--blueprint`.
 
 ```hcl
 node "vpc" {
@@ -79,11 +79,16 @@ Either endpoint may be a group instance, such as `use.checkout`. Its values reso
 
 | Invocation | Files read |
 |---|---|
-| `terragraph graph` | `blueprint.hcl` only |
+| `terragraph graph` | Eligible `.hcl` files directly in the current directory |
 | `terragraph graph --blueprint topology.hcl` | `topology.hcl` only |
-| `terragraph graph --blueprint .` | Every `.hcl` file directly in the current directory, non-recursively |
+| `terragraph graph --blueprint .` | Same as the default |
+| `terragraph graph --blueprint ./config` | Eligible `.hcl` files directly in `./config` |
 
-Single-file loading does not merge neighboring files. For example, adding `contracts.hcl` next to `blueprint.hcl` only includes those contracts when you select the directory. Directory loading includes hidden `.hcl` files too, including `.terraform.lock.hcl`; keep another tool's HCL configuration in its own directory. `.tf`, `.HCL`, and `.hcl.json` files are not collected by directory loading.
+Directory loading is non-recursive and excludes `.terraform.lock.hcl`. Other hidden `.hcl` files are included; keep another tool's HCL configuration in its own directory. `.tf`, `.HCL`, and `.hcl.json` files are not collected. Subdirectories are visited only through module and group source references.
+
+All configuration-loading commands use this default: `validate`, `graph`, `plan`, `apply`, `destroy`, `output`, `status`, `vendor`, and `force-unlock`. A selected directory with no eligible configuration files is an error, including one containing only Terraform files or `.terraform.lock.hcl`. An empty configuration file or a file containing only group definitions remains valid; having no executable nodes is distinct from having no configuration files.
+
+Previously, commands without `--blueprint` read only `blueprint.hcl`. They now also include sibling files such as `contracts.hcl`, which may add nodes, settings, or duplicate declarations. Pass `--blueprint blueprint.hcl` to retain single-file loading. Explicit file selection reads exactly that file, without applying the directory filename filter.
 
 You can split a blueprint without creating either `blueprint.hcl` or `group.hcl`. In a new directory, copy the `stacks` directory from [`examples/basic`](../examples/basic) and create these two files:
 
@@ -102,7 +107,7 @@ edge {
 ```
 
 ```sh
-terragraph graph --blueprint .
+terragraph graph
 # level 1: vpc
 # level 2: eks
 ```
