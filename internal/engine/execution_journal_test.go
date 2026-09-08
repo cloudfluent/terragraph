@@ -120,3 +120,26 @@ func TestExecutionJournal_RecordsInterruptedResultAfterCancellation(t *testing.T
 		t.Fatalf("got = %+v, %v", record, err)
 	}
 }
+
+func TestExecutionJournal_HistorySurfacesForeignScope(t *testing.T) {
+	e, _ := journalFixture(t)
+	s, err := e.beginExecution("apply", []string{"example"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := s.record
+	next.Scope = "another-scope"
+	if err := s.publish(next); err != nil {
+		t.Fatal(err)
+	}
+	id := next.ID
+	s.close()
+	records, err := e.ListExecutions()
+	if err == nil || len(records) != 1 || records[0].ID != id || !strings.Contains(err.Error(), id) {
+		t.Fatalf("got = %+v, %v", records, err)
+	}
+	record, err := e.GetExecution(id)
+	if err == nil || record.ID != id {
+		t.Fatalf("got = %+v, %v", record, err)
+	}
+}
