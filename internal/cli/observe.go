@@ -33,7 +33,7 @@ type observationDTO struct {
 	State       string                       `json:"state,omitempty"`
 	Resources   *int                         `json:"resource_count,omitempty"`
 	OutputCount *int                         `json:"output_count,omitempty"`
-	Outputs     map[string]observedOutputDTO `json:"outputs,omitempty"`
+	Outputs     map[string]observedOutputDTO `json:"outputs"`
 	Diagnostics []diagnosticDTO              `json:"diagnostics"`
 }
 
@@ -92,6 +92,9 @@ func newObservationCmd(kind string, path *string, binaryOf func() exec.Binary) *
 		for _, name := range names {
 			observed := session.Read(name, status)
 			dto := observationDTO{Node: name, Runtime: observed.Runtime, Status: "observed", Diagnostics: []diagnosticDTO{}}
+			if status {
+				dto.Backend, dto.Identity, dto.State = observed.Backend, observed.Identity, observed.State
+			}
 			if observed.Diagnostic != nil {
 				dto.Status = "failed"
 				dto.Diagnostics = append(dto.Diagnostics, diagnosticToDTO(*observed.Diagnostic))

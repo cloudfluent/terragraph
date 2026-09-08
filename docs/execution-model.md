@@ -287,3 +287,22 @@ successful siblings. Successfully observed zero outputs is normal.
 Pre-execution load and selection failures produce the same envelope when JSON
 was selected and stdout is writable. Native flag-parser failures can occur
 before command dispatch and retain Cobra's ordinary stderr error contract.
+
+
+### Observing state status
+
+`terragraph status [--node checkout.cluster] [--output json]` shares the output
+session, backend matrix, source lock, and partial-failure contract. It returns
+runtime, backend type, an opaque SHA-256 state identity (never the backend
+configuration or credential-bearing endpoint), and safe resource-instance and
+root-output counts. State values and output payloads are never returned.
+
+`state` distinguishes `present`, `empty`, `absent`, `indeterminate`, and
+`unavailable`. The runtime's version-4 state serialization is required.
+An empty document at serial zero is indeterminate: real HTTP backends can
+synthesize this response for a missing remote object. A nonempty document or
+an empty document with a positive serial supplies observable evidence; a
+successful empty stdout supplies absence evidence. A missing local state file
+is always unavailable, and backend/credential errors never mean “not applied”.
+These observations cannot prove a past apply succeeded or that there is no drift.
+The identity is a comparison token, not an authorization or freshness proof.

@@ -61,6 +61,7 @@ func NewRootCmd(version string) *cobra.Command {
 	root.AddCommand(newValidateCmd(&blueprintPath, binaryOf, loggerOf))
 	root.AddCommand(newGraphCmd(&blueprintPath, binaryOf, loggerOf))
 	root.AddCommand(newObservationCmd("output", &blueprintPath, binaryOf))
+	root.AddCommand(newObservationCmd("status", &blueprintPath, binaryOf))
 	root.AddCommand(newPlanCmd(&blueprintPath, binaryOf, loggerOf))
 	root.AddCommand(newApplyCmd(&blueprintPath, binaryOf, loggerOf))
 	root.AddCommand(newDestroyCmd(&blueprintPath, binaryOf, loggerOf))

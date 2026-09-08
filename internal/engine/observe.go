@@ -105,6 +105,9 @@ func (s *ObservationSession) Read(name string, status bool) Observation {
 	n := e.Graph.Nodes[name]
 	result := Observation{Node: name, Runtime: string(e.runtimeFor(name)), State: "indeterminate"}
 	fail := func(code, phase, message, remedy string) Observation {
+		if e.context().Err() != nil {
+			code, message, remedy = "cancelled", "observation cancelled", "retry the observation"
+		}
 		return observationFailure(result, code, phase, message, remedy)
 	}
 	if err := e.context().Err(); err != nil {
