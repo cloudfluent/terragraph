@@ -3,6 +3,8 @@ package engine
 import (
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -81,6 +83,52 @@ func TestExecutionCleanup_ExpiresPausedPlansBeforeDeletingRecords(t *testing.T) 
 	}
 	defer func() { _ = store.close() }()
 	if _, err := store.read(e.context(), planID+".bin"); !errors.Is(err, errExecutionMissing) {
+		t.Fatalf("got = %v", err)
+	}
+}
+
+func TestExecutionCleanup_RemovesBackupOnlyWithExpiredResolvedRecord(t *testing.T) {
+	e, _ := journalFixture(t)
+	s, err := e.beginExecution("run_state_rm", []string{"example"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := s.record.ID
+	if _, err := s.store.write(e.context(), id+".bin", []byte("native backup"), ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.transition("example", "completed", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	next := s.record
+	next.Backup = true
+	old := time.Now().UTC().Add(-365 * 24 * time.Hour)
+	next.FinishedAt = &old
+	next.Status = "completed"
+	if err := s.publish(next); err != nil {
+		t.Fatal(err)
+	}
+	s.close()
+	scratch := filepath.Join(e.BaseDir, ".terragraph", "backups", id+".tfstate")
+	if err := os.MkdirAll(filepath.Dir(scratch), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(scratch, []byte("native backup"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := e.PruneExecutions()
+	if err != nil || len(removed) != 1 || removed[0] != id {
+		t.Fatalf("got = %v, %v", removed, err)
+	}
+	store, err := e.openExecutionStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.close() }()
+	if _, err := store.read(e.context(), id+".bin"); !errors.Is(err, errExecutionMissing) {
+		t.Fatalf("got = %v", err)
+	}
+	if _, err := os.Stat(scratch); !os.IsNotExist(err) {
 		t.Fatalf("got = %v", err)
 	}
 }

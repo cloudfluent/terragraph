@@ -85,3 +85,58 @@ func TestPlanHistory_MissingRecordReturnsStructuredError(t *testing.T) {
 		t.Fatalf("got = %s", out.String())
 	}
 }
+
+func TestPlanHistory_BackupExportIsExplicitAndRaw(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "blueprint.hcl")
+	if err := os.WriteFile(path, []byte(`node "example" { source = "./missing" }`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ := json.Marshal(dir)
+	digest := sha256.Sum256(encoded)
+	id := "run-" + strings.Repeat("a", 32)
+	record, _ := json.Marshal(map[string]any{"schema_version": 1, "id": id, "scope": hex.EncodeToString(digest[:]), "status": "completed", "operation": "run_state_rm", "backup": true, "nodes": []any{}})
+	root := filepath.Join(dir, ".terragraph", "executions")
+	if err := os.MkdirAll(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for key, data := range map[string][]byte{id + ".json": record, id + ".bin": []byte("PRIVATE_NATIVE_BACKUP")} {
+		object, _ := json.Marshal(map[string]any{"revision": "fixture", "data": data})
+		if err := os.WriteFile(filepath.Join(root, key), object, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var out bytes.Buffer
+	show := NewRootCmd("test")
+	show.SetOut(&out)
+	show.SetErr(&bytes.Buffer{})
+	show.SetArgs([]string{"--blueprint", path, "plan", "show", id, "--output", "json"})
+	if err := show.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "PRIVATE_NATIVE_BACKUP") || !strings.Contains(out.String(), `"backup_available":true`) {
+		t.Fatalf("got = %s", out.String())
+	}
+	out.Reset()
+	plain := NewRootCmd("test")
+	plain.SetOut(&out)
+	plain.SetErr(&bytes.Buffer{})
+	plain.SetArgs([]string{"--blueprint", path, "plan", "show", id})
+	if err := plain.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "backup: available") || strings.Contains(out.String(), "PRIVATE_NATIVE_BACKUP") {
+		t.Fatalf("got = %s", out.String())
+	}
+	out.Reset()
+	export := NewRootCmd("test")
+	export.SetOut(&out)
+	export.SetErr(&bytes.Buffer{})
+	export.SetArgs([]string{"--blueprint", path, "plan", "show", id, "--backup"})
+	if err := export.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != "PRIVATE_NATIVE_BACKUP" {
+		t.Fatalf("got = %q", out.String())
+	}
+}

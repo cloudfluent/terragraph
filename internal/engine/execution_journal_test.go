@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -164,5 +166,23 @@ func TestExecutionJournal_FinishedSavedOutcomeSurvivesCleanupFailure(t *testing.
 	}
 	if s.record.Status != "completed" || s.record.FinishedAt != finished || s.revision != revision {
 		t.Fatalf("got = %+v", s.record)
+	}
+}
+
+func TestExecutionWorkspace_UsesNativeSelectionWhenEnvironmentIsEmpty(t *testing.T) {
+	e, _ := journalFixture(t)
+	t.Setenv("TF_WORKSPACE", "")
+	if err := os.MkdirAll(e.dataDir("example"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(e.dataDir("example"), "environment"), []byte("production"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	workspace, err := e.executionWorkspace("example")
+	if err != nil || workspace != "production" {
+		t.Fatalf("got = %q, %v", workspace, err)
+	}
+	if err := e.recoverNodeOutputs(nil, "example", false); err == nil || !strings.Contains(err.Error(), "--initialize-backend") {
+		t.Fatalf("non-default workspace reached read-only init: %v", err)
 	}
 }

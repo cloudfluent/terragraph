@@ -128,3 +128,7 @@ The default start window is 24 hours. Expiry prevents a stored plan from beginni
 Resolved records remain for 30 days after their terminal timestamp by default. Active records, unresolved mutations, uncertain backend preparation, and orphan objects without trustworthy ownership are never deleted merely because they are old. Cancellation cannot resolve an unknown mutation; use the recovery procedure first. There is no background daemon, so an idle local checkout keeps eligible files until another relevant command runs.
 
 S3 deletion affects the current object view. A versioned bucket can retain older versions and delete markers, and Object Lock can prevent physical removal. Configure and audit any noncurrent-version policy separately; do not apply blanket Lifecycle expiration to the execution prefix or graph lock. A bucket policy that independently deletes active or unknown evidence defeats these recovery guarantees. The CLI does not install or change bucket Lifecycle rules.
+
+## Native operation records
+
+[Scoped node operations](node-operations.md) use the same record store. Read commands may create history records while an earlier mutation remains unresolved, but they do not clear that barrier. Native backup availability is reported separately from plan artifacts. Backups are retained until the resolved record's retention deadline and are exported only with `plan show <run-id> --backup`; normal history never emits state bytes.
