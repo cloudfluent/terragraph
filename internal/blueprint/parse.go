@@ -30,6 +30,7 @@ var topSchema = &hcl.BodySchema{
 		{Type: "runtime", LabelNames: []string{"name"}},
 		{Type: "contracts"},
 		{Type: "snapshots"},
+		{Type: "execution"},
 		{Type: "producer", LabelNames: []string{"source"}},
 		{Type: "consumer", LabelNames: []string{"source"}},
 	},
@@ -153,6 +154,9 @@ func ParseFile(path string) (*Blueprint, error) {
 	if err := validateRuntimes(bp); err != nil {
 		return nil, err
 	}
+	if err := validateExecutionConfig(bp); err != nil {
+		return nil, err
+	}
 	return bp, nil
 }
 
@@ -196,6 +200,9 @@ func parseDir(dir string) (*Blueprint, int, error) {
 		return nil, 0, err
 	}
 	if err := validateRuntimes(bp); err != nil {
+		return nil, 0, err
+	}
+	if err := validateExecutionConfig(bp); err != nil {
 		return nil, 0, err
 	}
 	return bp, fileCount, nil
@@ -333,6 +340,15 @@ func parseOneFile(path string, bp *Blueprint, seenNodes, seenGroups, seenUses, s
 				return err
 			}
 			bp.ContractMode = mode
+		case "execution":
+			if bp.Execution != nil {
+				return fmt.Errorf("%s: duplicate execution block", block.DefRange)
+			}
+			cfg, err := parseExecutionBlock(block)
+			if err != nil {
+				return err
+			}
+			bp.Execution = cfg
 		case "snapshots":
 			// Opting in is one deliberate decision; two blocks would be the same decision made twice, and last-win could never change it anyway.
 			if bp.Snapshots != nil {

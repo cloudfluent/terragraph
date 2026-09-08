@@ -191,10 +191,12 @@ type S3Lock struct {
 
 // Blueprint is the fully parsed graph topology: nodes and the edges between them, plus any group definitions and instantiations. It carries no resource configuration, only wiring.
 type Blueprint struct {
-	Nodes  []Node
-	Edges  []Edge
-	Groups []Group
-	Uses   []Use
+	// Execution configures journals and optional retained plans without changing any node backend.
+	Execution *ExecutionConfig
+	Nodes     []Node
+	Edges     []Edge
+	Groups    []Group
+	Uses      []Use
 	// Vendor is nil when the blueprint declares no `vendor` block. Use the VendorDirectory/VendorManifestFile accessors, never this field directly, so callers never need to branch on nil.
 	Vendor *VendorConfig
 	// TFVars is nil when the blueprint declares no `tfvars` block. Use the TFVarsLocation accessor, never this field directly, so callers never need to branch on nil.
