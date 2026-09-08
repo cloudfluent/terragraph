@@ -7,12 +7,14 @@
 ## Validation
 
 `terragraph validate` (and `graph`/`plan`/`apply`/`destroy`, which run it first) reports two severities:
-- **Error**: blocks the command (a `from`/`to` referencing a port that doesn't exist, two data edges targeting the same input after group expansion even when they are exact duplicates, a data edge and `vars` both setting the same input, a cycle, a value that doesn't fit the target variable's declared type, `backend_config` set on a module with no `backend` block, two nodes sharing a module directory with identical `backend_config` maps).
+- **Error**: blocks the command (a `from`/`to` referencing a port that doesn't exist, two data edges targeting the same input after group expansion even when they are exact duplicates, a data edge and `vars` both setting the same input, a cycle, `backend_config` set on a module with no `backend` block, two nodes sharing a module directory with identical `backend_config` maps).
 - **Warning**: printed but never blocks. A required variable with no edge feeding it may legitimately come from that module's own `terraform.tfvars` or the environment, outside the blueprint entirely; so may a `.terragraph/state/<name>.tfstate` file left behind by a node that's since been renamed or removed (see below).
 
 Cycle detection reports every independent cyclic cluster in one pass (Tarjan's SCC algorithm), not just the first one found.
 
-Type checking runs when inputs are resolved for execution. terragraph decodes each concrete value and uses cty's type conversion and optional attribute defaults to check whether the target variable's declared type can accept it. This accepts `any`, convertible `map(any)` values, optional object attributes with defaults, and additional object attributes. The original input is passed unchanged in the tfvars file: Terraform/OpenTofu performs the final conversion, applies variable defaults and nullability rules, and evaluates variable validation blocks.
+Concrete values from both `vars` and data edges are type-checked while resolving a node's inputs for `plan`, `apply`, or `destroy`, not by `terragraph validate`.
+
+terragraph decodes each concrete value and uses cty's type conversion and optional attribute defaults to check whether the target variable's declared type can accept it. This accepts `any`, convertible `map(any)` values, optional object attributes with defaults, and additional object attributes. The original input is passed unchanged in the tfvars file: Terraform/OpenTofu performs the final conversion, applies variable defaults and nullability rules, and evaluates variable validation blocks.
 
 ## How values are passed
 
@@ -135,7 +137,7 @@ node's own approve  >  enclosing use block  >  --approve  >  safe
 
 ...including the rule that a CLI flag only ever fills a gap nothing else spoke to. `--approve=all` does not override a node that declared `approve = "safe"`; a node that declared `approve = "all"` is not reined in by `--approve=none`. The blueprint is where a standing decision lives, and it goes through review.
 
-When a node's plan exceeds its level, the run stops **before that node is applied**. Levels execute in order, so nothing downstream runs either — the cascade is cut at its source rather than audited afterwards:
+When a node's plan exceeds its level, the run stops **before that node is applied**. Levels execute in order, so nothing downstream runs either — the cascade is cut at its source rather than audited afterwards. For a node using the run's default policy:
 
 ```
 node vpc: 3 to add, 1 to change, 0 to destroy
@@ -149,7 +151,7 @@ Stopped before applying, so no later level ran.
 If this is intended, declare approve = "all" on that node, or re-run with --approve=all.
 ```
 
-This is checked whether or not anyone is watching. An interactive `yes` answers "apply this plan", not "override the standing policy"; overriding it is `--approve=all`, which is a visible, deliberate act.
+If a node or enclosing `use` declares its policy, the error instead asks you to set `approve = "all"` on the declaration that sets it. `--approve=all` cannot override that declaration. The policy is checked whether or not anyone is watching; an interactive `yes` only approves a plan already permitted by the resolved policy.
 
 `destroy` is held to the same policy without a plan to read. Teardown is delete-only, so a node that **declared** anything short of `approve = "all"` has already said it must not be torn down, and destroy refuses before anything runs — with or without `--auto-approve`, for the same reason apply's check does not care whether anyone is watching. A node that declared nothing is unaffected: `terragraph destroy` on an ordinary blueprint behaves exactly as it always has, gated by Terraform's own confirmation prompt.
 
@@ -253,11 +255,16 @@ resolve the inputs that created downstream resources, but `apply` may use those
 same old values to reference resources that no longer exist. A snapshot does
 not prove that the upstream infrastructure still exists or is current.
 
-Runtime metadata protects publication even when OpenTofu executes `.tofu`
-files that differ from the `.tf` files static inspection reads. This does not
-make static inspection runtime-aware: when changing sensitivity only in
-OpenTofu-specific files, remove the prior snapshot or reapply the upstream
-before relying on fallback. An offline read cannot refresh runtime metadata.
+Static inspection selects files for the node's resolved runtime. Changing only
+`.tofu` or `.tofu.json` to mark an output sensitive therefore also blocks a prior
+public snapshot on the next run. If an arbitrary runtime wrapper leaves the
+file-selection mode ambiguous and the two modes' declarations differ, graph
+loading fails before a snapshot can be consumed. See [runtime selection](blueprint.md#choosing-a-runtime-per-node-runtime).
+Recognized OpenTofu runtimes selecting these files must also pass an execution-only
+version check (1.8.0 or newer) before any input validation or snapshot read,
+including upstream reads during a node-scoped run. Older OpenTofu modules using
+only `.tf` / `.tf.json` do not need this check. Runtime sensitivity metadata still
+protects publication, and an offline read cannot refresh that metadata.
 
 Snapshots are local and per-machine. They are regenerated by `apply`, so
 there is no freshness gate to maintain and nothing to commit.

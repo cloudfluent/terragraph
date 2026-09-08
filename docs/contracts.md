@@ -144,12 +144,9 @@ errors already do. An upgrade never selects a stricter mode on its own.
 
 ## Contract identity
 
-A contract set's identity is `sha256` hex over its canonical JSON: one entry
-per port covering exactly the checked claims — scope as written, role, port
-name, `type`, `nullable`, `sensitive` — with every entry sorted by (scope,
-role, name). Editing a claim changes the digest; reordering or re-splitting
-blocks across files never does. Two instances of one source report the same
-digest because they share one contract record.
+An internal contract digest helper exists for possible future consumers.
+No CLI command reports a contract digest, and execution, approval, and
+output snapshots do not use it.
 
 ## Deferred
 

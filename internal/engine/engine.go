@@ -183,7 +183,7 @@ func load(ctx context.Context, blueprintPath string, binary exec.Binary, stdout,
 		}
 	}
 
-	g, err := graph.Build(bp, baseDir)
+	g, err := graph.Build(bp, baseDir, string(binary))
 	if err != nil {
 		if lock != nil {
 			_ = lock.Close()

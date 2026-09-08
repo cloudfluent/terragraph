@@ -57,12 +57,13 @@ Self-contained and cloud-credential-free (`random`/`local` providers only). Clon
 - [`examples/basic`](examples/basic): one node feeding two independent downstream nodes (wiring, parallel execution, skipping unchanged nodes).
 - [`examples/reuse`](examples/reuse): the same module instantiated twice, proving the local state default isolates each node.
 - [`examples/group`](examples/group): a group instantiated twice via `use`, proving expansion, export wiring, and per-instance state isolation.
+- [`examples/contracts`](examples/contracts): producer and consumer declarations checked against an edge and the modules' schemas.
 - [`examples/vendored`](examples/vendored): a node sourced from a remote git address, showing the vendor workflow.
 
 ## Development
 
 ```
-make check   # fmt-check + lint + docs-check + build + test, exactly what CI runs
+make check   # fmt-check + lint + docs-check + build + test + vscode-check, exactly what CI runs
 make fmt     # reformat in place
 make docs    # regenerate docs/cli/*.md from the live CLI
 make build   # ./terragraph
