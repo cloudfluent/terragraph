@@ -27,3 +27,5 @@ terragraph plan [flags]
 ### SEE ALSO
 
 * [terragraph](terragraph.md)	 - Graph-based orchestration for independent Terraform/OpenTofu root modules
+* [terragraph plan list](terragraph_plan_list.md)	 - List execution records without reading infrastructure state
+* [terragraph plan show](terragraph_plan_show.md)	 - Show an execution's recorded phases without rerunning it

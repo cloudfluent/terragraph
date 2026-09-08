@@ -106,21 +106,24 @@ func (e *Engine) openExecutionStore() (executionStore, error) {
 	if e.Blueprint.Lock == nil {
 		return nil, fmt.Errorf("execution: S3 storage requires a shared graph lock")
 	}
-	for name, node := range e.Graph.Nodes {
-		if node.Schema == nil || node.Schema.Backend != "s3" {
-			continue
-		}
-		bucket, key := node.Schema.BackendConfig["bucket"], node.Schema.BackendConfig["key"]
-		if value, ok := node.BackendConfig["bucket"]; ok {
-			bucket = value
-		}
-		if value, ok := node.BackendConfig["key"]; ok {
-			key = value
-		}
-		if bucket == cfg.Bucket && (key == cfg.Prefix || strings.HasPrefix(key, cfg.Prefix+"/")) {
-			return nil, fmt.Errorf("node.%s: state is inside execution.prefix; use a separate artifact prefix", name)
+	if e.Graph != nil {
+		for name, node := range e.Graph.Nodes {
+			if node.Schema == nil || node.Schema.Backend != "s3" {
+				continue
+			}
+			bucket, key := node.Schema.BackendConfig["bucket"], node.Schema.BackendConfig["key"]
+			if value, ok := node.BackendConfig["bucket"]; ok {
+				bucket = value
+			}
+			if value, ok := node.BackendConfig["key"]; ok {
+				key = value
+			}
+			if bucket == cfg.Bucket && (key == cfg.Prefix || strings.HasPrefix(key, cfg.Prefix+"/")) {
+				return nil, fmt.Errorf("node.%s: state is inside execution.prefix; use a separate artifact prefix", name)
+			}
 		}
 	}
+
 	return openS3ExecutionStore(e.context(), cfg.Bucket, cfg.Prefix, cfg.Region)
 }
 

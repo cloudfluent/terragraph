@@ -240,6 +240,10 @@ Every node must then use a supported remote backend (`s3`, `gcs`, `azurerm`, `ht
 
 See [graph remote locking](execution-model.md#graph-remote-lock) for credentials, permissions, contention, and recovering a stale lock, and [backend limitations](execution-model.md#known-limitation) for `apply` support.
 
+## Execution record storage (`execution`)
+
+Use an optional root-level `execution` block to select local or S3 record storage and configure retained-plan and completed-record lifetimes. It does not change Terraform state backends or enable retained-plan execution by itself. See [execution records](executions.md) for the configuration and `plan list`/`plan show` commands.
+
 ## Output snapshots (`snapshots`)
 
 Add an empty top-level block to retain local output values for fallback when live upstream outputs are unavailable:
