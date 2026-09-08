@@ -219,3 +219,73 @@ func TestAll_PackagedSubdirSiblingStateRefusesRefresh(t *testing.T) {
 	}
 	assertExists(t, filepath.Join(dir, "modules", "app", "main.tf"))
 }
+
+func rootSourceFixture(t *testing.T, contents string) (blueprint.Node, string, string) {
+	t.Helper()
+	n, baseDir, dir := legacySubdirFixture(t, contents)
+	n.Source = strings.Replace(n.Source, "//modules/app", "", 1)
+	if err := (Manifest{"app": Entry{Source: n.Source}}).Save(filepath.Join(baseDir, "vendor.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	return n, baseDir, dir
+}
+
+func TestAll_RootSourceStateRefusesForcedRefresh(t *testing.T) {
+	n, baseDir, dir := rootSourceFixture(t, `output "id" { value = "legacy" }`)
+	state := filepath.Join(dir, "terraform.tfstate")
+	mustWrite(t, state, `{"version":4}`)
+	assertRelocationRefused(t, n, baseDir, dir)
+	after, err := os.ReadFile(state)
+	if err != nil || string(after) != `{"version":4}` {
+		t.Fatalf("state = %s, err = %v", after, err)
+	}
+}
+
+func TestAll_RootSourceBackupRefusesSourceChange(t *testing.T) {
+	n, baseDir, dir := rootSourceFixture(t, `output "id" { value = "legacy" }`)
+	state := filepath.Join(dir, "terraform.tfstate.backup")
+	mustWrite(t, state, `{"version":4}`)
+	n.Source = strings.Replace(n.Source, "?ref=HEAD", "?ref=v1.0.0", 1)
+	manifestPath := filepath.Join(baseDir, "vendor.yaml")
+	before, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, err := All([]blueprint.Node{n}, baseDir, "vendor", manifestPath, Options{})
+	if err != nil || len(results) != 1 || results[0].Err == nil || !strings.Contains(results[0].Err.Error(), "local state") {
+		t.Fatalf("results = %+v, err = %v, want state refusal on changed source", results, err)
+	}
+	after, err := os.ReadFile(manifestPath)
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("manifest changed: %v", err)
+	}
+	after, err = os.ReadFile(state)
+	if err != nil || string(after) != `{"version":4}` {
+		t.Fatalf("state = %s, err = %v", after, err)
+	}
+	after, err = os.ReadFile(filepath.Join(dir, "main.tf"))
+	if err != nil || string(after) != `output "id" { value = "legacy" }` {
+		t.Fatalf("module = %s, err = %v", after, err)
+	}
+}
+
+func TestAll_RootSourceWithAbsoluteExternalStateCanRefresh(t *testing.T) {
+	n, baseDir, dir := rootSourceFixture(t, `terraform {
+   backend "local" {}
+ }`)
+	state := filepath.Join(t.TempDir(), "existing.state")
+	mustWrite(t, state, `{"version":4}`)
+	n.BackendConfig = map[string]string{"path": state}
+	results, err := All([]blueprint.Node{n}, baseDir, "vendor", filepath.Join(baseDir, "vendor.yaml"), Options{Force: true})
+	if err != nil || len(results) != 1 || results[0].Err != nil || results[0].Skipped {
+		t.Fatalf("results = %+v, err = %v, want refresh with external state", results, err)
+	}
+	after, err := os.ReadFile(state)
+	if err != nil || string(after) != `{"version":4}` {
+		t.Fatalf("state = %s, err = %v", after, err)
+	}
+	after, err = os.ReadFile(filepath.Join(dir, "main.tf"))
+	if err != nil || string(after) != `output "id" { value = "x" }` {
+		t.Fatalf("module = %s, err = %v, want fetched content", after, err)
+	}
+}

@@ -9,7 +9,7 @@ import (
 	"github.com/cloudfluent/terragraph/internal/module"
 )
 
-// checkSourceRelocation refuses to change a working directory while local state still depends on that directory; state is never moved by vendoring.
+// checkSourceRelocation protects local state before replacing a source tree or changing its execution directory; state is never moved by vendoring.
 func checkSourceRelocation(n blueprint.Node, dir string) error {
 	treeDir := dir
 	source, err := blueprint.ReadVendoredSource(dir)
@@ -24,13 +24,13 @@ func checkSourceRelocation(n blueprint.Node, dir string) error {
 	}
 	schema, err := module.Inspect(dir, module.UnknownFiles)
 	if err != nil {
-		return fmt.Errorf("checking existing module before changing its directory (vendoring requires matching Terraform/OpenTofu declarations because it does not select a runtime): %w", err)
+		return fmt.Errorf("checking existing module before replacing its source (vendoring requires matching Terraform/OpenTofu declarations because it does not select a runtime): %w", err)
 	}
 	if schema.Backend != "" && schema.Backend != "local" {
 		return nil
 	}
 	if schema.Backend == "local" && !schema.BackendConfigKnown {
-		return fmt.Errorf("node.%s: local backend path cannot be determined before changing the source directory; review the backend configuration and pin its state path before re-vendoring", n.Name)
+		return fmt.Errorf("node.%s: local backend path cannot be determined before replacing the source directory; review the backend configuration and pin its state path before re-vendoring", n.Name)
 	}
 	path, workspaceDir := "terraform.tfstate", "terraform.tfstate.d"
 	if schema.Backend == "local" {
@@ -55,7 +55,7 @@ func checkSourceRelocation(n blueprint.Node, dir string) error {
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("checking local workspaces before changing source directory: %w", err)
+		return fmt.Errorf("checking local workspaces before replacing source directory: %w", err)
 	}
 	for _, entry := range entries {
 		if err := checkLocalStatePath(n.Name, dir, treeDir, filepath.Join(workspaceDir, entry.Name(), "terraform.tfstate")); err != nil {
@@ -75,18 +75,18 @@ func checkLocalStatePath(name, dir, treeDir, path string) error {
 		if _, err := os.Stat(candidate); os.IsNotExist(err) {
 			continue
 		} else if err != nil {
-			return fmt.Errorf("checking local state before changing source directory: %w", err)
+			return fmt.Errorf("checking local state before replacing source directory: %w", err)
 		}
 		if !relative {
 			within, err := pathWithin(treeDir, candidate)
 			if err != nil {
-				return fmt.Errorf("checking absolute local state before changing source directory: %w", err)
+				return fmt.Errorf("checking absolute local state before replacing source directory: %w", err)
 			}
 			if !within {
 				continue
 			}
 		}
-		return fmt.Errorf("node.%s: changing the source directory would remove or change the local state path %s; migrate state outside the vendored tree and configure an absolute backend path before re-vendoring", name, candidate)
+		return fmt.Errorf("node.%s: replacing the source directory would remove or change the local state path %s; migrate state outside the vendored tree and configure an absolute backend path before re-vendoring", name, candidate)
 	}
 	return nil
 }
