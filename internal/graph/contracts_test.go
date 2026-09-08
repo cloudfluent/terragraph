@@ -577,13 +577,11 @@ producer "github.com/org/repo//modules/vpc" {
 	}
 }
 
-// Two nodes sharing one remote source are inspected separately — their Dir is vendor/<node-name> — so re-vendoring one of them (vendor --node) can leave the copies disagreeing about what the module declares. Which copy the contract is judged against must be a decision, not whatever the node map yields.
-//
-// The fixture makes the choice observable: only "b" declares vpc_id, so reading "a" reports C001 and reading "b" reports nothing. Asserting the lowest-named node wins pins the rule. Note that a loop here would prove nothing — Go randomises map iteration between processes but held one order within a single run, so the map-ordered version passed a twelve-iteration stability check and only varied from one `go test` to the next.
-func TestContractProblems_RemoteSourceSchemaIsTheLowestNamedNode(t *testing.T) {
+// Updating only a later vendored copy must not hide its missing port behind the first copy's valid schema.
+func TestContractProblems_RemoteSourceChecksLaterCopies(t *testing.T) {
 	root := t.TempDir()
-	writeFixtureFile(t, filepath.Join(root, "vendor/a/main.tf"), `output "other" { value = "x" }`)
-	writeFixtureFile(t, filepath.Join(root, "vendor/b/main.tf"), `output "vpc_id" { value = "x" }`)
+	writeFixtureFile(t, filepath.Join(root, "vendor/a/main.tf"), `output "vpc_id" { value = "x" }`)
+	writeFixtureFile(t, filepath.Join(root, "vendor/b/main.tf"), `output "other" { value = "x" }`)
 	writeFixtureFile(t, filepath.Join(root, "blueprint.hcl"), `
 node "a" { source = "github.com/acme/vpc" }
 node "b" { source = "github.com/acme/vpc" }
@@ -603,7 +601,7 @@ producer "github.com/acme/vpc" {
 
 	problems := contractProblems(g)
 	if len(problems) != 1 || !strings.Contains(problems[0].Message, "[C001]") {
-		t.Fatalf("got = %v, want one C001 from reading node a's copy", problems)
+		t.Fatalf("got = %v, want one C001 from reading node b's copy", problems)
 	}
 }
 
@@ -635,5 +633,85 @@ consumer "./modules/app" {
 `)
 	if problems := Validate(g); len(problems) != 0 {
 		t.Fatalf("got = %v, want a narrowing contract to pass", problems)
+	}
+}
+
+func writeDivergentRemoteContractFixture(t *testing.T, first, second, contracts string) *Graph {
+	t.Helper()
+	root := t.TempDir()
+	writeFixtureFile(t, filepath.Join(root, "vendor", "a", "main.tf"), first)
+	writeFixtureFile(t, filepath.Join(root, "vendor", "b", "main.tf"), second)
+	writeFixtureFile(t, filepath.Join(root, "blueprint.hcl"), `
+node "a" { source = "github.com/acme/module" }
+node "b" { source = "github.com/acme/module" }
+`+contracts)
+	bp, err := blueprint.ParseFile(filepath.Join(root, "blueprint.hcl"))
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	g, err := Build(bp, root)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	return g
+}
+
+func TestValidate_RemoteLaterCopyProducerSensitivityIsEnforced(t *testing.T) {
+	g := writeDivergentRemoteContractFixture(t,
+		`output "id" { value = "x" }`,
+		`output "id" {
+  value = "x"
+  sensitive = true
+}`, `
+producer "github.com/acme/module" {
+  output "id" { sensitive = false }
+}
+`)
+	g.ContractMode = "enforce"
+	problems := Validate(g)
+	if len(problems) != 1 || !problems[0].IsError() || !strings.Contains(problems[0].Message, "[C009]") || !strings.Contains(problems[0].Message, "node.b") {
+		t.Fatalf("got = %v, want enforced C009 identifying node.b", problems)
+	}
+}
+
+func TestValidate_RemoteLaterCopyMissingConsumerIsReported(t *testing.T) {
+	g := writeDivergentRemoteContractFixture(t,
+		`variable "id" { default = "x" }`,
+		`output "other" { value = "x" }`, `
+consumer "github.com/acme/module" {
+  input "id" { type = "string" }
+}
+`)
+	problems := Validate(g)
+	if len(problems) != 1 || problems[0].IsError() || !strings.Contains(problems[0].Message, "[C002]") || !strings.Contains(problems[0].Message, "node.b") {
+		t.Fatalf("got = %v, want warning C002 identifying node.b", problems)
+	}
+}
+
+func TestValidate_RemoteLaterCopyConsumerTypeAndSensitivityAreReported(t *testing.T) {
+	g := writeDivergentRemoteContractFixture(t,
+		`variable "id" {
+  type = string
+  default = "1"
+}`, `variable "id" {
+  type = number
+  default = 1
+  sensitive = true
+}`, `
+consumer "github.com/acme/module" {
+  input "id" {
+    type = "string"
+    sensitive = false
+  }
+}
+`)
+	problems := Validate(g)
+	if len(problems) != 2 || !strings.Contains(problems[0].Message, "[C007]") || !strings.Contains(problems[1].Message, "[C008]") {
+		t.Fatalf("got = %v, want C007 and C008 for the later copy", problems)
+	}
+	for _, p := range problems {
+		if p.IsError() || !strings.Contains(p.Message, "node.b") {
+			t.Fatalf("got = %v, want warning identifying node.b", p)
+		}
 	}
 }
