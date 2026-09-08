@@ -191,7 +191,7 @@ func rewriteEdge(e blueprint.Edge, uses map[string]useInfo, qualify func(string)
 	if err != nil {
 		return nil, fmt.Errorf("%s -> %s: %w", e.From, e.To, err)
 	}
-	if len(froms) > 1 && len(tos) > 1 {
+	if e.IsDataEdge() && len(froms) > 1 && len(tos) > 1 {
 		return nil, fmt.Errorf("%s -> %s: cannot fan out on both sides of an edge", e.From, e.To)
 	}
 
