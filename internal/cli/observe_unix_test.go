@@ -139,3 +139,71 @@ func TestStatus_EmptyAndIndeterminate(t *testing.T) {
 		}
 	}
 }
+
+func TestObservation_SyntaxFailureRetainsSafeLocation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "blueprint.hcl")
+	writeFixtureFile(t, path, "node \"broken\" {\n")
+	stdout, _, err := runCmdAt(t, path, "output", "--output", "json")
+	if err == nil {
+		t.Fatal("invalid syntax succeeded")
+	}
+	var result observationResultDTO
+	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Diagnostics) != 1 || result.Diagnostics[0].Source == nil || result.Diagnostics[0].Source.File != path {
+		t.Fatalf("got = %+v", result)
+	}
+}
+
+func TestOutput_SharedSourceAndDottedLeafUseOwnContext(t *testing.T) {
+	bp := writeObservationFixture(t)
+	dir := filepath.Dir(bp)
+	fake := filepath.Join(dir, "runtime")
+	writeFixtureFile(t, fake, `#!/bin/sh
+case "$1" in
+init)
+ case "$TF_DATA_DIR" in *read-*/checkout.cluster) expected=group-state ;; *read-*/a) expected=a-state ;; *) exit 19 ;; esac
+ case "$*" in *"$expected"*) ;; *) exit 20 ;; esac
+ case "$TF_DATA_DIR" in *checkout.cluster) [ "$TG_GROUP_ENV" = inherited ] || exit 21 ;; esac
+ exit 0 ;;
+output)
+ case "$TF_DATA_DIR" in *checkout.cluster) value=cluster ;; *) value=a ;; esac
+ printf '{"identity":{"value":"%s","sensitive":false}}\n' "$value" ;;
+*) exit 1 ;;
+esac
+`)
+	writeFixtureFile(t, filepath.Join(dir, "module", "main.tf"), "terraform {\n backend \"local\" {}\n}\nvariable \"required_for_apply\" { type = string }\n")
+	writeFixtureFile(t, filepath.Join(dir, "group", "group.hcl"), "group \"service\" {\n node \"cluster\" { source = \"../module\" }\n}\n")
+	writeFixtureFile(t, filepath.Join(dir, "a-state"), "{}")
+	writeFixtureFile(t, filepath.Join(dir, "group-state"), "{}")
+	writeFixtureFile(t, bp, fmt.Sprintf("runtime \"chosen\" { binary = %q }\nnode \"a\" {\n source = \"./module\"\n runtime = runtime.chosen\n backend_config = { path = %q }\n}\nuse \"service\" {\n as = \"checkout\"\n source = \"./group\"\n runtime = runtime.chosen\n env = { TG_GROUP_ENV = \"inherited\" }\n backend_config = { path = %q }\n}\n", fake, filepath.Join(dir, "a-state"), filepath.Join(dir, "group-state")))
+	stdout, _, err := runCmdAt(t, bp, "output", "--output", "json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result observationResultDTO
+	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Nodes) != 2 || string(result.Nodes[0].Outputs["identity"].Value) != "\"a\"" || string(result.Nodes[1].Outputs["identity"].Value) != "\"cluster\"" {
+		t.Fatalf("got = %+v", result)
+	}
+}
+
+func TestOutput_MissingLockfileDoesNotInitialize(t *testing.T) {
+	bp := writeObservationFixture(t)
+	dir := filepath.Dir(bp)
+	if err := os.Remove(filepath.Join(dir, "module", ".terraform.lock.hcl")); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(dir, "started")
+	writeFixtureFile(t, filepath.Join(dir, "runtime"), "#!/bin/sh\ntouch '"+marker+"'\nexit 99\n")
+	stdout, _, err := runCmdAt(t, bp, "output", "--node", "a", "--output", "json")
+	if err == nil || !strings.Contains(stdout, "lockfile_required") {
+		t.Fatalf("got = %s, %v", stdout, err)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatal("missing lockfile reached init")
+	}
+}

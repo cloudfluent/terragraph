@@ -17,9 +17,10 @@ func writeRunFakeTerraform(t *testing.T, dir string) string {
 	t.Helper()
 	path := filepath.Join(dir, "terraform-fake")
 	script := `#!/bin/sh
-printf 'terraform %s stdout\n' "$1"
+if [ "$1" != show ]; then printf 'terraform %s stdout\n' "$1"; fi
 printf 'terraform %s stderr\n' "$1" >&2
 case "$1" in
+  show) printf '%s\n' '{"format_version":"1.2","resource_changes":[],"output_changes":{}}'; exit 0 ;;
   init) exit 0 ;;
   plan)
     if [ -n "${TG_FAKE_PLAN_FAIL:-}" ]; then
@@ -146,5 +147,51 @@ func TestDestroy_OutputJSON_FailedNodeStillReports(t *testing.T) {
 	}
 	if len(got.Nodes) != 1 || got.Nodes[0].Status != "failed" || got.Nodes[0].Error == "" {
 		t.Fatalf("got = %+v, want node a failed with an error message", got.Nodes)
+	}
+}
+
+func TestPlan_ReviewDTOCountsAndOutputOnly(t *testing.T) {
+	bp := writeRunFixture(t)
+	dir := filepath.Dir(bp)
+	fake := filepath.Join(dir, "terraform-fake")
+	writeFixtureFile(t, fake, `#!/bin/sh
+case "$1" in
+init|plan) exit 0 ;;
+show) printf '%s\n' '{"format_version":"1.2","resource_changes":[{"address":"x.a","change":{"actions":["create"]}},{"address":"x.b","change":{"actions":["update"]}},{"address":"x.c","change":{"actions":["delete"]}},{"address":"x.d","change":{"actions":["create","delete"]}}],"output_changes":{"secret":{"actions":["update"],"before":"CANARY_BEFORE","after":"CANARY_AFTER"}}}' ;;
+*) exit 1 ;;
+esac
+`)
+	stdout, _, err := runCmdAt(t, bp, "plan", "--output", "json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(stdout, "CANARY") {
+		t.Fatal("plan values leaked into metadata")
+	}
+	var dto planResultDTO
+	if err := json.Unmarshal([]byte(stdout), &dto); err != nil {
+		t.Fatal(err)
+	}
+	review := dto.Nodes[0].Review
+	if !review.Evidence || !*review.HasChanges || review.Counts.Create != 1 || review.Counts.Update != 1 || review.Counts.Delete != 1 || review.Counts.Replace != 1 || review.Decision != "block" || len(review.Outputs) != 1 {
+		t.Fatalf("got = %+v", review)
+	}
+	text, _, err := runCmdAt(t, bp, "plan")
+	if err != nil || !strings.Contains(text, "1 create, 1 update, 1 delete, 1 replace") || !strings.Contains(text, "assessment only") {
+		t.Fatalf("got = %s, %v", text, err)
+	}
+}
+
+func TestPlan_PreparationFailureHasStructuredDiagnostic(t *testing.T) {
+	stdout, _, err := runCmdAt(t, filepath.Join(t.TempDir(), "missing.hcl"), "plan", "--output", "json")
+	if err == nil {
+		t.Fatal("missing blueprint succeeded")
+	}
+	var dto planResultDTO
+	if err := json.Unmarshal([]byte(stdout), &dto); err != nil {
+		t.Fatal(err)
+	}
+	if len(dto.Nodes) != 0 || len(dto.Diagnostics) != 1 || dto.Diagnostics[0].Phase != "load" {
+		t.Fatalf("got = %+v", dto)
 	}
 }

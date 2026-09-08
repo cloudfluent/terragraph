@@ -63,3 +63,66 @@ while :; do sleep 0.05; done
 		t.Fatal("returned before runtime stopped")
 	}
 }
+
+func TestPlan_CancellationRemovesInspectionArtifact(t *testing.T) {
+	bp := writeRunFixture(t)
+	dir := filepath.Dir(bp)
+	writeFixtureFile(t, filepath.Join(dir, "terraform-fake"), `#!/bin/sh
+case "$1" in
+init) exit 0 ;;
+plan)
+ trap 'exit 0' INT TERM
+ for arg in "$@"; do
+  case "$arg" in -out=*) printf 'SENSITIVE_PLAN' > "${arg#-out=}" ;; esac
+ done
+ echo ready > "${0%/*}/started"
+ while :; do sleep 0.05; done
+ ;;
+*) exit 1 ;;
+esac
+`)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	root := NewRootCmd("test")
+	var out, diagnostics bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&diagnostics)
+	root.SetArgs([]string{"plan", "--blueprint", bp, "--output", "json"})
+	done := make(chan error, 1)
+	go func() { done <- root.ExecuteContext(ctx) }()
+	deadline := time.Now().Add(5 * time.Second)
+	ready := false
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(filepath.Join(dir, "started")); err == nil {
+			ready = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !ready {
+		cancel()
+		<-done
+		t.Fatal("inspection plan did not start")
+	}
+	plan := filepath.Join(dir, ".terragraph", "plans", "a.tfplan")
+	if data, err := os.ReadFile(plan); err != nil || string(data) != "SENSITIVE_PLAN" {
+		cancel()
+		<-done
+		t.Fatalf("plan = %q, %v", data, err)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("got = %v", err)
+		}
+	case <-time.After(7 * time.Second):
+		t.Fatal("cancelled inspection did not stop")
+	}
+	if _, err := os.Stat(plan); !os.IsNotExist(err) {
+		t.Fatalf("plan remains after cancellation: %v", err)
+	}
+	if !strings.Contains(out.String(), "\"code\":\"cancelled\"") {
+		t.Fatalf("missing cancellation diagnostic: %s", out.String())
+	}
+}

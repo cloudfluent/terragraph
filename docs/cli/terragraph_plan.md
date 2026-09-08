@@ -1,6 +1,6 @@
 ## terragraph plan
 
-Run terraform/tofu plan across the graph in dependency order
+Review node plans, actions, approval policy, and evidence limitations
 
 ```
 terragraph plan [flags]
@@ -9,6 +9,7 @@ terragraph plan [flags]
 ### Options
 
 ```
+      --approve string    default policy to assess: none, safe, or all (does not authorize apply) (default "safe")
   -h, --help              help for plan
       --node string       restrict to a single node
       --output string     output format: text or json (default "text")

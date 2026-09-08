@@ -62,10 +62,11 @@ func vendorResultsToDTO(results []vendor.Result) []vendorResultDTO {
 
 // nodeRunDTO is the JSON-facing shape of an engine.NodeRun. Err is an error interface, which encoding/json can't marshal usefully, so it flattens to an optional message the way vendorResultDTO does.
 type nodeRunDTO struct {
-	Node   string `json:"node"`
-	Level  int    `json:"level"`
-	Status string `json:"status"` // planned | applied | unchanged | destroyed | failed | "not run"
-	Error  string `json:"error,omitempty"`
+	Node   string         `json:"node"`
+	Level  int            `json:"level"`
+	Status string         `json:"status"` // planned | applied | unchanged | destroyed | failed | "not run"
+	Error  string         `json:"error,omitempty"`
+	Review *planReviewDTO `json:"review,omitempty"`
 }
 
 // runResult is the JSON payload for `terragraph plan|apply|destroy --output json`.
@@ -76,7 +77,7 @@ type runResult struct {
 func nodeRunsToDTO(runs []engine.NodeRun) []nodeRunDTO {
 	out := make([]nodeRunDTO, len(runs))
 	for i, r := range runs {
-		dto := nodeRunDTO{Node: r.Node, Level: r.Level, Status: r.Status}
+		dto := nodeRunDTO{Node: r.Node, Level: r.Level, Status: r.Status, Review: reviewToDTO(r.Review)}
 		if r.Err != nil {
 			dto.Error = r.Err.Error()
 		}

@@ -119,6 +119,9 @@ func TestObservation_RealHTTPReadOnly(t *testing.T) {
 	}))
 	defer server.Close()
 	dir := observationFixture(t, "http")
+	if err := os.WriteFile(filepath.Join(dir, "module", "terraform.tfstate"), []byte(observationState), 0600); err != nil {
+		t.Fatal(err)
+	}
 	blueprint := "node \"first\" {\n source = \"./module\"\n backend_config = { address = \"" + server.URL + "/state\" }\n}\nnode \"second\" {\n source = \"./module\"\n backend_config = { address = \"" + server.URL + "/missing\" }\n}\nnode \"denied\" {\n source = \"./module\"\n backend_config = { address = \"" + server.URL + "/denied\" }\n}\n"
 	if err := os.WriteFile(filepath.Join(dir, "blueprint.hcl"), []byte(blueprint), 0600); err != nil {
 		t.Fatal(err)
@@ -252,5 +255,31 @@ func TestObservation_RefusesUnverifiedPreparation(t *testing.T) {
 	s.engine.Graph.Nodes["first"].Env = map[string]string{"TF_WORKSPACE": "new"}
 	if got := s.Read("first", false); got.Diagnostic == nil || got.Diagnostic.Code != "unsupported_workspace" {
 		t.Fatalf("got = %+v", got)
+	}
+}
+
+func TestReviewPlan_RealOutputOnly(t *testing.T) {
+	binary := os.Getenv("TERRAGRAPH_TEST_RUNTIME")
+	if binary == "" {
+		t.Skip("set TERRAGRAPH_TEST_RUNTIME for real saved-plan evidence")
+	}
+	dir := observationFixture(t, "local")
+	e, err := Load(filepath.Join(dir, "blueprint.hcl"), exec.Binary(binary), io.Discard, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs, err := e.ReviewPlan(Options{Node: "first"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	review := runs[0].Review
+	if !review.Evidence || !*review.HasChanges || len(review.Resources) != 0 || len(review.Outputs) != 2 || review.PolicyDecision != "pass" {
+		t.Fatalf("got = %+v", review)
+	}
+	if _, err := os.Stat(e.planPath("first")); !os.IsNotExist(err) {
+		t.Fatal("inspection plan was not removed")
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".terragraph", "state", "first.tfstate")); !os.IsNotExist(err) {
+		t.Fatal("plan applied state")
 	}
 }

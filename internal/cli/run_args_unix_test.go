@@ -22,7 +22,11 @@ func TestRunCommands_RejectPositionalTargetsBeforeExecution(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), "--node") || !strings.Contains(err.Error(), "a") {
 				t.Fatalf("error = %v, want unsupported target with --node remedy", err)
 			}
-			if stdout != "" || stderr != "" {
+			if command == "plan" {
+				if !strings.Contains(stdout, "plan_arguments_failed") {
+					t.Fatalf("missing structured argument failure: %s", stdout)
+				}
+			} else if stdout != "" || stderr != "" {
 				t.Fatalf("stdout/stderr = %q/%q, want no execution output", stdout, stderr)
 			}
 			if _, err := os.Stat(filepath.Join(filepath.Dir(bp), ".terragraph", "lock")); !os.IsNotExist(err) {
@@ -49,6 +53,7 @@ func TestRunCommands_NodeSelectionStillControlsExecution(t *testing.T) {
 				writeFixtureFile(t, filepath.Join(dir, "terraform-fake"), `#!/bin/sh
 printf 'runtime called: %s\n' "$1" >&2
 case "$1" in
+  show) printf '%s\n' '{"format_version":"1.2","resource_changes":[]}'; exit 0 ;;
   init|plan|destroy) exit 0 ;;
   output) printf '{"id":{"value":"x"}}'; exit 0 ;;
 esac
@@ -63,7 +68,7 @@ exit 1
 				}
 				stdout, stderr, err := runCmdAt(t, bp, args...)
 				if selection == "missing" {
-					if err == nil || !strings.Contains(err.Error(), `unknown node "missing"`) || stdout != "" || strings.Contains(stderr, "runtime called") {
+					if err == nil || !strings.Contains(err.Error(), `unknown node "missing"`) || (command != "plan" && stdout != "") || strings.Contains(stderr, "runtime called") {
 						t.Fatalf("unknown node: stdout=%q stderr=%q error=%v", stdout, stderr, err)
 					}
 					return

@@ -2,20 +2,41 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 
 	"github.com/cloudfluent/terragraph/internal/engine"
 	"github.com/cloudfluent/terragraph/internal/exec"
+	"github.com/hashicorp/hcl/v2"
 	"github.com/spf13/cobra"
 )
 
+type sourceLocationDTO struct {
+	File   string `json:"file"`
+	Line   int    `json:"line"`
+	Column int    `json:"column"`
+}
+
+func errorLocation(err error) *sourceLocationDTO {
+	var diags hcl.Diagnostics
+	if errors.As(err, &diags) {
+		for _, d := range diags {
+			if d.Subject != nil {
+				return &sourceLocationDTO{File: d.Subject.Filename, Line: d.Subject.Start.Line, Column: d.Subject.Start.Column}
+			}
+		}
+	}
+	return nil
+}
+
 type diagnosticDTO struct {
-	Code    string `json:"code"`
-	Phase   string `json:"phase"`
-	Subject string `json:"subject"`
-	Message string `json:"message"`
-	Remedy  string `json:"remedy,omitempty"`
+	Source  *sourceLocationDTO `json:"source,omitempty"`
+	Code    string             `json:"code"`
+	Phase   string             `json:"phase"`
+	Subject string             `json:"subject"`
+	Message string             `json:"message"`
+	Remedy  string             `json:"remedy,omitempty"`
 }
 
 type observedOutputDTO struct {
@@ -81,7 +102,8 @@ func newObservationCmd(kind string, path *string, binaryOf func() exec.Binary) *
 		session, err := engine.OpenObservation(cmd.Context(), *path, binaryOf(), cmd.ErrOrStderr())
 		if err != nil {
 			// Parsing errors can quote source expressions; keep this public failure free of source values.
-			return failure("observation_load_failed", "load", "could not load or lock the blueprint", "check blueprint syntax, source directories, and local lock availability")
+			result.Diagnostics = append(result.Diagnostics, diagnosticDTO{Code: "observation_load_failed", Phase: "load", Subject: kind, Message: "could not load or lock the blueprint", Remedy: "check blueprint syntax, source directories, and local lock availability", Source: errorLocation(err)})
+			return finish(fmt.Errorf("%s: could not load or lock the blueprint; check syntax, source directories, and local lock availability", kind))
 		}
 		defer session.Close()
 		names, err := session.Names(node)

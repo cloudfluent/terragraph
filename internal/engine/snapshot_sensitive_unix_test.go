@@ -260,7 +260,7 @@ func TestResolveInputs_UnusableSnapshotPreservesLiveErrorForSensitiveOutput(t *t
 			}
 			t.Setenv("TG_OUTPUT_FAIL_NODE", "a")
 			_, err := e.Apply(Options{Node: "b", AutoApprove: true})
-			if err == nil || !strings.Contains(err.Error(), `upstream node "a" has not been applied yet`) || strings.Contains(err.Error(), "withheld") {
+			if err == nil || !strings.Contains(err.Error(), `reading existing outputs from upstream node "a" failed`) || strings.Contains(err.Error(), "withheld") {
 				t.Fatal("unusable snapshot replaced the original live-read diagnostic")
 			}
 			var exitErr *osexec.ExitError
@@ -287,7 +287,7 @@ func TestApply_SensitiveSnapshotOptOutLeavesExistingFileUntouched(t *testing.T) 
 	}
 	t.Setenv("TG_OUTPUT_FAIL_NODE", "a")
 	_, err = e.Apply(Options{Node: "b", AutoApprove: true})
-	if err == nil || !strings.Contains(err.Error(), `upstream node "a" has not been applied yet`) || strings.Contains(err.Error(), "withheld") {
+	if err == nil || !strings.Contains(err.Error(), `reading existing outputs from upstream node "a" failed`) || strings.Contains(err.Error(), "withheld") {
 		t.Fatal("opted-out Apply consulted a sensitive snapshot")
 	}
 }
@@ -312,7 +312,7 @@ func TestResolveInputs_StructurallyCorruptSnapshotPreservesLiveError(t *testing.
 			if !errors.As(err, &exitErr) {
 				t.Fatal("structurally corrupt snapshot discarded the live output error chain")
 			}
-			if !strings.Contains(err.Error(), `upstream node "a" has not been applied yet`) {
+			if !strings.Contains(err.Error(), `reading existing outputs from upstream node "a" failed`) {
 				t.Fatal("structurally corrupt snapshot replaced the original live-read diagnostic")
 			}
 		})

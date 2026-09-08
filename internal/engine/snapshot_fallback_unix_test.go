@@ -207,8 +207,8 @@ func TestResolveInputs_OptOutFailsDespiteSnapshotFile(t *testing.T) {
 	if err == nil {
 		t.Fatal("Apply succeeded with an opted-out graph and a failing live read, want the original resolution error")
 	}
-	if !strings.Contains(err.Error(), `upstream node "a" has not been applied yet`) {
-		t.Fatalf("Apply error = %q, want the original upstream-not-applied failure", err)
+	if !strings.Contains(err.Error(), `reading existing outputs from upstream node "a" failed`) {
+		t.Fatalf("Apply error = %q, want the original live-output failure", err)
 	}
 	if !strings.Contains(err.Error(), "exit status 1") {
 		t.Fatalf("Apply error = %q, want it wrapping the live read's own error", err)
@@ -231,8 +231,8 @@ func TestResolveInputs_CorruptSnapshotIsNotAnError(t *testing.T) {
 	if err == nil {
 		t.Fatal("Apply succeeded on a corrupt snapshot and a failing live read, want the original resolution error")
 	}
-	if !strings.Contains(err.Error(), `upstream node "a" has not been applied yet`) {
-		t.Fatalf("Apply error = %q, want the original upstream-not-applied failure, not a parse error", err)
+	if !strings.Contains(err.Error(), `reading existing outputs from upstream node "a" failed`) {
+		t.Fatalf("Apply error = %q, want the original live-output failure, not a parse error", err)
 	}
 }
 

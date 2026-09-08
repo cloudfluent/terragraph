@@ -45,7 +45,7 @@ On a fresh graph, a consumer cannot be planned if a data edge needs an upstream 
 
 Every `terragraph apply` starts each selected node with a fresh plan using `-refresh=true -detailed-exitcode`. A node with no changes skips apply. A changed node's plan is saved, inspected against its approval policy, shown for confirmation when required, and then applied **from that same saved plan**. A downstream node is planned when execution reaches it, using outputs available at that point.
 
-The saved plan lives at `<blueprint dir>/.terragraph/plans/<node>.tfplan` and is removed when the node finishes, including on failure. It contains input values in cleartext. Keep `.terragraph/` out of version control.
+The apply or review inspection saved plan lives at `<blueprint dir>/.terragraph/plans/<node>.tfplan` and is removed when the node finishes, including on failure. It contains input values in cleartext. Keep `.terragraph/` out of version control.
 
 Saved plans are protected with directory mode `0700` and file mode `0600` on Unix, and a protected current-user DACL on Windows. Unsafe parent permissions or ownership are refused; existing plan-directory permissions are tightened where safe. Plan symlinks, and symlinks or Windows reparse points at `.terragraph` or `plans/`, are also refused. Use a private checkout or correct the permissions named in the error; on macOS, an extended ACL may require the suggested `chmod -N` remedy. These checks protect against access by other ordinary users, not administrators or processes running as you.
 
@@ -306,3 +306,56 @@ successful empty stdout supplies absence evidence. A missing local state file
 is always unavailable, and backend/credential errors never mean “not applied”.
 These observations cannot prove a past apply succeeded or that there is no drift.
 The identity is a comparison token, not an authorization or freshness proof.
+
+## Structured plan review
+
+Both text and `plan --output json` inspect a protected ephemeral saved plan and
+derive their action summaries from the same normalized result. Existing
+`nodes[].node`, `level`, `status`, and `error` fields retain their meanings;
+a successful unchanged plan still has status `planned`. The additive JSON
+envelope now declares `schema_version: 1` and top-level `diagnostics`.
+Consumers must ignore unknown additive fields; incompatible meanings require
+a schema-version change. Apply/destroy envelopes are unchanged.
+
+Each node's `review` contains:
+
+- `evidence_available` and nullable `has_changes`. Missing evidence is null,
+  never an unchanged verdict.
+- Resource addresses and raw actions, a distinct replacement category, and
+  create/update/delete/replace/read/no-op/other counts. A replacement counts once
+  in `replace`, rather than also inflating create and delete.
+- Output names and actions separately. Output-only changes set `has_changes`;
+  before/after resource or output values are not included.
+- Effective `approve` and `policy_decision` (`pass`, `block`, or `unknown`).
+  `--approve` supplies the same default as apply; node/use declarations win.
+  This is an assessment, **not approval**. As in apply, output changes and reads
+  do not by themselves violate `approve=none`.
+- `input_basis` with source node, output, destination input, and `live` or
+  opted-in `snapshot` provenance, without values. Unavailable bootstrap evidence
+  can have source `unavailable`. `limitations` explain why existing upstream
+  outputs cannot predict values after a later upstream apply.
+- Structured diagnostics with code, phase, subject, message, and remedy.
+  Preparation failures also produce JSON before nodes start when possible.
+  Source locations retained as HCL diagnostics appear in an optional `source` object
+  (file, line, column); other existing parser context remains in messages.
+
+Standalone inspection never applies. Artifacts use the same `.terragraph/plans/`
+permissions and cleanup as apply, including failures and supported cancellation.
+A subsequent apply still creates and inspects a fresh plan and applies those
+same bytes under the existing confirmation, policy, and lock rules. Neither
+a JSON result nor a `pass` assessment authorizes it.
+
+Review planning continues independent branches after failures. Dependents of a
+failed selected node retain status `not run` with a dependency diagnostic;
+their counts and change verdict remain unknown. A missing output is distinct
+from credential, provider, and live-read failures. No placeholder values are
+injected. Snapshot fallback remains opt-in and is reported explicitly.
+This scheduling change applies to CLI plan review only; apply/destroy still stop
+before subsequent levels after a failed level.
+
+Saved-plan inspection is unavailable for remote/cloud execution backends.
+JSON reports `inspection_unsupported` and exits nonzero; text keeps native plan
+preview and clearly reports that structured evidence is unavailable. Runtime
+plan streams go to stderr in both formats; concise Terragraph summaries go to
+stdout. A policy block is a successful assessment and does not itself fail plan;
+preparation, input, provider, inspection, and cancellation errors exit nonzero.

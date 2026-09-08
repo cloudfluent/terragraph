@@ -217,12 +217,12 @@ func parseOneFile(path string, bp *Blueprint, seenNodes, seenGroups, seenUses, s
 	parser := hclparse.NewParser()
 	file, diags := parser.ParseHCL(src, path)
 	if diags.HasErrors() {
-		return fmt.Errorf("parsing blueprint file: %s", diags.Error())
+		return fmt.Errorf("parsing blueprint file: %w", diags)
 	}
 
 	content, diags := file.Body.Content(topSchema)
 	if diags.HasErrors() {
-		return fmt.Errorf("reading blueprint file: %s", diags.Error())
+		return fmt.Errorf("reading blueprint file: %w", diags)
 	}
 
 	for _, block := range content.Blocks {
