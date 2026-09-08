@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"sort"
 	"sync"
 
 	"github.com/cloudfluent/terragraph/internal/blueprint"
@@ -59,7 +60,7 @@ const (
 	StatusNotRun    = "not run"   // an earlier level failed, so the run never reached this node
 )
 
-// NodeRun records one node's outcome in a plan/apply/destroy run. Level is 1-based in execution order (reversed for destroy), so a caller can present results in run order without re-deriving the graph; Err is the node's own error, without the node %q prefix runLevels adds when failing the run.
+// NodeRun records one node's outcome in a plan/apply/destroy run; reports are sorted by Level, then Node, regardless of concurrent completion order. Level is 1-based in execution order (reversed for destroy), so a caller can present results in run order without re-deriving the graph; Err is the node's own error, without the node %q prefix runLevels adds when failing the run.
 type NodeRun struct {
 	Node   string
 	Level  int
@@ -71,7 +72,7 @@ type NodeRun struct {
 type nodeAction func(name string, applied map[string]map[string]any, out io.Writer) (outputs map[string]any, status string, err error)
 
 // runLevels is the shared execution loop behind Plan/Apply/Destroy: it walks the graph (or a single node) level by level, running up to opts.Parallelism nodes within a level concurrently. Nodes in the same level are guaranteed to have no edge between them, so a read-only snapshot of outputs applied so far is safe to share across the level's goroutines, and results are merged back only once the whole level completes (no data races). If any node in a level errors, already-started siblings finish but the next level never starts; the returned runs record those unreached nodes as StatusNotRun so a report covers the whole selection rather than stopping where execution did. afterLevel, if non-nil, runs once each level completes successfully; an error from it aborts the run the same way.
-func (e *Engine) runLevels(opts Options, reverse bool, action nodeAction, afterLevel func() error) ([]NodeRun, error) {
+func (e *Engine) runLevels(opts Options, reverse bool, action nodeAction, afterLevel func() error) (runs []NodeRun, err error) {
 	levels, err := e.executionLevels(opts, reverse)
 	if err != nil {
 		return nil, err
@@ -81,7 +82,16 @@ func (e *Engine) runLevels(opts Options, reverse bool, action nodeAction, afterL
 	var mu sync.Mutex
 	var outMu sync.Mutex
 	buffered := opts.parallelism() > 1
-	runs := make([]NodeRun, 0)
+	runs = make([]NodeRun, 0)
+	// Sort the final returned slice so failed runs include their not-run nodes in the same deterministic order as successful runs.
+	defer func() {
+		sort.Slice(runs, func(i, j int) bool {
+			if runs[i].Level != runs[j].Level {
+				return runs[i].Level < runs[j].Level
+			}
+			return runs[i].Node < runs[j].Node
+		})
+	}()
 
 	for li, level := range levels {
 		mu.Lock()

@@ -1,8 +1,10 @@
 package engine
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"testing"
 
 	"github.com/cloudfluent/terragraph/internal/blueprint"
@@ -49,5 +51,80 @@ func TestRunLevels_ReportsSuccessStatuses(t *testing.T) {
 	}
 	if runs[0].Level != 1 || runs[1].Level != 2 {
 		t.Fatalf("got levels = %d,%d, want 1,2", runs[0].Level, runs[1].Level)
+	}
+}
+
+func TestRunLevels_ReportsInExecutionOrder(t *testing.T) {
+	cases := []struct {
+		name           string
+		reverse        bool
+		failNode       bool
+		failAfterLevel bool
+	}{
+		{name: "success"},
+		{name: "destroy order", reverse: true},
+		{name: "node failure", failNode: true},
+		{name: "afterLevel failure", failAfterLevel: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newTestEngine([]string{"a", "b", "c", "d", "e", "z"}, []blueprint.Edge{
+				orderEdge("d", "a"), orderEdge("e", "b"), orderEdge("z", "c"),
+			})
+			first, second := []string{"d", "e", "z"}, []string{"a", "b", "c"}
+			status := StatusPlanned
+			if tc.reverse {
+				first, second = second, first
+				status = StatusDestroyed
+			}
+
+			failure := errors.New("boom")
+			lastStarted := make(chan struct{})
+			action := func(name string, applied map[string]map[string]any, out io.Writer) (map[string]any, string, error) {
+				// At parallelism 2, the middle node must be recorded before the last can start and release the first, forcing completion order away from name order without sleeps.
+				if name == first[0] {
+					<-lastStarted
+				}
+				if name == first[2] {
+					close(lastStarted)
+				}
+				if tc.failNode && name == first[1] {
+					return nil, "", failure
+				}
+				return nil, status, nil
+			}
+			var afterLevel func() error
+			if tc.failAfterLevel {
+				afterLevel = func() error { return failure }
+			}
+
+			runs, err := e.runLevels(Options{Parallelism: 2}, tc.reverse, action, afterLevel)
+			var wantErr error
+			if tc.failNode || tc.failAfterLevel {
+				wantErr = failure
+			}
+			if !errors.Is(err, wantErr) {
+				t.Fatalf("got error = %v, want %v", err, wantErr)
+			}
+
+			want := make([]NodeRun, 0, len(first)+len(second))
+			for _, name := range first {
+				run := NodeRun{Node: name, Level: 1, Status: status}
+				if tc.failNode && name == first[1] {
+					run.Status, run.Err = StatusFailed, failure
+				}
+				want = append(want, run)
+			}
+			for _, name := range second {
+				run := NodeRun{Node: name, Level: 2, Status: status}
+				if wantErr != nil {
+					run.Status = StatusNotRun
+				}
+				want = append(want, run)
+			}
+			if !reflect.DeepEqual(runs, want) {
+				t.Fatalf("got = %+v, want %+v", runs, want)
+			}
+		})
 	}
 }
