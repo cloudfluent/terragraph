@@ -1,6 +1,9 @@
 package blueprint
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseFile_NodeEnv(t *testing.T) {
 	path := writeTemp(t, `
@@ -78,5 +81,16 @@ use "g" {
 	}
 	if bp.Uses[0].Env["AWS_PROFILE"] != "prod" {
 		t.Fatalf("unexpected use env: %+v", bp.Uses[0].Env)
+	}
+}
+
+func TestParseFile_NodeEnvListRejected(t *testing.T) {
+	path := writeTemp(t, `node "a" {
+  source = "./a"
+  env = ["value"]
+}`)
+	_, err := ParseFile(path)
+	if err == nil || !strings.Contains(err.Error(), "env must be a map/object of strings") || !strings.Contains(err.Error(), path) {
+		t.Fatalf("error = %v, want env map/object error with file location", err)
 	}
 }

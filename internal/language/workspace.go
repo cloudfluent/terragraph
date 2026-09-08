@@ -247,7 +247,7 @@ func literalAttribute(block *hclsyntax.Block, name string) string {
 		return ""
 	}
 	value, diags := attr.Expr.Value(nil)
-	if diags.HasErrors() || !value.IsKnown() || value.Type() != ctyString {
+	if diags.HasErrors() || !value.IsKnown() || value.IsNull() || value.Type() != ctyString {
 		return ""
 	}
 	return value.AsString()

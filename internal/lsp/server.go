@@ -22,8 +22,11 @@ import (
 // Serve runs one LSP connection until the client closes stdin.
 func Serve(ctx context.Context, in io.Reader, out io.Writer) error {
 	server := &server{workspace: language.NewWorkspace(""), documents: map[string][]byte{}}
+	// NewServer starts dispatching immediately, so diagnostic handlers must wait until their client is installed.
+	server.mu.Lock()
 	_, conn, client := protocol.NewServer(ctx, server, jsonrpc2.NewStream(stdio{Reader: in, Writer: out}))
 	server.client = client
+	server.mu.Unlock()
 	<-conn.Done()
 	return conn.Err()
 }
@@ -71,10 +74,11 @@ func (s *server) DidClose(_ context.Context, params *protocol.DidCloseTextDocume
 	path := filePath(string(params.TextDocument.URI))
 	s.mu.Lock()
 	delete(s.documents, path)
+	client := s.client
 	s.mu.Unlock()
 	s.workspace.CloseDocument(path)
-	if s.client != nil {
-		_ = s.client.PublishDiagnostics(context.Background(), &protocol.PublishDiagnosticsParams{URI: params.TextDocument.URI, Diagnostics: []protocol.Diagnostic{}})
+	if client != nil {
+		_ = client.PublishDiagnostics(context.Background(), &protocol.PublishDiagnosticsParams{URI: params.TextDocument.URI, Diagnostics: []protocol.Diagnostic{}})
 	}
 	return nil
 }
@@ -137,7 +141,10 @@ func (s *server) set(rawURI string, text []byte) {
 }
 
 func (s *server) publishDiagnostics(ctx context.Context, documentURI uri.URI) {
-	if s.client == nil {
+	s.mu.RLock()
+	client := s.client
+	s.mu.RUnlock()
+	if client == nil {
 		return
 	}
 	path := filePath(string(documentURI))
@@ -152,7 +159,7 @@ func (s *server) publishDiagnostics(ctx context.Context, documentURI uri.URI) {
 			Message:  protocol.String(item.Message),
 		})
 	}
-	_ = s.client.PublishDiagnostics(ctx, &protocol.PublishDiagnosticsParams{URI: documentURI, Diagnostics: diagnostics})
+	_ = client.PublishDiagnostics(ctx, &protocol.PublishDiagnosticsParams{URI: documentURI, Diagnostics: diagnostics})
 }
 func filePath(raw string) string {
 	platform := uri.PlatformPOSIX

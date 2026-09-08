@@ -417,14 +417,14 @@ func parseVendorBlock(block *hcl.Block) (*VendorConfig, error) {
 
 	if attr, ok := content.Attributes["directory"]; ok {
 		val, diags := attr.Expr.Value(nil)
-		if diags.HasErrors() || val.Type() != cty.String {
+		if diags.HasErrors() || val.IsNull() || !val.IsKnown() || val.Type() != cty.String {
 			return nil, fmt.Errorf("%s: directory must be a literal string", attr.Range)
 		}
 		vc.Directory = val.AsString()
 	}
 	if attr, ok := content.Attributes["manifest_file"]; ok {
 		val, diags := attr.Expr.Value(nil)
-		if diags.HasErrors() || val.Type() != cty.String {
+		if diags.HasErrors() || val.IsNull() || !val.IsKnown() || val.Type() != cty.String {
 			return nil, fmt.Errorf("%s: manifest_file must be a literal string", attr.Range)
 		}
 		vc.ManifestFile = val.AsString()
@@ -444,7 +444,7 @@ func parseTFVarsBlock(block *hcl.Block) (*TFVarsConfig, error) {
 
 	if attr, ok := content.Attributes["location"]; ok {
 		val, diags := attr.Expr.Value(nil)
-		if diags.HasErrors() || val.Type() != cty.String {
+		if diags.HasErrors() || val.IsNull() || !val.IsKnown() || val.Type() != cty.String {
 			return nil, fmt.Errorf("%s: location must be a literal string", attr.Range)
 		}
 		loc := TFVarsLocation(val.AsString())
@@ -466,7 +466,7 @@ func parseContractsBlock(block *hcl.Block) (string, error) {
 
 	attr := content.Attributes["mode"]
 	val, diags := attr.Expr.Value(nil)
-	if diags.HasErrors() || val.Type() != cty.String {
+	if diags.HasErrors() || val.IsNull() || !val.IsKnown() || val.Type() != cty.String {
 		return "", fmt.Errorf("%s: mode must be a literal string", attr.Range)
 	}
 	mode := val.AsString()
@@ -567,7 +567,7 @@ func parseLockS3Block(block *hcl.Block) (*S3Lock, error) {
 	for _, name := range []string{"bucket", "key", "region"} {
 		attr := content.Attributes[name]
 		val, diags := attr.Expr.Value(nil)
-		if diags.HasErrors() || val.Type() != cty.String {
+		if diags.HasErrors() || val.IsNull() || !val.IsKnown() || val.Type() != cty.String {
 			return nil, fmt.Errorf("%s: %s must be a literal string", attr.Range, name)
 		}
 		if val.AsString() == "" {
@@ -597,7 +597,7 @@ func parseRuntimeBlock(block *hcl.Block) (Runtime, error) {
 
 	binaryAttr := content.Attributes["binary"]
 	binaryVal, diags := binaryAttr.Expr.Value(nil)
-	if diags.HasErrors() || binaryVal.Type() != cty.String {
+	if diags.HasErrors() || binaryVal.IsNull() || !binaryVal.IsKnown() || binaryVal.Type() != cty.String {
 		return Runtime{}, fmt.Errorf("%s: binary must be a literal string", binaryAttr.Range)
 	}
 	if binaryVal.AsString() == "" {
@@ -608,7 +608,7 @@ func parseRuntimeBlock(block *hcl.Block) (Runtime, error) {
 
 	if attr, ok := content.Attributes["version"]; ok {
 		val, diags := attr.Expr.Value(nil)
-		if diags.HasErrors() || val.Type() != cty.String {
+		if diags.HasErrors() || val.IsNull() || !val.IsKnown() || val.Type() != cty.String {
 			return Runtime{}, fmt.Errorf("%s: version must be a literal string", attr.Range)
 		}
 		rt.Version = val.AsString()
@@ -671,8 +671,8 @@ func parseNodeBlock(block *hcl.Block) (Node, error) {
 	if diags.HasErrors() {
 		return Node{}, fmt.Errorf("%s: source must be a literal string: %s", sourceAttr.Range, diags.Error())
 	}
-	if val.Type() != cty.String {
-		return Node{}, fmt.Errorf("%s: source must be a string", sourceAttr.Range)
+	if val.IsNull() || !val.IsKnown() || val.Type() != cty.String {
+		return Node{}, fmt.Errorf("%s: source must be a non-null string", sourceAttr.Range)
 	}
 
 	var backendConfig map[string]string
@@ -732,7 +732,7 @@ func parseApproveAttr(attr *hcl.Attribute) (Approve, error) {
 	if diags.HasErrors() {
 		return "", fmt.Errorf("%s: approve must be a literal string: %s", attr.Range, diags.Error())
 	}
-	if val.Type() != cty.String {
+	if val.IsNull() || !val.IsKnown() || val.Type() != cty.String {
 		return "", fmt.Errorf("%s: approve must be a string", attr.Range)
 	}
 	a, err := ParseApprove(val.AsString())
@@ -751,7 +751,7 @@ func parseVarsAttr(attr *hcl.Attribute) (map[string]any, error) {
 			attr.Range, diags.Error(),
 		)
 	}
-	if !val.Type().IsObjectType() && !val.Type().IsMapType() {
+	if val.IsNull() || !val.IsKnown() || (!val.Type().IsObjectType() && !val.Type().IsMapType()) {
 		return nil, fmt.Errorf("%s: vars must be an object/map of variable name to value", attr.Range)
 	}
 
@@ -791,7 +791,7 @@ func parseStringMapAttr(attr *hcl.Attribute, attrName string) (map[string]string
 	if diags.HasErrors() {
 		return nil, fmt.Errorf("%s: %s must be a literal map of strings: %s", attr.Range, attrName, diags.Error())
 	}
-	if !val.CanIterateElements() {
+	if val.IsNull() || !val.IsKnown() || (!val.Type().IsMapType() && !val.Type().IsObjectType()) {
 		return nil, fmt.Errorf("%s: %s must be a map/object of strings", attr.Range, attrName)
 	}
 
@@ -1107,7 +1107,7 @@ func parseUseBlock(block *hcl.Block) (Use, error) {
 
 	asAttr := content.Attributes["as"]
 	asVal, diags := asAttr.Expr.Value(nil)
-	if diags.HasErrors() || asVal.Type() != cty.String {
+	if diags.HasErrors() || asVal.IsNull() || !asVal.IsKnown() || asVal.Type() != cty.String {
 		return Use{}, fmt.Errorf("%s: as must be a literal string", asAttr.Range)
 	}
 	if err := validateName("use instance", asVal.AsString(), asAttr.Range); err != nil {
@@ -1116,7 +1116,7 @@ func parseUseBlock(block *hcl.Block) (Use, error) {
 
 	sourceAttr := content.Attributes["source"]
 	sourceVal, diags := sourceAttr.Expr.Value(nil)
-	if diags.HasErrors() || sourceVal.Type() != cty.String {
+	if diags.HasErrors() || sourceVal.IsNull() || !sourceVal.IsKnown() || sourceVal.Type() != cty.String {
 		return Use{}, fmt.Errorf("%s: source must be a literal string", sourceAttr.Range)
 	}
 
