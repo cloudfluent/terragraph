@@ -80,7 +80,7 @@ func (e *Engine) gateError(name string, level blueprint.Approve, blocked []exec.
 	for _, c := range blocked {
 		fmt.Fprintf(&b, "\n  %s  %s", c.Address, describeAction(c))
 	}
-	b.WriteString("\n\nStopped before applying, so no later level ran.")
+	b.WriteString("\n\nStopped before applying this node; its selected dependents will not run.")
 	if e.Graph.Nodes[name].Approve != "" {
 		fmt.Fprintf(&b, "\nIf this is intended, set approve = %q on the node or enclosing use declaration that sets this policy.", blueprint.ApproveAll)
 	} else {

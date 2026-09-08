@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"io"
+	"time"
 
 	"github.com/cloudfluent/terragraph/internal/engine"
 	"github.com/cloudfluent/terragraph/internal/graph"
@@ -62,11 +63,15 @@ func vendorResultsToDTO(results []vendor.Result) []vendorResultDTO {
 
 // nodeRunDTO is the JSON-facing shape of an engine.NodeRun. Err is an error interface, which encoding/json can't marshal usefully, so it flattens to an optional message the way vendorResultDTO does.
 type nodeRunDTO struct {
-	Node   string         `json:"node"`
-	Level  int            `json:"level"`
-	Status string         `json:"status"` // planned | applied | unchanged | destroyed | failed | "not run"
-	Error  string         `json:"error,omitempty"`
-	Review *planReviewDTO `json:"review,omitempty"`
+	Node       string         `json:"node"`
+	Level      int            `json:"level"`
+	Status     string         `json:"status"` // planned | applied | unchanged | destroyed | failed | "not run"
+	Error      string         `json:"error,omitempty"`
+	Review     *planReviewDTO `json:"review,omitempty"`
+	Reason     string         `json:"reason,omitempty"`
+	BlockedBy  []string       `json:"blocked_by,omitempty"`
+	StartedAt  string         `json:"started_at,omitempty"`
+	DurationMS int64          `json:"duration_ms"`
 }
 
 // runResult is the JSON payload for `terragraph plan|apply|destroy --output json`.
@@ -77,7 +82,10 @@ type runResult struct {
 func nodeRunsToDTO(runs []engine.NodeRun) []nodeRunDTO {
 	out := make([]nodeRunDTO, len(runs))
 	for i, r := range runs {
-		dto := nodeRunDTO{Node: r.Node, Level: r.Level, Status: r.Status, Review: reviewToDTO(r.Review)}
+		dto := nodeRunDTO{Node: r.Node, Level: r.Level, Status: r.Status, Review: reviewToDTO(r.Review), Reason: r.Reason, BlockedBy: r.BlockedBy, DurationMS: r.Duration.Milliseconds()}
+		if !r.StartedAt.IsZero() {
+			dto.StartedAt = r.StartedAt.Format(time.RFC3339Nano)
+		}
 		if r.Err != nil {
 			dto.Error = r.Err.Error()
 		}

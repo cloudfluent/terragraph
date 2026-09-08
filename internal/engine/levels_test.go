@@ -2,6 +2,7 @@ package engine
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"sync/atomic"
@@ -49,7 +50,7 @@ func TestRunLevels_RespectsParallelismCap(t *testing.T) {
 	e := newTestEngine([]string{"a", "b", "c", "d"}, nil)
 
 	var current, max int64
-	action := func(name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
+	action := func(ctx context.Context, name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
 		n := atomic.AddInt64(&current, 1)
 		for {
 			m := atomic.LoadInt64(&max)
@@ -78,7 +79,7 @@ func TestRunLevels_LevelIsABarrier(t *testing.T) {
 	e := newTestEngine([]string{"a", "b"}, []blueprint.Edge{orderEdge("a", "b")})
 
 	var aFinished atomic.Bool
-	action := func(name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
+	action := func(ctx context.Context, name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
 		if name == "a" {
 			time.Sleep(30 * time.Millisecond)
 			aFinished.Store(true)
@@ -100,7 +101,7 @@ func TestRunLevels_ErrorInLevelStopsNextLevel(t *testing.T) {
 	e := newTestEngine([]string{"a", "b", "c"}, []blueprint.Edge{orderEdge("a", "b")})
 
 	var bRan atomic.Bool
-	action := func(name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
+	action := func(ctx context.Context, name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
 		switch name {
 		case "c":
 			return nil, "", fmt.Errorf("boom")
@@ -122,7 +123,7 @@ func TestRunLevels_ErrorInLevelStopsNextLevel(t *testing.T) {
 func TestRunLevels_AppliedSnapshotPropagatesAcrossLevels(t *testing.T) {
 	e := newTestEngine([]string{"a", "b"}, []blueprint.Edge{orderEdge("a", "b")})
 
-	action := func(name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
+	action := func(ctx context.Context, name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
 		if name == "a" {
 			return exec.Outputs{"x": {Value: "from-a"}}, "", nil
 		}
@@ -142,7 +143,7 @@ func TestRunLevels_AfterLevelRunsOncePerLevel(t *testing.T) {
 	// levels: [a, c], [b] -> afterLevel should fire twice.
 
 	var calls int64
-	action := func(name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
+	action := func(ctx context.Context, name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
 		return nil, "", nil
 	}
 	afterLevel := func() error {
@@ -162,7 +163,7 @@ func TestRunLevels_AfterLevelErrorAbortsRun(t *testing.T) {
 	e := newTestEngine([]string{"a", "b"}, []blueprint.Edge{orderEdge("a", "b")})
 
 	var bRan atomic.Bool
-	action := func(name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
+	action := func(ctx context.Context, name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
 		if name == "b" {
 			bRan.Store(true)
 		}

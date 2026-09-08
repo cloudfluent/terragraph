@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -25,6 +26,10 @@ func (e *Engine) plan(opts Options, inspect, allowTextFallback bool) ([]NodeRun,
 		return nil, err
 	}
 	defer unlock()
+	opts, err = e.prepareOptions(opts, "plan")
+	if err != nil {
+		return nil, err
+	}
 
 	if !inspect {
 		if err := e.checkRuntimeFiles(opts); err != nil {
@@ -41,7 +46,8 @@ func (e *Engine) plan(opts Options, inspect, allowTextFallback bool) ([]NodeRun,
 	e.logger().Info("plan starting", "node", opts.Node, "parallelism", opts.parallelism())
 	var reviewMu sync.Mutex
 	reviews := map[string]*PlanReview{}
-	runs, runErr := e.runLevels(opts, false, func(name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
+	runs, runErr := e.runLevels(opts, false, func(ctx context.Context, name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
+		e := e.nodeEngine(ctx, out, opts.OutputRetries)
 		review := newPlanReview(e.approveFor(name, opts.Approve))
 		if inspect {
 			reviewMu.Lock()
@@ -75,7 +81,7 @@ func (e *Engine) plan(opts Options, inspect, allowTextFallback bool) ([]NodeRun,
 		// Removed however this node exits: the file holds resolved input values in cleartext, and the next run rewrites it from scratch anyway.
 		defer func() { _ = os.Remove(varsPath) }()
 
-		r := &exec.Runner{Context: e.context(), Binary: e.runtimeFor(name), Dir: nodeDir, DataDir: e.dataDir(name), Env: e.envFor(name), Stdout: out, Stderr: out}
+		r := &exec.Runner{Context: e.context(), Binary: e.runtimeFor(name), Dir: nodeDir, DataDir: e.dataDir(name), OutputRetries: opts.OutputRetries, Env: e.envFor(name), Stdout: out, Stderr: out}
 		if err := r.Init(e.Graph.Nodes[name].BackendConfig); err != nil {
 			return fail("initialization_failed", "init", fmt.Errorf("init: %w", err))
 		}
@@ -111,7 +117,7 @@ func (e *Engine) plan(opts Options, inspect, allowTextFallback bool) ([]NodeRun,
 			return fail("plan_failed", "plan", fmt.Errorf("plan: %w", err))
 		}
 		return nil, StatusPlanned, nil
-	}, nil, inspect)
+	}, nil, inspect && !opts.FailFast)
 	if inspect {
 		for i := range runs {
 			review := reviews[runs[i].Node]

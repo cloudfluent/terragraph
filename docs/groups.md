@@ -173,3 +173,13 @@ This allows create and update actions by default for the instance's nodes. A nod
 `terragraph vendor` fetches remote node sources inside local groups into the calling blueprint's vendor directory under their qualified names, such as `vendor/checkout.vpc/` or `vendor/prod.inner.vpc/`. Run `terragraph vendor --node prod.inner.vpc` to fetch one leaf. Each instance gets its own copy; the group's source directory is not modified.
 
 The root blueprint's `vendor.directory` and `vendor.manifest_file` control these copies and their manifest. Existing group-local copies remain usable when no root qualified copy exists. Refreshes publish into the root vendor directory and check local state before changing execution directories; see [vendoring](vendoring.md) for compatibility and refresh rules.
+
+## Selecting expanded nodes for execution
+
+Run selectors use fully qualified leaf names, for example
+`terragraph apply --node checkout.cluster --include-dependencies --preview`.
+Repeat `--node` to select several leaves; a `use` instance name is not a wildcard.
+Ancestor/descendant expansion follows the resolved leaf DAG across group boundaries.
+`--pool` membership and `--timeout` overrides use the same qualified leaf names.
+See [execution scope and scheduling](execution-model.md#selecting-nodes) for
+partial destroy checks, failure policy, and recorded-run recovery.

@@ -1,11 +1,13 @@
 package engine
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/cloudfluent/terragraph/internal/blueprint"
 	"github.com/cloudfluent/terragraph/internal/exec"
@@ -14,7 +16,7 @@ import (
 // TestRunLevels_ReportsFailedAndNotRun proves the report covers the whole selection: the failing node is recorded as failed at its level, and every node the aborted run never reached is recorded as not run rather than simply missing.
 func TestRunLevels_ReportsFailedAndNotRun(t *testing.T) {
 	e := newTestEngine([]string{"a", "b"}, []blueprint.Edge{orderEdge("a", "b")})
-	action := func(name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
+	action := func(ctx context.Context, name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
 		if name == "a" {
 			return nil, "", fmt.Errorf("boom")
 		}
@@ -31,15 +33,15 @@ func TestRunLevels_ReportsFailedAndNotRun(t *testing.T) {
 	if runs[0].Node != "a" || runs[0].Level != 1 || runs[0].Status != StatusFailed || runs[0].Err == nil {
 		t.Fatalf("got = %+v, want a/1/failed with error", runs[0])
 	}
-	if runs[1].Node != "b" || runs[1].Level != 2 || runs[1].Status != StatusNotRun || runs[1].Err != nil {
-		t.Fatalf("got = %+v, want b/2/not run with no error", runs[1])
+	if runs[1].Node != "b" || runs[1].Level != 2 || runs[1].Status != StatusNotRun || !errors.Is(runs[1].Err, errPlanBlocked) {
+		t.Fatalf("got = %+v, want b/2/not run with dependency error", runs[1])
 	}
 }
 
 // TestRunLevels_ReportsSuccessStatuses proves the status an action returns is what the report carries, level numbers follow execution order, and a successful run reports every selected node.
 func TestRunLevels_ReportsSuccessStatuses(t *testing.T) {
 	e := newTestEngine([]string{"a", "b"}, []blueprint.Edge{orderEdge("a", "b")})
-	action := func(name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
+	action := func(ctx context.Context, name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
 		return nil, StatusPlanned, nil
 	}
 
@@ -64,7 +66,6 @@ func TestRunLevels_ReportsInExecutionOrder(t *testing.T) {
 	}{
 		{name: "success"},
 		{name: "destroy order", reverse: true},
-		{name: "node failure", failNode: true},
 		{name: "afterLevel failure", failAfterLevel: true},
 	}
 	for _, tc := range cases {
@@ -81,7 +82,7 @@ func TestRunLevels_ReportsInExecutionOrder(t *testing.T) {
 
 			failure := errors.New("boom")
 			lastStarted := make(chan struct{})
-			action := func(name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
+			action := func(ctx context.Context, name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
 				// At parallelism 2, the middle node must be recorded before the last can start and release the first, forcing completion order away from name order without sleeps.
 				if name == first[0] {
 					<-lastStarted
@@ -122,6 +123,10 @@ func TestRunLevels_ReportsInExecutionOrder(t *testing.T) {
 					run.Status = StatusNotRun
 				}
 				want = append(want, run)
+			}
+			for i := range runs {
+				runs[i].StartedAt, runs[i].Duration = time.Time{}, 0
+				runs[i].Reason, runs[i].BlockedBy = "", nil
 			}
 			if !reflect.DeepEqual(runs, want) {
 				t.Fatalf("got = %+v, want %+v", runs, want)

@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -19,11 +20,19 @@ func (e *Engine) Apply(opts Options) ([]NodeRun, error) {
 		return nil, fmt.Errorf("--parallelism %d needs --auto-approve: output from concurrent nodes is buffered, so there is nowhere to ask for approval", opts.parallelism())
 	}
 
+	if err := checkTimedApproval(opts); err != nil {
+		return nil, err
+	}
+
 	unlock, err := e.lockRun()
 	if err != nil {
 		return nil, err
 	}
 	defer unlock()
+	opts, err = e.prepareOptions(opts, "apply")
+	if err != nil {
+		return nil, err
+	}
 
 	if err := e.checkRuntimeFiles(opts); err != nil {
 		return nil, err
@@ -35,9 +44,13 @@ func (e *Engine) Apply(opts Options) ([]NodeRun, error) {
 	}
 	defer unlockGraph()
 
+	if !opts.AutoApprove && e.Stdin != nil {
+		e.approvals()
+	}
 	e.logger().Info("apply starting", "node", opts.Node, "parallelism", opts.parallelism(), "autoApprove", opts.AutoApprove)
 
-	return e.runLevels(opts, false, func(name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
+	return e.runLevels(opts, false, func(ctx context.Context, name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
+		e := e.nodeEngine(ctx, out, opts.OutputRetries)
 		vars, err := e.resolveInputs(name, applied)
 		if err != nil {
 			return nil, "", err
@@ -51,7 +64,7 @@ func (e *Engine) Apply(opts Options) ([]NodeRun, error) {
 		defer func() { _ = os.Remove(varsPath) }()
 		varFileArgs := exec.VarFileArgs(varsPath, vars)
 
-		r := &exec.Runner{Context: e.context(), Binary: e.runtimeFor(name), Dir: e.nodeDir(name), DataDir: e.dataDir(name), Env: e.envFor(name), Stdout: out, Stderr: out}
+		r := &exec.Runner{Context: e.context(), Binary: e.runtimeFor(name), Dir: e.nodeDir(name), DataDir: e.dataDir(name), OutputRetries: opts.OutputRetries, Env: e.envFor(name), Stdout: out, Stderr: out}
 		if err := r.Init(e.Graph.Nodes[name].BackendConfig); err != nil {
 			return nil, "", fmt.Errorf("init: %w", err)
 		}
@@ -93,7 +106,7 @@ func (e *Engine) Apply(opts Options) ([]NodeRun, error) {
 		}
 		_, _ = fmt.Fprintf(out, "node %s: %s\n", name, summarizeChanges(changeSet))
 
-		// Levels run in order, so refusing here means nothing downstream runs either: the cascade is cut at the node that caused it rather than audited after the fact.
+		// A refused node never releases its selected consumers, so downstream execution cannot outrun the approval gate.
 		level := e.approveFor(name, opts.Approve)
 		if blocked := notPermitted(changeSet, level); len(blocked) > 0 {
 			return nil, "", e.gateError(name, level, blocked)

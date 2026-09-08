@@ -35,7 +35,8 @@ type Engine struct {
 	// Logger receives internal-machinery diagnostics (node dispatch, plan verdicts, load steps); it never carries a command's actual result, which always goes through Stdout/Stderr directly. Nil is valid and discards everything, so callers that don't care about logging (including every existing test that builds an Engine by hand) need no changes.
 	Logger *slog.Logger
 
-	stdin *bufio.Reader
+	stdin         *bufio.Reader
+	outputRetries int
 	// runLock is the lock LoadLocked already holds. lockRun must not Close it; the LoadLocked caller owns the lifetime.
 	runLock *runlock.Lock
 }
@@ -248,7 +249,7 @@ func (e *Engine) dataDir(name string) string {
 
 // runner builds a Runner for internal, non-buffered use (reading an upstream node's already-applied outputs). The per-node runners used for the actual plan/apply/destroy commands (see plan.go/apply.go/destroy.go) are built separately, against that node's own buffered output writer.
 func (e *Engine) runner(name string) *exec.Runner {
-	return &exec.Runner{Context: e.context(), Binary: e.runtimeFor(name), Dir: e.nodeDir(name), DataDir: e.dataDir(name), Env: e.envFor(name), Stdout: e.Stdout, Stderr: e.Stderr}
+	return &exec.Runner{Context: e.context(), Binary: e.runtimeFor(name), Dir: e.nodeDir(name), DataDir: e.dataDir(name), OutputRetries: e.outputRetries, Env: e.envFor(name), Stdout: e.Stdout, Stderr: e.Stderr}
 }
 
 // envFor returns name's fully resolved extra environment variables (see graph.Node.Env): whatever an enclosing Use.Env cascade contributed, already merged with the node's own Env. Unlike runtimeFor, there is no further CLI-level fallback layer to apply on top: env has no CLI equivalent, so whatever the graph already resolved is final.
@@ -427,4 +428,12 @@ func (e *Engine) stateOrphans() []graph.Problem {
 		})
 	}
 	return problems
+}
+
+// nodeEngine shares immutable graph data and the sequential approval reader while isolating a node's context and buffered diagnostics.
+func (e *Engine) nodeEngine(ctx context.Context, out io.Writer, outputRetries int) *Engine {
+	node := *e
+	node.Context, node.Stdout, node.Stderr = ctx, out, out
+	node.outputRetries = outputRetries
+	return &node
 }

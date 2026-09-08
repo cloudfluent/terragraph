@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -137,6 +138,18 @@ func finishRun(cmd *cobra.Command, output string, runs []engine.NodeRun, err err
 			return werr
 		}
 	}
+	if output == "text" {
+		for _, run := range runs {
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s: %s; duration=%s", run.Node, run.Status, run.Duration.Round(time.Millisecond))
+			if run.Reason != "" {
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "; reason=%s", run.Reason)
+			}
+			if len(run.BlockedBy) > 0 {
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "; blocked by %s", strings.Join(run.BlockedBy, ", "))
+			}
+			_, _ = fmt.Fprintln(cmd.OutOrStdout())
+		}
+	}
 	return err
 }
 
@@ -250,25 +263,37 @@ func validateRunArgs(cmd *cobra.Command, args []string) error {
 }
 
 func newPlanCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf func() *slog.Logger) *cobra.Command {
-	var node, output, approve string
-	var parallelism int
+	var output, approve string
+	var execution executionFlags
 	cmd := &cobra.Command{
 		Use:   "plan",
 		Short: "Review node plans, actions, approval policy, and evidence limitations",
 		RunE: func(cmd *cobra.Command, args []string) (resultErr error) {
 			var runs []engine.NodeRun
 			phase := "arguments"
-			defer func() { resultErr = finishPlan(cmd, output, runs, phase, resultErr) }()
+			defer func() {
+				if !execution.preview {
+					resultErr = finishPlan(cmd, output, runs, phase, resultErr)
+				}
+			}()
 			if err := validateRunArgs(cmd, args); err != nil {
 				return err
 			}
 			if output != "text" && output != "json" {
 				return fmt.Errorf("unknown output %q (want text or json)", output)
 			}
+			opts, optionsErr := execution.options(cmd)
+			if optionsErr != nil {
+				return optionsErr
+			}
 			policy, policyErr := blueprint.ParseApprove(approve)
 			if policyErr != nil {
 				return policyErr
 			}
+			if execution.preview {
+				return previewRun(cmd, blueprintPath, binaryOf, loggerOf, opts, "plan", output)
+			}
+
 			phase = "load"
 			e, unlock, err := loadLockedEngine(cmd, blueprintPath, binaryOf, loggerOf)
 			if err != nil {
@@ -281,21 +306,20 @@ func newPlanCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fun
 			}
 			e.Stdout = cmd.ErrOrStderr()
 			phase = "prepare"
-			runs, err = e.ReviewPlan(engine.Options{Node: node, Parallelism: parallelism, Approve: policy}, output == "text")
+			opts.Approve = policy
+			runs, err = e.ReviewPlan(opts, output == "text")
 			return err
 		},
 	}
-	cmd.Flags().StringVar(&node, "node", "", "restrict to a single node")
-	cmd.Flags().IntVar(&parallelism, "parallelism", 1, "max nodes to run concurrently within one execution level")
+	execution.bind(cmd, "plan")
 	cmd.Flags().StringVar(&output, "output", "text", "output format: text or json")
 	cmd.Flags().StringVar(&approve, "approve", "safe", "default policy to assess: none, safe, or all (does not authorize apply)")
 	return cmd
 }
 
 func newApplyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf func() *slog.Logger) *cobra.Command {
-	var node string
+	var execution executionFlags
 	var autoApprove bool
-	var parallelism int
 	var force bool
 	var approve string
 	var output string
@@ -306,6 +330,17 @@ func newApplyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fu
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if output != "text" && output != "json" {
 				return fmt.Errorf("unknown output %q (want \"text\" or \"json\")", output)
+			}
+			opts, optionsErr := execution.options(cmd)
+			if optionsErr != nil {
+				return optionsErr
+			}
+			level, err := blueprint.ParseApprove(approve)
+			if err != nil {
+				return err
+			}
+			if execution.preview {
+				return previewRun(cmd, blueprintPath, binaryOf, loggerOf, opts, "apply", output)
 			}
 			// Same class as --parallelism's refusal: the approval prompt has nowhere to appear under --output json — stdout is the payload and stderr is diagnostics an automation consumer is not watching for a question — so instead of a prompt nobody answers (or a payload somebody corrupts), the combination is refused up front (#49).
 			if output == "json" && !autoApprove {
@@ -319,22 +354,18 @@ func newApplyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fu
 			if err := checkValidate(cmd, e); err != nil {
 				return err
 			}
-			level, err := blueprint.ParseApprove(approve)
-			if err != nil {
-				return err
-			}
 			// Under --output json, terraform's own output is diagnostics, not the result: stdout stays a single JSON document.
 			if output == "json" {
 				e.Stdout = cmd.ErrOrStderr()
 			}
-			runs, err := e.Apply(engine.Options{Node: node, AutoApprove: autoApprove, Approve: level, Parallelism: parallelism})
+			opts.AutoApprove, opts.Approve = autoApprove, level
+			runs, err := e.Apply(opts)
 			return finishRun(cmd, output, runs, err)
 		},
 	}
-	cmd.Flags().StringVar(&node, "node", "", "restrict to a single node")
+	execution.bind(cmd, "apply")
 	cmd.Flags().BoolVar(&autoApprove, "auto-approve", false, "skip the interactive approval prompt")
 	cmd.Flags().StringVar(&approve, "approve", string(blueprint.ApproveSafe), "what a node may do without saying so per run: none, safe (create/update), or all (adds replace/delete); a node's own approve wins over this")
-	cmd.Flags().IntVar(&parallelism, "parallelism", 1, "max nodes to run concurrently within one execution level")
 	// Accepted and ignored for one release so existing scripts keep running. There is no longer a local cache to bypass: apply asks Terraform whether each node needs applying, every run.
 	cmd.Flags().BoolVar(&force, "force", false, "no longer has any effect")
 	_ = cmd.Flags().MarkDeprecated("force", "there is no local cache to bypass; apply now plans every node")
@@ -343,9 +374,8 @@ func newApplyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fu
 }
 
 func newDestroyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf func() *slog.Logger) *cobra.Command {
-	var node string
+	var execution executionFlags
 	var autoApprove bool
-	var parallelism int
 	var output string
 	cmd := &cobra.Command{
 		Use:   "destroy",
@@ -354,6 +384,13 @@ func newDestroyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf 
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if output != "text" && output != "json" {
 				return fmt.Errorf("unknown output %q (want \"text\" or \"json\")", output)
+			}
+			opts, optionsErr := execution.options(cmd)
+			if optionsErr != nil {
+				return optionsErr
+			}
+			if execution.preview {
+				return previewRun(cmd, blueprintPath, binaryOf, loggerOf, opts, "destroy", output)
 			}
 			// Same class as --parallelism's refusal: terraform's destroy confirmation has nowhere to appear under --output json — stdout is the payload and stderr is diagnostics an automation consumer is not watching for a question — so the combination is refused up front (#49).
 			if output == "json" && !autoApprove {
@@ -371,13 +408,13 @@ func newDestroyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf 
 			if output == "json" {
 				e.Stdout = cmd.ErrOrStderr()
 			}
-			runs, err := e.Destroy(engine.Options{Node: node, AutoApprove: autoApprove, Parallelism: parallelism})
+			opts.AutoApprove = autoApprove
+			runs, err := e.Destroy(opts)
 			return finishRun(cmd, output, runs, err)
 		},
 	}
-	cmd.Flags().StringVar(&node, "node", "", "restrict to a single node")
+	execution.bind(cmd, "destroy")
 	cmd.Flags().BoolVar(&autoApprove, "auto-approve", false, "skip interactive approval")
-	cmd.Flags().IntVar(&parallelism, "parallelism", 1, "max nodes to run concurrently within one execution level")
 	cmd.Flags().StringVar(&output, "output", "text", "output format: text or json")
 	// No --approve here, unlike apply: destroy's gate reads what a node declared, and the layering rule is that a CLI flag only fills a gap nothing else spoke to — so a flag could never permit a teardown the blueprint refused, and offering one would only suggest otherwise.
 	return cmd

@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Binary selects which CLI terragraph shells out to.
@@ -27,8 +28,10 @@ const (
 type Runner struct {
 	// Context bounds subprocess lifetime so cancellation finishes before the engine releases its run lock.
 	Context context.Context
-	Binary  Binary
-	Dir     string
+	// OutputRetries only repeats failed output subprocesses; mutating operations and invalid JSON are never retried.
+	OutputRetries int
+	Binary        Binary
+	Dir           string
 	// DataDir, if set, becomes TF_DATA_DIR: it isolates where Terraform keeps .terraform/ (downloaded providers and, critically, its cached backend configuration) away from Dir. Without this, two nodes that reuse the same module Source but configure different backend_config would collide: Terraform stores which backend it was last configured with inside .terraform/, keyed by working directory, so the second node's init would fail with "Backend configuration changed" even though -backend-config correctly gave it its own state. DataDir sidesteps that by giving every node its own .terraform/ regardless of whether Dir is shared.
 	DataDir string
 	// Env overrides inherited variables, but an explicit TF_DATA_DIR (case-insensitive) conflicts with DataDir and fails before execution to prevent nodes sharing a backend cache.
@@ -285,6 +288,33 @@ func (outputs Outputs) Values() map[string]any {
 
 // Outputs runs `terraform output -json` and preserves sensitivity and exact numbers; an empty collection does not establish deployment history.
 func (r *Runner) Outputs() (Outputs, error) {
+	if r.OutputRetries < 0 || r.OutputRetries > 10 {
+		return nil, fmt.Errorf("output retries must be between 0 and 10")
+	}
+	ctx := r.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for attempt := 0; ; attempt++ {
+		outputs, err := r.outputsOnce()
+		var exitErr *osexec.ExitError
+		if cancelled := ctx.Err(); cancelled != nil {
+			return nil, cancelled
+		}
+		if err == nil || attempt >= r.OutputRetries || !errors.As(err, &exitErr) {
+			return outputs, err
+		}
+		timer := time.NewTimer(time.Duration(attempt+1) * 100 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func (r *Runner) outputsOnce() (Outputs, error) {
 	env, err := r.env()
 	if err != nil {
 		return nil, err
