@@ -170,17 +170,27 @@ func remoteLockProblems(g *Graph) []Problem {
 		collision := g.Lock.S3 != nil && g.Lock.S3.Key != "" && backend == "s3" &&
 			node.BackendConfig["key"] == g.Lock.S3.Key &&
 			(node.BackendConfig["bucket"] == "" || node.BackendConfig["bucket"] == g.Lock.S3.Bucket)
-		if address, known := s3Address(node); known && g.Lock.S3 != nil {
+		possibleCollision := false
+		if address, known := s3Address(node); g.Lock.S3 != nil {
 			endpoint := os.Getenv("AWS_ENDPOINT_URL_S3")
 			if endpoint == "" {
 				endpoint = os.Getenv("AWS_ENDPOINT_URL")
 			}
-			collision = address.bucket == g.Lock.S3.Bucket && address.key == g.Lock.S3.Key && address.endpoint == endpoint && address.partition == awsPartition(g.Lock.S3.Region)
+			lockAddress := s3StateAddress{bucket: g.Lock.S3.Bucket, key: g.Lock.S3.Key, endpoint: endpoint, partition: awsPartition(g.Lock.S3.Region)}
+			if known {
+				collision = address == lockAddress
+			}
+			possibleCollision = possibleS3Collision(address, lockAddress)
 		}
 		if collision {
 			problems = append(problems, Problem{
 				Severity: SeverityError,
 				Message:  fmt.Sprintf("node.%s: graph lock key %q must not be a node's state key", name, g.Lock.S3.Key),
+			})
+		} else if possibleCollision {
+			problems = append(problems, Problem{
+				Severity: SeverityWarning,
+				Message:  fmt.Sprintf("node.%s: graph lock may share the node's s3 state because the AWS partition is not statically known; set explicit backend region and endpoint settings where applicable and verify that the resolved lock and state namespaces are distinct", name),
 			})
 		}
 	}

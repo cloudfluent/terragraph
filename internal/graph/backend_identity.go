@@ -52,7 +52,7 @@ func localStatePath(n *Node) (string, bool) {
 
 type s3StateAddress struct{ bucket, key, endpoint, partition string }
 
-// s3Address includes known endpoint and partition differences so equal bucket/key spelling in different S3 services is not treated as one object.
+// s3Address retains literal bucket/key candidates when the partition is unknown, but only reports a complete address as known.
 func s3Address(n *Node) (s3StateAddress, bool) {
 	if n.Schema == nil || !n.Schema.BackendConfigKnown || n.Schema.Backend != "s3" {
 		return s3StateAddress{}, false
@@ -84,10 +84,14 @@ func s3Address(n *Node) (s3StateAddress, bool) {
 		region = nodeEnvironment(n, "AWS_DEFAULT_REGION")
 	}
 	partition := awsPartition(region)
-	if partition == "" {
-		return s3StateAddress{}, false
-	}
-	return s3StateAddress{bucket: cfg["bucket"], key: key, endpoint: endpoint, partition: partition}, true
+	return s3StateAddress{bucket: cfg["bucket"], key: key, endpoint: endpoint, partition: partition}, partition != ""
+}
+
+// possibleS3Collision warns about unresolved partitions without treating profiles or a matching custom endpoint as proof of one namespace.
+func possibleS3Collision(a, b s3StateAddress) bool {
+	return a.bucket != "" && a.key != "" && a.bucket == b.bucket && a.key == b.key &&
+		(a.endpoint == "" || b.endpoint == "" || a.endpoint == b.endpoint) &&
+		(a.partition == "" || b.partition == "")
 }
 
 func awsPartition(region string) string {
@@ -130,10 +134,12 @@ func knownBackendProblems(g *Graph) []Problem {
 					}
 				}
 			}
-			if aAddr, okA := s3Address(a); okA {
-				if bAddr, okB := s3Address(b); okB && aAddr == bAddr {
-					problems = append(problems, Problem{Severity: SeverityError, Message: fmt.Sprintf("node.%s and node.%s resolve to the same s3 state; set distinct backend bucket/key addresses", aName, bName)})
-				}
+			aAddr, knownA := s3Address(a)
+			bAddr, knownB := s3Address(b)
+			if knownA && knownB && aAddr == bAddr {
+				problems = append(problems, Problem{Severity: SeverityError, Message: fmt.Sprintf("node.%s and node.%s resolve to the same s3 state; set distinct backend bucket/key addresses", aName, bName)})
+			} else if possibleS3Collision(aAddr, bAddr) {
+				problems = append(problems, Problem{Severity: SeverityWarning, Message: fmt.Sprintf("node.%s and node.%s may resolve to the same s3 state because the AWS partition is not statically known; set explicit backend region and endpoint settings where applicable and verify that the resolved bucket/key namespaces are distinct", aName, bName)})
 			}
 		}
 	}
