@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -13,7 +14,7 @@ import (
 // Whether a node needs applying is Terraform's decision, not terragraph's: every node is planned with -refresh=true and -detailed-exitcode, and a plan reporting no changes skips the apply. Nothing local is consulted first. An earlier version of this kept a content-addressed cache of source files, resolved inputs and execution identity as a prefilter, which was wrong in three separate ways (backend and inherited context missing from the key, drift never refreshed, files read through file()/templatefile() never invalidating) and, once every hit had to be confirmed by a plan anyway, only served to send *misses* straight to apply without one.
 //
 // When the plan does report changes, that plan is what gets applied (see Runner.PlanChanges/ApplyPlan), so a node refreshes once and the change made is the change that was planned.
-func (e *Engine) Apply(opts Options) ([]NodeRun, error) {
+func (e *Engine) Apply(opts Options) (runs []NodeRun, resultErr error) {
 	// Concurrent nodes have their output buffered and flushed a node at a time (see runLevels), so a prompt written mid-level would be invisible until long after the answer was needed. Rather than deadlock on that, say so — before taking the run lock, so a combination that cannot run fails immediately instead of first waiting on whatever else holds it.
 	if !opts.AutoApprove && opts.parallelism() > 1 {
 		return nil, fmt.Errorf("--parallelism %d needs --auto-approve: output from concurrent nodes is buffered, so there is nowhere to ask for approval", opts.parallelism())
@@ -35,6 +36,13 @@ func (e *Engine) Apply(opts Options) ([]NodeRun, error) {
 	}
 	defer unlockGraph()
 
+	session, err := e.startExecution("apply", opts, false)
+	if err != nil {
+		return nil, err
+	}
+	defer session.close()
+	defer func() { resultErr = errors.Join(resultErr, session.finish(resultErr)) }()
+
 	e.logger().Info("apply starting", "node", opts.Node, "parallelism", opts.parallelism(), "autoApprove", opts.AutoApprove)
 
 	return e.runLevels(opts, false, func(name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
@@ -52,8 +60,15 @@ func (e *Engine) Apply(opts Options) ([]NodeRun, error) {
 		varFileArgs := exec.VarFileArgs(varsPath, vars)
 
 		r := &exec.Runner{Context: e.context(), Binary: e.runtimeFor(name), Dir: e.nodeDir(name), DataDir: e.dataDir(name), Env: e.envFor(name), Stdout: out, Stderr: out}
+		if err := session.transition(name, "initializing", "", ""); err != nil {
+			return nil, "", err
+		}
 		if err := r.Init(e.Graph.Nodes[name].BackendConfig); err != nil {
-			return nil, "", fmt.Errorf("init: %w", err)
+			return nil, "", session.fail(name, "indeterminate", fmt.Errorf("init: %w", err))
+		}
+
+		if err := session.transition(name, "preparing", "", ""); err != nil {
+			return nil, "", err
 		}
 
 		// remote/cloud run the plan on HCP and cannot write a local plan file. Applying without one would skip the approve gate, so this path is refused until that backend can be inspected the same way. State-storage backends (s3, gcs, ...) are unaffected.
@@ -67,6 +82,7 @@ func (e *Engine) Apply(opts Options) ([]NodeRun, error) {
 			return nil, "", err
 		}
 		defer plan.cleanup()
+		plan.session = session
 		return e.applyPreparedPlan(plan, opts)
 	}, nil)
 }

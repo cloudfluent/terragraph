@@ -312,3 +312,15 @@ func (e *Engine) ListExecutions() ([]ExecutionRecord, error) {
 func (s *executionSession) fail(name, phase string, cause error) error {
 	return errors.Join(cause, s.transition(name, phase, "runtime_failed", ""))
 }
+
+func (e *Engine) startExecution(operation string, opts Options, reverse bool) (*executionSession, error) {
+	levels, err := e.executionLevels(opts, reverse)
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, level := range levels {
+		names = append(names, level...)
+	}
+	return e.beginExecution(operation, names)
+}

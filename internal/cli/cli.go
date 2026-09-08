@@ -289,7 +289,7 @@ func newPlanCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fun
 	cmd.Flags().IntVar(&parallelism, "parallelism", 1, "max nodes to run concurrently within one execution level")
 	cmd.Flags().StringVar(&output, "output", "text", "output format: text or json")
 	cmd.Flags().StringVar(&approve, "approve", "safe", "default policy to assess: none, safe, or all (does not authorize apply)")
-	cmd.AddCommand(newExecutionHistoryCmd("list", blueprintPath), newExecutionHistoryCmd("show", blueprintPath))
+	cmd.AddCommand(newExecutionHistoryCmd("list", blueprintPath), newExecutionHistoryCmd("show", blueprintPath), newExecutionRecoveryCmd(blueprintPath, binaryOf, loggerOf))
 	return cmd
 }
 

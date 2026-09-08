@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -12,7 +13,7 @@ import (
 // Destroy tears down the selected nodes in reverse topological order (downstream first) so a node is never destroyed while something still depends on its outputs.
 //
 // Nothing has to be invalidated afterwards. Destroy once had to drop the incremental-apply cache entry for everything it tore down, because a stale "unchanged" hit against infrastructure that no longer exists would have been a correctness bug rather than a missed optimization; a later apply now asks Terraform, which plans against real state and sees the resources are gone.
-func (e *Engine) Destroy(opts Options) ([]NodeRun, error) {
+func (e *Engine) Destroy(opts Options) (runs []NodeRun, resultErr error) {
 	// Same reason Apply refuses it: concurrent nodes have their output buffered and flushed a node at a time, so terraform's confirmation prompt would be invisible until long after the answer was needed. Checked before taking the run lock, so an unrunnable combination fails immediately instead of after waiting for whatever else holds it.
 	if !opts.AutoApprove && opts.parallelism() > 1 {
 		return nil, fmt.Errorf("--parallelism %d needs --auto-approve: output from concurrent nodes is buffered, so there is nowhere to ask for approval", opts.parallelism())
@@ -47,6 +48,13 @@ func (e *Engine) Destroy(opts Options) ([]NodeRun, error) {
 	}
 	defer unlockGraph()
 
+	session, err := e.startExecution("destroy", opts, true)
+	if err != nil {
+		return nil, err
+	}
+	defer session.close()
+	defer func() { resultErr = errors.Join(resultErr, session.finish(resultErr)) }()
+
 	e.logger().Info("destroy starting", "node", opts.Node, "parallelism", opts.parallelism(), "autoApprove", opts.AutoApprove)
 
 	return e.runLevels(opts, true, func(name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
@@ -74,7 +82,11 @@ func (e *Engine) Destroy(opts Options) ([]NodeRun, error) {
 				r.Stdin = answered
 			}
 		}
+		if err := session.transition(name, "operating", "", ""); err != nil {
+			return nil, "", err
+		}
 		if err := r.Destroy(opts.AutoApprove, exec.VarFileArgs(varsPath, vars)...); err != nil {
+			err = session.fail(name, "indeterminate", err)
 			// Direct file inheritance keeps reads inside Terraform, so a failed interactive run can only offer a conditional unattended-run remedy.
 			if !opts.AutoApprove && answered == nil && e.Stdin != nil {
 				return nil, "", fmt.Errorf("destroy: %w (if running unattended, pass --auto-approve to destroy without asking)", err)
@@ -83,6 +95,9 @@ func (e *Engine) Destroy(opts Options) ([]NodeRun, error) {
 				return nil, "", fmt.Errorf("destroy: %w (nothing was available to read approval from; pass --auto-approve to destroy without asking)", err)
 			}
 			return nil, "", fmt.Errorf("destroy: %w", err)
+		}
+		if err := session.transition(name, "completed", "", ""); err != nil {
+			return nil, "", err
 		}
 		return nil, StatusDestroyed, nil
 	}, nil)
