@@ -27,6 +27,10 @@ func (e *Engine) resolveInputs(name string, applied map[string]map[string]any) (
 			live, err := e.runner(edge.From.Node).Outputs()
 			outputs = live.Values()
 			if err != nil {
+				// Cancellation must not fall back to disk, where stale values can obscure the cause or block a run that is already stopping.
+				if cancelled := e.context().Err(); cancelled != nil {
+					return nil, fmt.Errorf("resolving %s: %w", edge.To, cancelled)
+				}
 				// The snapshot is a last resort, never a preference: consulted only after the live read has failed, and only when the graph opted in (Graph.Snapshots). Reading it any earlier resurrects the removed incremental-apply cache under a new name — worst on destroy, where these values feed a resource's count or for_each and a stale value changes what gets torn down.
 				found := false
 				if e.Graph.Snapshots {

@@ -48,7 +48,7 @@ func (e *Engine) Apply(opts Options) ([]NodeRun, error) {
 		defer func() { _ = os.Remove(varsPath) }()
 		varFileArgs := exec.VarFileArgs(varsPath, vars)
 
-		r := &exec.Runner{Binary: e.runtimeFor(name), Dir: e.nodeDir(name), DataDir: e.dataDir(name), Env: e.envFor(name), Stdout: out, Stderr: out}
+		r := &exec.Runner{Context: e.context(), Binary: e.runtimeFor(name), Dir: e.nodeDir(name), DataDir: e.dataDir(name), Env: e.envFor(name), Stdout: out, Stderr: out}
 		if err := r.Init(e.Graph.Nodes[name].BackendConfig); err != nil {
 			return nil, "", fmt.Errorf("init: %w", err)
 		}

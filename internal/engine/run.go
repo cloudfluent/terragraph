@@ -94,6 +94,9 @@ func (e *Engine) runLevels(opts Options, reverse bool, action nodeAction, afterL
 	}()
 
 	for li, level := range levels {
+		if err := e.context().Err(); err != nil {
+			return markNotRun(runs, levels, li), err
+		}
 		mu.Lock()
 		snapshot := make(map[string]map[string]any, len(applied))
 		for k, v := range applied {
@@ -120,7 +123,14 @@ func (e *Engine) runLevels(opts Options, reverse bool, action nodeAction, afterL
 				}
 
 				e.logger().Debug("running node", "node", name)
-				outputs, status, err := action(name, snapshot, out)
+				var outputs map[string]any
+				var status string
+				err := e.context().Err()
+				if err == nil {
+					outputs, status, err = action(name, snapshot, out)
+				} else {
+					status = StatusNotRun
+				}
 
 				if buf != nil {
 					outMu.Lock()
@@ -131,7 +141,10 @@ func (e *Engine) runLevels(opts Options, reverse bool, action nodeAction, afterL
 
 				mu.Lock()
 				if err != nil {
-					runs = append(runs, NodeRun{Node: name, Level: li + 1, Status: StatusFailed, Err: err})
+					if status != StatusNotRun {
+						status = StatusFailed
+					}
+					runs = append(runs, NodeRun{Node: name, Level: li + 1, Status: status, Err: err})
 				} else {
 					runs = append(runs, NodeRun{Node: name, Level: li + 1, Status: status})
 					if outputs != nil {

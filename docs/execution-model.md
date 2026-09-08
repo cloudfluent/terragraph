@@ -49,6 +49,14 @@ Nodes are grouped into levels: every node in level *i* only depends on nodes in 
 
 `plan`, `apply`, `destroy` and `vendor` take an exclusive lock at `<blueprint dir>/.terragraph/lock` before they read or write module files, and hold it until the command exits. A second process targeting the same blueprint prints a one-line wait notice and blocks until the first exits; the lock is released on process exit, so a crash cannot leave it stuck. `validate`, `graph` and `language-server` do not take it, so they stay usable while a long apply is running. One process that already holds the lock can still use `--parallelism` inside the run.
 
+## Interrupting an execution
+
+On Linux and macOS, Ctrl-C or SIGTERM during `plan`, `apply`, or `destroy` cancels a pending local-lock wait and stops dispatching queued and downstream nodes. Each active runtime process group receives an interrupt and has five seconds to finish before terragraph sends SIGKILL. terragraph waits for the direct subprocess and any living members of its group before removing managed tfvars and saved plans and releasing locks. A wrapper exiting first does not shorten that grace period or release the lock while its children still run. The run fails with a cancellation error; JSON reports retain the selected nodes, including `not run` nodes.
+
+Interactive terminal reads stay in terragraph's foreground group so Ctrl-C also cancels the graph. Apply approval reads and terminal input forwarded to destroy stop on cancellation; ordinary files and pipes are passed directly to the runtime. A runtime that exits without reading stdin does not keep the command waiting for input.
+
+This cleanup cannot run if terragraph itself receives SIGKILL or crashes. Descendants that detach into another process group or session are outside its ownership. Process-state inspection failures or a process stuck in an uninterruptible kernel wait can keep terragraph waiting with its locks held, even after SIGKILL. Windows retains native console behavior and is outside this cancellation guarantee. Other commands, including `vendor` and `language-server`, retain their existing signal behavior.
+
 ## Graph remote lock
 
 Flock is same-checkout only. Two machines never see `<blueprint dir>/.terragraph/lock`.
@@ -63,7 +71,7 @@ The mechanism is an S3 lock **object** via conditional writes (the same idea as 
 
 If the object already exists, the command **fails immediately** (it does not wait the way flock does).
 
-Ctrl-C / SIGTERM / SIGKILL leave the S3 object (the process exits without running `defer`; flock still drops with the fd). A failed `DeleteObject` after a successful run does the same: the command prints the error to stderr and still reports success. Recover with `terragraph force-unlock --yes`: it deletes the configured lock object. `--yes` is required because releasing is unconditional and could break a lock that is genuinely held; without it the command names the object and, when the object can still be read, who wrote it and when — the one thing you need to decide whether breaking it is safe.
+On Linux and macOS, Ctrl-C and SIGTERM during an execution wait for runtime shutdown and attempt to delete the S3 lock object. SIGKILL, crashes, and Windows console termination can leave the object because cleanup does not run (the local flock still drops with the fd). A failed `DeleteObject` after a successful run does the same: the command prints the error to stderr and still reports success. Recover with `terragraph force-unlock --yes`: it deletes the configured lock object. `--yes` is required because releasing is unconditional and could break a lock that is genuinely held; without it the command names the object and, when the object can still be read, who wrote it and when — the one thing you need to decide whether breaking it is safe.
 
 It only parses the blueprint, so it works on a checkout with nothing vendored yet, which is the usual shape of a recovery. It does refuse while another `terragraph` process on the same checkout is running, since that process is the likeliest legitimate holder; it cannot see processes on other machines, which is what `--yes` is for.
 

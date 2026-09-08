@@ -12,11 +12,13 @@
 package runlock
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // ErrHeld is returned by TryAcquire when another process already holds the blueprint lock.
@@ -38,17 +40,47 @@ func TryAcquire(baseDir string) (*Lock, error) {
 // terragraph process already holds it, a one-line notice is written to waitNoticeWriter
 // (when not nil) and this call blocks until that process releases the lock.
 func Acquire(baseDir string, waitNoticeWriter io.Writer) (*Lock, error) {
-	lock, err := TryAcquire(baseDir)
-	if err == nil {
-		return lock, nil
+	return AcquireContext(context.Background(), baseDir, waitNoticeWriter)
+}
+
+// AcquireContext retries nonblocking acquisition so a cancelled waiter need not wait for the current owner to finish before returning.
+func AcquireContext(ctx context.Context, baseDir string, waitNoticeWriter io.Writer) (*Lock, error) {
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	if !errors.Is(err, ErrHeld) {
-		return nil, err
+	var ticker *time.Ticker
+	defer func() {
+		if ticker != nil {
+			ticker.Stop()
+		}
+	}()
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		lock, err := TryAcquire(baseDir)
+		if err == nil {
+			if err := ctx.Err(); err != nil {
+				_ = lock.Close()
+				return nil, err
+			}
+			return lock, nil
+		}
+		if !errors.Is(err, ErrHeld) {
+			return nil, err
+		}
+		if ticker == nil {
+			if waitNoticeWriter != nil {
+				_, _ = fmt.Fprintln(waitNoticeWriter, waitNotice)
+			}
+			ticker = time.NewTicker(50 * time.Millisecond)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-ticker.C:
+		}
 	}
-	if waitNoticeWriter != nil {
-		_, _ = fmt.Fprintln(waitNoticeWriter, waitNotice)
-	}
-	return acquire(baseDir, false)
 }
 
 // Close releases the lock. It is safe to call on a nil Lock.
