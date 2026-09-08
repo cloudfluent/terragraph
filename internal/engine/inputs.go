@@ -3,6 +3,7 @@ package engine
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/ext/typeexpr"
@@ -12,7 +13,7 @@ import (
 	"github.com/cloudfluent/terragraph/internal/blueprint"
 )
 
-// resolveInputs gathers the values for name's inputs (every data edge pointing at it, plus its own literal Vars), checking each one against the target variable's declared type. applied holds outputs already captured earlier in the current run (keyed by node name); for an upstream node not touched in this run, its outputs are read directly from its own existing state instead.
+// resolveInputs gathers the values for name's inputs (every data edge pointing at it, plus its own literal Vars), checking each one against the target variable's declared type. Sources are tried in a fixed order — outputs already captured earlier in the current run (keyed by node name), then that upstream node's own existing state read live — and only when the graph opted into snapshots and the live read failed, the node's published output snapshot as a last resort (see snapshot.go): never ahead of the live read, so stale snapshots cannot displace a successful live read.
 func (e *Engine) resolveInputs(name string, applied map[string]map[string]any) (map[string]any, error) {
 	vars := map[string]any{}
 
@@ -26,10 +27,24 @@ func (e *Engine) resolveInputs(name string, applied map[string]map[string]any) (
 			var err error
 			outputs, err = e.runner(edge.From.Node).Outputs()
 			if err != nil {
-				return nil, fmt.Errorf(
-					"resolving %s: upstream node %q has not been applied yet (%w)",
-					edge.To, edge.From.Node, err,
-				)
+				// The snapshot is a last resort, never a preference: consulted only after the live read has failed, and only when the graph opted in (Graph.Snapshots). Reading it any earlier resurrects the removed incremental-apply cache under a new name — worst on destroy, where these values feed a resource's count or for_each and a stale value changes what gets torn down.
+				found := false
+				if e.Graph.Snapshots {
+					var snapshot snapshotFile
+					snapshot, found = e.readSnapshot(edge.From.Node)
+					if found {
+						if !e.snapshotOutputAllowed(edge.From.Node, edge.From.Name) || slices.Contains(snapshot.Withheld, edge.From.Name) {
+							return nil, fmt.Errorf("resolving %s: %s was withheld from output snapshots; sensitive outputs and outputs without sensitivity metadata are never stored; restore live upstream outputs or apply the upstream in this run: %w", edge.To, edge.From, err)
+						}
+						outputs = snapshot.Outputs
+					}
+				}
+				if !found {
+					return nil, fmt.Errorf(
+						"resolving %s: upstream node %q has not been applied yet (%w)",
+						edge.To, edge.From.Node, err,
+					)
+				}
 			}
 		}
 
