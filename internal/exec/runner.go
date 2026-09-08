@@ -208,12 +208,27 @@ func (r *Runner) Destroy(autoApprove bool, extraArgs ...string) error {
 	return r.run(args...)
 }
 
-type rawOutput struct {
+// Output retains runtime sensitivity because a static module declaration can differ from the files OpenTofu actually executes.
+type Output struct {
 	Value any `json:"value"`
+	// Nil means the runtime omitted sensitivity metadata; absence must never authorize snapshot persistence.
+	Sensitive *bool `json:"sensitive"`
 }
 
-// Outputs runs `terraform output -json` and returns output name -> value. It errors if the node has never been applied (no state / no outputs); callers use that to distinguish "not yet applied" from a real failure.
-func (r *Runner) Outputs() (map[string]any, error) {
+// Outputs preserves metadata until persistence decisions are made while Values supplies the unchanged inputs passed to downstream nodes.
+type Outputs map[string]Output
+
+// Values keeps sensitivity metadata out of downstream tfvars, which must contain only the original payload.
+func (outputs Outputs) Values() map[string]any {
+	values := make(map[string]any, len(outputs))
+	for name, output := range outputs {
+		values[name] = output.Value
+	}
+	return values
+}
+
+// Outputs runs `terraform output -json` and retains each output value and its runtime sensitivity. It errors if the node has never been applied (no state / no outputs); callers use that to distinguish "not yet applied" from a real failure.
+func (r *Runner) Outputs() (Outputs, error) {
 	var stdout bytes.Buffer
 	cmd := osexec.Command(string(r.Binary), "output", "-json")
 	cmd.Dir = r.Dir
@@ -224,7 +239,7 @@ func (r *Runner) Outputs() (map[string]any, error) {
 		return nil, fmt.Errorf("running %s output -json in %s: %w", r.Binary, r.Dir, err)
 	}
 
-	var raw map[string]rawOutput
+	var raw Outputs
 	// Keep number tokens exact so an upstream output is not rounded before becoming a downstream input.
 	decoder := json.NewDecoder(&stdout)
 	decoder.UseNumber()
@@ -235,9 +250,5 @@ func (r *Runner) Outputs() (map[string]any, error) {
 		return nil, fmt.Errorf("parsing %s output -json in %s: expected a single JSON value", r.Binary, r.Dir)
 	}
 
-	outputs := make(map[string]any, len(raw))
-	for name, o := range raw {
-		outputs[name] = o.Value
-	}
-	return outputs, nil
+	return raw, nil
 }

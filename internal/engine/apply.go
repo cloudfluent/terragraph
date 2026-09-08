@@ -80,7 +80,7 @@ func (e *Engine) Apply(opts Options) ([]NodeRun, error) {
 			if err := e.writeSnapshot(name, outputs); err != nil {
 				return nil, "", err
 			}
-			return outputs, StatusUnchanged, nil
+			return outputs.Values(), StatusUnchanged, nil
 		}
 
 		// What the plan actually does, read back from the file before any of it happens. Local only: no state is refreshed and no provider is called.
@@ -118,7 +118,7 @@ func (e *Engine) Apply(opts Options) ([]NodeRun, error) {
 		if err := e.writeSnapshot(name, outputs); err != nil {
 			return nil, "", err
 		}
-		return outputs, StatusApplied, nil
+		return outputs.Values(), StatusApplied, nil
 	}, nil)
 }
 

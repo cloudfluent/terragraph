@@ -247,7 +247,7 @@ func TestResolveInputs_UnusableSnapshotPreservesLiveErrorForSensitiveOutput(t *t
 		{name: "corrupt", data: `{"schema":1,"node":"a","outputs":{`},
 		{name: "missing outputs", data: `{"schema":1,"node":"a"}`},
 		{name: "null outputs", data: `{"schema":1,"node":"a","outputs":null}`},
-		{name: "unknown schema", data: `{"schema":2,"node":"a","outputs":{}}`},
+		{name: "unknown schema", data: `{"schema":99,"node":"a","outputs":{}}`},
 		{name: "wrong node", data: `{"schema":1,"node":"other","outputs":{}}`},
 	} {
 		t.Run(test.name, func(t *testing.T) {

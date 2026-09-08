@@ -81,7 +81,7 @@ case "$1" in
       printf 'Error: no state. Terraform has not been applied here.\n' >&2
       exit 1
     fi
-    printf '{"consumed":{"value":"ok"},"internal":{"value":"secret"}}'
+    printf '{"consumed":{"sensitive":false,"value":"ok"},"internal":{"sensitive":false,"value":"secret"}}'
     exit 0
     ;;
 esac
@@ -152,8 +152,8 @@ func TestApply_SnapshotsWriteConsumedOutputsOnly(t *testing.T) {
 	if err := json.Unmarshal(first, &snap); err != nil {
 		t.Fatalf("parsing snapshot %s: %v\n%s", path, err, first)
 	}
-	if snap.Schema != 1 || snap.Node != "a" {
-		t.Fatalf("schema/node = %d/%q, want 1/%q", snap.Schema, snap.Node, "a")
+	if snap.Schema != 2 || snap.Node != "a" {
+		t.Fatalf("schema/node = %d/%q, want 2/%q", snap.Schema, snap.Node, "a")
 	}
 	if got, ok := snap.Outputs["consumed"]; !ok || got != "ok" {
 		t.Fatalf("snapshot outputs[consumed] = %v (present=%t), want \"ok\"", got, ok)
