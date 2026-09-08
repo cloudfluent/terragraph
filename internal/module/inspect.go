@@ -38,9 +38,11 @@ type Output struct {
 
 // Schema is the subset of a root module's shape that terragraph cares about: its declared input variables (with type/required metadata), the names of its output values, and the backend type if any. Standard root module outputs don't declare a type (that's an HCP Terraform Stacks-only feature), so Outputs only tracks presence.
 type Schema struct {
-	Variables     map[string]Variable
-	Outputs       map[string]bool
-	OutputDetails map[string]Output
+	// RequiresTofuFiles marks selected OpenTofu-only files so execution can verify the installed runtime understands the statically inspected declarations.
+	RequiresTofuFiles bool
+	Variables         map[string]Variable
+	Outputs           map[string]bool
+	OutputDetails     map[string]Output
 	// Backend is the type label of terraform { backend "TYPE" {} }, or "cloud" if the module declared a cloud block and no backend block. Empty means neither was declared (Terraform's implicit local backend).
 	Backend string
 	// BackendConfig contains known scalar backend attributes; explicit blueprint backend_config entries override them.
@@ -66,6 +68,7 @@ func Inspect(dir string, modes ...FileMode) (*Schema, error) {
 		if err != nil {
 			return nil, err
 		}
+		tofu.RequiresTofuFiles = false
 		if !reflect.DeepEqual(terraform, tofu) {
 			return nil, fmt.Errorf("inspecting module at %s: runtime binary is ambiguous and Terraform/OpenTofu declarations differ; use the canonical binary \"terraform\" or \"tofu\" on PATH, or make both declarations agree", dir)
 		}
@@ -87,6 +90,12 @@ func Inspect(dir string, modes ...FileMode) (*Schema, error) {
 		Variables:     make(map[string]Variable, len(mod.Variables)),
 		Outputs:       make(map[string]bool, len(mod.Outputs)),
 		OutputDetails: make(map[string]Output, len(mod.Outputs)),
+	}
+	for _, file := range files {
+		if strings.HasSuffix(file.physical, ".tofu") || strings.HasSuffix(file.physical, ".tofu.json") {
+			schema.RequiresTofuFiles = true
+			break
+		}
 	}
 	for name, v := range mod.Variables {
 		schema.Variables[name] = Variable{
