@@ -2,6 +2,8 @@ package exec
 
 import (
 	"context"
+	"encoding/binary"
+	"errors"
 	"fmt"
 	"os/exec"
 	"syscall"
@@ -51,6 +53,12 @@ func runWithDeadline(ctx context.Context, cmd *exec.Cmd) error {
 	if err := resumeRuntime(uint32(cmd.Process.Pid)); err != nil {
 		return abort(err)
 	}
+	processes := map[uint32]windows.Handle{}
+	defer func() {
+		for _, process := range processes {
+			_ = windows.CloseHandle(process)
+		}
+	}()
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	ticker := time.NewTicker(20 * time.Millisecond)
@@ -59,21 +67,37 @@ func runWithDeadline(ctx context.Context, cmd *exec.Cmd) error {
 	waited, terminated := false, false
 	cancel := ctx.Done()
 	for {
+		// Job accounting can reach zero before process handles become signalled; retain handles before termination to wait through kernel cleanup.
+		captureErr := captureJobProcesses(job, processes)
+		if captureErr != nil && !terminated {
+			_ = windows.TerminateJobObject(job, 1)
+			terminated = true
+			cancel = nil
+			waitErr = errors.Join(waitErr, captureErr)
+		}
+		select {
+		case err := <-done:
+			waitErr = errors.Join(waitErr, err)
+			waited = true
+			done = nil
+		default:
+		}
+		active, queryErr := activeJobProcesses(job)
+		if queryErr == nil && active == 0 && waited && jobProcessesExited(processes) {
+			if terminated && ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return waitErr
+		}
 		if !terminated && ctx.Err() != nil {
 			if err := windows.TerminateJobObject(job, 1); err == nil {
 				terminated = true
 				cancel = nil
 			}
 		}
-		active, queryErr := activeJobProcesses(job)
-		if queryErr == nil && active == 0 && waited {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			return waitErr
-		}
 		select {
-		case waitErr = <-done:
+		case err := <-done:
+			waitErr = errors.Join(waitErr, err)
 			waited = true
 			done = nil
 		case <-cancel:
@@ -118,4 +142,50 @@ func activeJobProcesses(job windows.Handle) (uint32, error) {
 	var info jobAccounting
 	err := windows.QueryInformationJobObject(job, windows.JobObjectBasicAccountingInformation, uintptr(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info)), nil)
 	return info.ActiveProcesses, err
+}
+
+// captureJobProcesses retains synchronizable members while they are still listed because terminated members can disappear before their handles signal completion.
+func captureJobProcesses(job windows.Handle, processes map[uint32]windows.Handle) error {
+	size := 8 + 16*int(unsafe.Sizeof(uintptr(0)))
+	for {
+		data := make([]byte, size)
+		err := windows.QueryInformationJobObject(job, windows.JobObjectBasicProcessIdList, uintptr(unsafe.Pointer(&data[0])), uint32(len(data)), nil)
+		if errors.Is(err, windows.ERROR_MORE_DATA) {
+			size *= 2
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("listing runtime job processes: %w", err)
+		}
+		count := int(binary.LittleEndian.Uint32(data[4:8]))
+		width := int(unsafe.Sizeof(uintptr(0)))
+		for i := 0; i < count; i++ {
+			offset := 8 + i*width
+			pid := binary.LittleEndian.Uint32(data[offset : offset+4])
+			if _, exists := processes[pid]; exists {
+				continue
+			}
+			handle, err := windows.OpenProcess(windows.SYNCHRONIZE, false, pid)
+			if errors.Is(err, windows.ERROR_INVALID_PARAMETER) {
+				continue
+			}
+			if err != nil {
+				return fmt.Errorf("tracking runtime job process: %w", err)
+			}
+			processes[pid] = handle
+		}
+		return nil
+	}
+}
+
+func jobProcessesExited(processes map[uint32]windows.Handle) bool {
+	for pid, process := range processes {
+		status, err := windows.WaitForSingleObject(process, 0)
+		if err != nil || status != windows.WAIT_OBJECT_0 {
+			continue
+		}
+		_ = windows.CloseHandle(process)
+		delete(processes, pid)
+	}
+	return len(processes) == 0
 }

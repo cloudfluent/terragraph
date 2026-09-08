@@ -26,7 +26,8 @@ type Options struct {
 	// AllowOrphanDestroy acknowledges consumers outside a partial destroy without changing their selection.
 	AllowOrphanDestroy bool
 	KeepGoing          bool
-	FailFast           bool
+	// FailFast overrides review-plan continuation; apply and destroy already stop unless KeepGoing is set.
+	FailFast bool
 	// NodeTimeout bounds the entire node action, including input reads and approval, after it receives a scheduler slot.
 	NodeTimeout   time.Duration
 	Timeouts      map[string]time.Duration
@@ -265,9 +266,6 @@ func (e *Engine) executeNode(opts Options, run NodeRun, applied map[string]exec.
 	status, err := StatusNotRun, ctx.Err()
 	if err == nil {
 		outputs, status, err = action(ctx, run.Node, applied, out)
-	}
-	if ctx.Err() != nil {
-		err = ctx.Err()
 	}
 	run.Status, run.Err, run.Duration = status, err, time.Since(run.StartedAt)
 	if err != nil {

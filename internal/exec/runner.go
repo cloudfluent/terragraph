@@ -298,7 +298,7 @@ func (r *Runner) Outputs() (Outputs, error) {
 	for attempt := 0; ; attempt++ {
 		outputs, err := r.outputsOnce()
 		var exitErr *osexec.ExitError
-		if cancelled := ctx.Err(); cancelled != nil {
+		if cancelled := ctx.Err(); err != nil && cancelled != nil {
 			return nil, cancelled
 		}
 		if err == nil || attempt >= r.OutputRetries || !errors.As(err, &exitErr) {

@@ -55,8 +55,11 @@ func TestRunCommand_DeadlineWaitsForWindowsDescendants(t *testing.T) {
 		t.Fatal(err)
 	}
 	process, err := windows.OpenProcess(windows.SYNCHRONIZE, false, uint32(pid))
-	if err != nil {
+	if errors.Is(err, windows.ERROR_INVALID_PARAMETER) {
 		return
+	}
+	if err != nil {
+		t.Fatal(err)
 	}
 	defer func() { _ = windows.CloseHandle(process) }()
 	status, err := windows.WaitForSingleObject(process, 0)

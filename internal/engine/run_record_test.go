@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cloudfluent/terragraph/internal/blueprint"
 	"github.com/cloudfluent/terragraph/internal/exec"
 )
 
@@ -144,4 +145,18 @@ func recordFixture(t *testing.T) *Engine {
 	}
 	t.Cleanup(unlock)
 	return e
+}
+
+func TestGraphIdentity_AmbiguousEndpointJoinsRemainStable(t *testing.T) {
+	e := selectionFixture(t)
+	e.Graph.Edges = []blueprint.Edge{orderEdge("a", "bnode.c"), orderEdge("anode.b", "c")}
+	first, err := e.graphIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Graph.Edges[0], e.Graph.Edges[1] = e.Graph.Edges[1], e.Graph.Edges[0]
+	second, err := e.graphIdentity()
+	if err != nil || first != second {
+		t.Fatalf("identity = %q, error = %v, want %q after edge reorder", second, err, first)
+	}
 }

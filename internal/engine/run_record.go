@@ -41,7 +41,10 @@ func (e *Engine) graphIdentity() (string, error) {
 	}
 	edges := append([]blueprint.Edge(nil), e.Graph.Edges...)
 	sort.Slice(edges, func(i, j int) bool {
-		return edges[i].From.String()+edges[i].To.String() < edges[j].From.String()+edges[j].To.String()
+		if edges[i].From.String() != edges[j].From.String() {
+			return edges[i].From.String() < edges[j].From.String()
+		}
+		return edges[i].To.String() < edges[j].To.String()
 	})
 	data, err := json.Marshal(struct {
 		Base  string

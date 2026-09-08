@@ -240,3 +240,21 @@ func TestRunLevels_PoolsDoNotBlockUnrelatedWork(t *testing.T) {
 		t.Fatalf("runs = %+v, err = %v", runs, err)
 	}
 }
+
+func TestRunLevels_CompletedActionRetainsOutputsAtDeadline(t *testing.T) {
+	e := newTestEngine([]string{"a", "child"}, []blueprint.Edge{orderEdge("a", "child")})
+	action := func(ctx context.Context, name string, applied map[string]exec.Outputs, _ io.Writer) (exec.Outputs, string, error) {
+		if name == "a" {
+			<-ctx.Done()
+			return exec.Outputs{"value": {Value: "finished"}}, StatusApplied, nil
+		}
+		if applied["a"]["value"].Value != "finished" {
+			t.Errorf("upstream outputs = %v, want completed action output", applied)
+		}
+		return nil, StatusApplied, nil
+	}
+	runs, err := e.runLevels(Options{KeepGoing: true, Timeouts: map[string]time.Duration{"a": 20 * time.Millisecond}}, false, action, nil)
+	if err != nil || runs[0].Status != StatusApplied || runs[1].Status != StatusApplied {
+		t.Fatalf("runs = %+v, error = %v, want successful nodes despite post-completion deadline", runs, err)
+	}
+}
