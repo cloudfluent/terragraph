@@ -88,3 +88,67 @@ func TestOutput_MissingNameAndArguments(t *testing.T) {
 		t.Fatalf("got = %q, %v", stdout, err)
 	}
 }
+
+func TestStatus_SafeCountsAndUnavailableSibling(t *testing.T) {
+	bp := writeObservationFixture(t)
+	fake := filepath.Join(filepath.Dir(bp), "runtime")
+	script := `#!/bin/sh
+case "$1" in
+init) exit 0 ;;
+state) printf '%s\n' '{"version":4,"serial":1,"outputs":{"secret":{"value":"CANARY_SECRET"}},"resources":[{"instances":[{"attributes":{"secret":"CANARY_RESOURCE"}}]}]}' ;;
+*) exit 1 ;;
+esac
+`
+	if err := os.WriteFile(fake, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr, err := runCmdAt(t, bp, "status", "--output", "json")
+	if err == nil {
+		t.Fatal("unavailable sibling must fail")
+	}
+	if strings.Contains(stdout, `"outputs"`) {
+		t.Fatalf("status contains an output payload field: %s", stdout)
+	}
+	if strings.Contains(stdout+stderr, "CANARY") || strings.Contains(stdout, "applied") {
+		t.Fatalf("unsafe status = %s %s", stdout, stderr)
+	}
+	var result observationResultDTO
+	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Nodes) != 2 || result.Nodes[0].State != "present" || *result.Nodes[0].Resources != 1 || *result.Nodes[0].OutputCount != 1 || result.Nodes[1].State != "unavailable" {
+		t.Fatalf("got = %+v", result)
+	}
+	if !strings.HasPrefix(result.Nodes[0].Identity, "sha256:") {
+		t.Fatal("missing sanitized identity")
+	}
+}
+
+func TestStatus_EmptyAndIndeterminate(t *testing.T) {
+	bp := writeObservationFixture(t)
+	fake := filepath.Join(filepath.Dir(bp), "runtime")
+	for _, serial := range []int{0, 1} {
+		script := fmt.Sprintf("#!/bin/sh\ncase \"$1\" in\ninit) exit 0 ;;\nstate) printf '%%s\\n' '{\"version\":4,\"serial\":%d,\"outputs\":{},\"resources\":[]}' ;;\nesac\n", serial)
+		if err := os.WriteFile(fake, []byte(script), 0700); err != nil {
+			t.Fatal(err)
+		}
+		stdout, _, err := runCmdAt(t, bp, "status", "--node", "a", "--output", "json")
+		want := "indeterminate"
+		if serial == 1 {
+			want = "empty"
+		}
+		if err != nil || !strings.Contains(stdout, "\"state\":\""+want+"\"") {
+			t.Fatalf("got = %q, %v, want %s", stdout, err, want)
+		}
+	}
+}
+
+func TestOutput_EmptyCollectionRemainsPresent(t *testing.T) {
+	bp := writeObservationFixture(t)
+	fake := filepath.Join(filepath.Dir(bp), "runtime")
+	writeFixtureFile(t, fake, "#!/bin/sh\ncase \"$1\" in\ninit) exit 0 ;;\noutput) printf '{}'; exit 0 ;;\nesac\n")
+	stdout, _, err := runCmdAt(t, bp, "output", "--node", "a", "--output", "json")
+	if err != nil || !strings.Contains(stdout, `"outputs":{}`) {
+		t.Fatalf("got = %q, %v, want an empty output collection", stdout, err)
+	}
+}
