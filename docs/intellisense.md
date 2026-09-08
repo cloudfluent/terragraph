@@ -8,8 +8,8 @@ The extension bundles a compatible language server, so nothing here requires ins
 
 Open the completion list with `Ctrl+Space` (`Control+Space` on macOS).
 
-- Top-level blueprint blocks: `node`, `edge`, `runtime`, `group`, `use`, `vendor`, `tfvars`, `lock`
-- The attributes each block accepts: a node's `source`, `vars`, `env`, `runtime`, `backend_config`; a `use` block's `as`, `source`, `vars`, `env`, `runtime`, `backend_config`, `approve`; and so on
+- Top-level blueprint blocks: `node`, `edge`, `runtime`, `group`, `use`, `vendor`, `tfvars`, `lock`, `snapshots`
+- The attributes each block accepts: a node's `source`, `vars`, `env`, `runtime`, `backend_config`, `approve`; a `use` block's `as`, `source`, `vars`, `env`, `runtime`, `backend_config`, `approve`; and so on
 - A Terraform/OpenTofu module's own input variables and outputs
 - Declared runtime names
 
@@ -23,6 +23,8 @@ edge {
 ```
 
 An input suggestion shows its type, whether it's required, whether it's sensitive, and its description. An output shows its name, description, and whether it's sensitive.
+
+Module inspection follows a node's explicit runtime or the root blueprint's default runtime, with Terraform as the editor fallback. A standalone group's unspecified runtime depends on its use site, so inspection only confirms ports when Terraform and OpenTofu expose the same declarations; a default-marked runtime in the group's source directory does not select its runtime. An ambiguous wrapper or unreadable module leaves ports unknown and does not produce missing-port errors. No runtime is executed for editor inspection.
 
 An edge's nested `input` blocks (see [blueprint.md](blueprint.md#several-values-between-the-same-two-nodes-input)) complete the same way: the block label suggests the input variables declared by the edge's `to` node, and `from = output.` suggests the outputs of its `from` node. Neither reference repeats a node name, so both suggestion lists come from that edge's own endpoints.
 
