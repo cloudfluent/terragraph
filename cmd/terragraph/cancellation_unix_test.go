@@ -101,7 +101,7 @@ func cancellationRuntime(mode string) {
 			}
 		}
 	case "show":
-		fmt.Print(`{"resource_changes":[{"address":"fixture.item","change":{"actions":["create"]}}]}`)
+		fmt.Print(`{"format_version":"1.2","resource_changes":[{"address":"fixture.item","change":{"actions":["create"]}}]}`)
 	case "apply":
 		mark("applied")
 	case "destroy":

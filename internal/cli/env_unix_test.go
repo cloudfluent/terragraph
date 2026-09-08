@@ -44,7 +44,11 @@ func TestRunCommands_RejectManagedDataDirEnvBeforeRuntime(t *testing.T) {
 				if err == nil || !strings.Contains(err.Error(), "TF_DATA_DIR is managed per node") || !strings.Contains(err.Error(), "remove this env entry") {
 					t.Fatalf("error = %v, want managed env conflict with removal remedy", err)
 				}
-				if stdout != "" {
+				if command == "plan" {
+					if !strings.Contains(stdout, "plan_load_failed") {
+						t.Fatalf("missing structured load failure: %s", stdout)
+					}
+				} else if stdout != "" {
 					t.Fatalf("stdout = %q, want no execution result", stdout)
 				}
 				if _, err := os.Stat(marker); !os.IsNotExist(err) {
@@ -65,6 +69,7 @@ func TestPlan_ManagedDataDirsAndOrdinaryEnvReachCustomRuntime(t *testing.T) {
 	t.Setenv("TG_R04_LOG", logPath)
 	writeFixtureFile(t, filepath.Join(dir, "terraform-fake"), `#!/bin/sh
 printf '%s\t%s\t%s\t%s\n' "$TF_DATA_DIR" "$TG_R04_VALUE" "$TG_R04_INHERITED" "$*" >> "$TG_R04_LOG"
+if [ "$1" = show ]; then printf '%s\n' '{"format_version":"1.2","resource_changes":[]}'; fi
 exit 0
 `)
 	writeFixtureFile(t, filepath.Join(dir, "remote", "main.tf"), "terraform {\n backend \"s3\" {}\n}\n")
@@ -120,8 +125,8 @@ node "remote" {
 		seen[name]++
 	}
 	for name := range wantValues {
-		if seen[name] != 2 {
-			t.Fatalf("runtime calls for %q = %d, want init and plan", name, seen[name])
+		if seen[name] != 3 {
+			t.Fatalf("runtime calls for %q = %d, want init, plan, and show", name, seen[name])
 		}
 	}
 }

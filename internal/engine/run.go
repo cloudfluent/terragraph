@@ -2,6 +2,7 @@ package engine
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -67,18 +68,23 @@ type NodeRun struct {
 	Level  int
 	Status string
 	Err    error
+	// Review is present only for explicit plan inspection and never acts as apply authorization.
+	Review *PlanReview
 }
 
 // nodeAction runs one node's step of a plan/apply/destroy: given the outputs applied so far this run and a writer for this node's terraform output, it returns the outputs to feed downstream (nil if the node produced none worth propagating, e.g. Destroy), the success status to record for the node, and an error.
 type nodeAction func(name string, applied map[string]exec.Outputs, out io.Writer) (outputs exec.Outputs, status string, err error)
 
-// runLevels is the shared execution loop behind Plan/Apply/Destroy: it walks the graph (or a single node) level by level, running up to opts.Parallelism nodes within a level concurrently. Nodes in the same level are guaranteed to have no edge between them, so a read-only snapshot of outputs applied so far is safe to share across the level's goroutines, and results are merged back only once the whole level completes (no data races). If any node in a level errors, already-started siblings finish but the next level never starts; the returned runs record those unreached nodes as StatusNotRun so a report covers the whole selection rather than stopping where execution did. afterLevel, if non-nil, runs once each level completes successfully; an error from it aborts the run the same way.
-func (e *Engine) runLevels(opts Options, reverse bool, action nodeAction, afterLevel func() error) (runs []NodeRun, err error) {
+// runLevels is the shared execution loop behind Plan/Apply/Destroy: it walks the graph (or a single node) level by level, running up to opts.Parallelism nodes within a level concurrently. Nodes in the same level are guaranteed to have no edge between them, so a read-only snapshot of outputs applied so far is safe to share across the level's goroutines, and results are merged back only once the whole level completes (no data races). If any node in a level errors, already-started siblings finish but the next level never starts; the returned runs record those unreached nodes as StatusNotRun so a report covers the whole selection rather than stopping where execution did. afterLevel, if non-nil, runs once each level completes successfully; an error from it aborts the run the same way. Only review planning opts into preserveIndependent, which blocks failed descendants while continuing unrelated branches.
+func (e *Engine) runLevels(opts Options, reverse bool, action nodeAction, afterLevel func() error, preserveIndependent ...bool) (runs []NodeRun, err error) {
 	levels, err := e.executionLevels(opts, reverse)
 	if err != nil {
 		return nil, err
 	}
 
+	keepGoing := len(preserveIndependent) > 0 && preserveIndependent[0]
+	failed := map[string]bool{}
+	var firstError error
 	applied := map[string]exec.Outputs{}
 	var mu sync.Mutex
 	var outMu sync.Mutex
@@ -97,6 +103,10 @@ func (e *Engine) runLevels(opts Options, reverse bool, action nodeAction, afterL
 	for li, level := range levels {
 		if err := e.context().Err(); err != nil {
 			return markNotRun(runs, levels, li), err
+		}
+		blocked := map[string]bool{}
+		for name := range failed {
+			blocked[name] = true
 		}
 		mu.Lock()
 		snapshot := make(map[string]exec.Outputs, len(applied))
@@ -127,6 +137,14 @@ func (e *Engine) runLevels(opts Options, reverse bool, action nodeAction, afterL
 				var outputs exec.Outputs
 				var status string
 				err := e.context().Err()
+				if err == nil && keepGoing {
+					for _, parent := range e.Graph.In[name] {
+						if blocked[parent] {
+							err = fmt.Errorf("%w: dependency %s has no successful plan evidence; resolve its diagnostic first", errPlanBlocked, parent)
+							break
+						}
+					}
+				}
 				if err == nil {
 					outputs, status, err = action(name, snapshot, out)
 				} else {
@@ -142,6 +160,7 @@ func (e *Engine) runLevels(opts Options, reverse bool, action nodeAction, afterL
 
 				mu.Lock()
 				if err != nil {
+					failed[name] = true
 					if status != StatusNotRun {
 						status = StatusFailed
 					}
@@ -164,7 +183,12 @@ func (e *Engine) runLevels(opts Options, reverse bool, action nodeAction, afterL
 
 		for _, err := range errs {
 			if err != nil {
-				return markNotRun(runs, levels, li+1), err
+				if !keepGoing {
+					return markNotRun(runs, levels, li+1), err
+				}
+				if firstError == nil {
+					firstError = err
+				}
 			}
 		}
 
@@ -174,8 +198,10 @@ func (e *Engine) runLevels(opts Options, reverse bool, action nodeAction, afterL
 			}
 		}
 	}
-	return runs, nil
+	return runs, firstError
 }
+
+var errPlanBlocked = errors.New("plan not reached")
 
 // markNotRun appends a StatusNotRun entry for every node in the levels an aborted run never reached, keeping each entry's Level aligned with the numbering the completed levels already used.
 func markNotRun(runs []NodeRun, levels [][]string, from int) []NodeRun {

@@ -2,7 +2,9 @@ package engine
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
 	"slices"
 
 	"github.com/hashicorp/hcl/v2"
@@ -13,24 +15,38 @@ import (
 
 	"github.com/cloudfluent/terragraph/internal/blueprint"
 	"github.com/cloudfluent/terragraph/internal/exec"
+	"github.com/cloudfluent/terragraph/internal/graph"
 )
+
+// A missing value must not disguise a credential or provider failure as bootstrap.
+var errUpstreamOutputMissing = errors.New("upstream output is unavailable")
+
+// InputBasis records the source of a value without duplicating the value in a review report.
+type InputBasis struct{ Input, Node, Output, Source string }
 
 // resolveInputs gathers the values for name's inputs (every data edge pointing at it, plus its own literal Vars), checking each one against the target variable's declared type. Sources are tried in a fixed order — outputs already captured earlier in the current run (keyed by node name), then that upstream node's own existing state read live — and only when the graph opted into snapshots and the live read failed, the node's published output snapshot as a last resort (see snapshot.go): never ahead of the live read, so stale snapshots cannot displace a successful live read.
 func (e *Engine) resolveInputs(name string, applied map[string]exec.Outputs) (map[string]any, error) {
+	return e.resolveInputsWithBasis(name, applied, nil)
+}
+
+func (e *Engine) resolveInputsWithBasis(name string, applied map[string]exec.Outputs, basis *[]InputBasis) (map[string]any, error) {
 	vars := map[string]any{}
-	// Multiple edges from one upstream must share one live read so a state change cannot mix revisions within a node's inputs.
-	liveOutputs := make(map[string]exec.Outputs)
+	// A successful upstream read is shared across edges so one node never mixes state revisions.
+	liveOutputs := map[string]exec.Outputs{}
 
 	for _, edge := range e.Graph.Edges {
 		if !edge.IsDataEdge() || edge.To.Node != name {
 			continue
 		}
 
+		source := "same_run"
 		outputs, ok := applied[edge.From.Node]
 		if !ok {
+			source = "live"
 			outputs, ok = liveOutputs[edge.From.Node]
 		}
 		if !ok {
+			source = "live"
 			live, err := e.runner(edge.From.Node).Outputs()
 			outputs = live
 			if err == nil {
@@ -40,6 +56,16 @@ func (e *Engine) resolveInputs(name string, applied map[string]exec.Outputs) (ma
 				// Cancellation must not fall back to disk, where stale values can obscure the cause or block a run that is already stopping.
 				if cancelled := e.context().Err(); cancelled != nil {
 					return nil, fmt.Errorf("resolving %s: %w", edge.To, cancelled)
+				}
+				if !e.Graph.Snapshots {
+					if path, known := graph.LocalStatePath(e.Graph.Nodes[edge.From.Node]); known {
+						if _, stateErr := os.Stat(path); os.IsNotExist(stateErr) {
+							if basis != nil {
+								*basis = append(*basis, InputBasis{Input: edge.To.Name, Node: edge.From.Node, Output: edge.From.Name, Source: "unavailable"})
+							}
+							return nil, fmt.Errorf("resolving %s: reading existing outputs from upstream node %q failed: %w; %w because local state is missing; recover existing local state or apply the upstream first", edge.To, edge.From.Node, err, errUpstreamOutputMissing)
+						}
+					}
 				}
 				// The snapshot is a last resort, never a preference: consulted only after the live read has failed, and only when the graph opted in (Graph.Snapshots). Reading it any earlier resurrects the removed incremental-apply cache under a new name — worst on destroy, where these values feed a resource's count or for_each and a stale value changes what gets torn down.
 				found := false
@@ -51,27 +77,31 @@ func (e *Engine) resolveInputs(name string, applied map[string]exec.Outputs) (ma
 							return nil, fmt.Errorf("resolving %s: %s was withheld from output snapshots; sensitive outputs and outputs without verified sensitivity metadata cannot be reused; restore live upstream outputs or apply the upstream in this run: %w", edge.To, edge.From, err)
 						}
 						outputs = make(exec.Outputs, len(snapshot.Outputs))
-						// readSnapshot has already removed values without verified public metadata.
+						// Snapshot loading has already withheld values without verified public metadata.
 						public := false
-						for name, value := range snapshot.Outputs {
-							outputs[name] = exec.Output{Value: value, Sensitive: &public}
+						for key, value := range snapshot.Outputs {
+							outputs[key] = exec.Output{Value: value, Sensitive: &public}
 						}
+						source = "snapshot"
 					}
 				}
 				if !found {
 					return nil, fmt.Errorf(
-						"resolving %s: upstream node %q has not been applied yet (%w)",
+						"resolving %s: reading existing outputs from upstream node %q failed: %w; check backend initialization and credentials",
 						edge.To, edge.From.Node, err,
 					)
 				}
 			}
 		}
 
+		if basis != nil {
+			*basis = append(*basis, InputBasis{Input: edge.To.Name, Node: edge.From.Node, Output: edge.From.Name, Source: source})
+		}
 		val, ok := outputs[edge.From.Name]
 		if !ok {
 			return nil, fmt.Errorf(
-				"resolving %s: node %q has no output value %q; apply it first",
-				edge.To, edge.From.Node, edge.From.Name,
+				"resolving %s: node %q has no output value %q: %w; restore live upstream outputs or apply the upstream first",
+				edge.To, edge.From.Node, edge.From.Name, errUpstreamOutputMissing,
 			)
 		}
 
@@ -99,7 +129,7 @@ func (e *Engine) resolveInputs(name string, applied map[string]exec.Outputs) (ma
 // checkType verifies a concrete value resolved from a data edge against the target variable's declared type constraint. See checkVarType, which does the actual check and is shared with a node's own literal Vars.
 func (e *Engine) checkType(edge blueprint.Edge, output exec.Output) error {
 	sourceSensitive := e.Graph.Nodes[edge.From.Node].Schema.OutputDetails[edge.From.Name].Sensitive
-	// Runtime metadata survives live reads and level boundaries so static declarations cannot expose sensitive payloads through conversion errors.
+	// Runtime metadata survives live reads and level boundaries so conversion failures cannot expose protected payloads.
 	sourceSensitive = sourceSensitive || output.Sensitive == nil || *output.Sensitive
 	if err := e.checkVarType(edge.To.Node, edge.To.Name, output.Value, sourceSensitive); err != nil {
 		return fmt.Errorf("value from %s: %w", edge.From, err)

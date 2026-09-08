@@ -164,10 +164,14 @@ func (c ResourceChange) IsReplace() bool {
 	return creates && deletes
 }
 
-// PlanChanges reads back what a saved plan intends to do, via `show -json`. It touches only the local plan file — no state is refreshed and no provider is called — so this is cheap enough to run before every apply.
-//
-// Only the enhanced backends cannot support this, and they cannot produce a plan file to read in the first place (see SupportsSavedPlan), so a caller holding a plan file can always inspect it.
-func (r *Runner) PlanChangeSet(planPath string) ([]ResourceChange, error) {
+// OutputChange deliberately omits before/after values, which can be sensitive even when resource actions are public.
+type OutputChange struct {
+	Name    string
+	Actions []string
+}
+
+// PlanChangeSet reads action metadata from the saved plan; optional output extraction also verifies the JSON format before claiming evidence.
+func (r *Runner) PlanChangeSet(planPath string, outputChanges ...*[]OutputChange) ([]ResourceChange, error) {
 	env, err := r.env()
 	if err != nil {
 		return nil, err
@@ -183,6 +187,10 @@ func (r *Runner) PlanChangeSet(planPath string) ([]ResourceChange, error) {
 	}
 
 	var doc struct {
+		FormatVersion string `json:"format_version"`
+		OutputChanges map[string]struct {
+			Actions []string `json:"actions"`
+		} `json:"output_changes"`
 		ResourceChanges []struct {
 			Address string `json:"address"`
 			Change  struct {
@@ -194,6 +202,19 @@ func (r *Runner) PlanChangeSet(planPath string) ([]ResourceChange, error) {
 		return nil, fmt.Errorf("parsing %s show -json in %s: %w", r.Binary, r.Dir, err)
 	}
 
+	if len(outputChanges) > 0 {
+		if !strings.HasPrefix(doc.FormatVersion, "1.") {
+			return nil, fmt.Errorf("unsupported plan JSON format; use a runtime with plan JSON format version 1")
+		}
+		names := make([]string, 0, len(doc.OutputChanges))
+		for name := range doc.OutputChanges {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			*outputChanges[0] = append(*outputChanges[0], OutputChange{Name: name, Actions: doc.OutputChanges[name].Actions})
+		}
+	}
 	changes := make([]ResourceChange, 0, len(doc.ResourceChanges))
 	for _, rc := range doc.ResourceChanges {
 		changes = append(changes, ResourceChange{Address: rc.Address, Actions: rc.Change.Actions})
@@ -262,7 +283,7 @@ func (outputs Outputs) Values() map[string]any {
 	return values
 }
 
-// Outputs runs `terraform output -json` and retains each output value and its runtime sensitivity. It errors if the node has never been applied (no state / no outputs); callers use that to distinguish "not yet applied" from a real failure.
+// Outputs runs `terraform output -json` and preserves sensitivity and exact numbers; an empty collection does not establish deployment history.
 func (r *Runner) Outputs() (Outputs, error) {
 	env, err := r.env()
 	if err != nil {

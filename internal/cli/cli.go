@@ -250,36 +250,45 @@ func validateRunArgs(cmd *cobra.Command, args []string) error {
 }
 
 func newPlanCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf func() *slog.Logger) *cobra.Command {
-	var node string
+	var node, output, approve string
 	var parallelism int
-	var output string
 	cmd := &cobra.Command{
 		Use:   "plan",
-		Short: "Run terraform/tofu plan across the graph in dependency order",
-		Args:  validateRunArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if output != "text" && output != "json" {
-				return fmt.Errorf("unknown output %q (want \"text\" or \"json\")", output)
+		Short: "Review node plans, actions, approval policy, and evidence limitations",
+		RunE: func(cmd *cobra.Command, args []string) (resultErr error) {
+			var runs []engine.NodeRun
+			phase := "arguments"
+			defer func() { resultErr = finishPlan(cmd, output, runs, phase, resultErr) }()
+			if err := validateRunArgs(cmd, args); err != nil {
+				return err
 			}
+			if output != "text" && output != "json" {
+				return fmt.Errorf("unknown output %q (want text or json)", output)
+			}
+			policy, policyErr := blueprint.ParseApprove(approve)
+			if policyErr != nil {
+				return policyErr
+			}
+			phase = "load"
 			e, unlock, err := loadLockedEngine(cmd, blueprintPath, binaryOf, loggerOf)
 			if err != nil {
 				return err
 			}
 			defer unlock()
+			phase = "validation"
 			if err := checkValidate(cmd, e); err != nil {
 				return err
 			}
-			// Under --output json, terraform's own output is diagnostics, not the result: stdout stays a single JSON document.
-			if output == "json" {
-				e.Stdout = cmd.ErrOrStderr()
-			}
-			runs, err := e.Plan(engine.Options{Node: node, Parallelism: parallelism})
-			return finishRun(cmd, output, runs, err)
+			e.Stdout = cmd.ErrOrStderr()
+			phase = "prepare"
+			runs, err = e.ReviewPlan(engine.Options{Node: node, Parallelism: parallelism, Approve: policy}, output == "text")
+			return err
 		},
 	}
 	cmd.Flags().StringVar(&node, "node", "", "restrict to a single node")
 	cmd.Flags().IntVar(&parallelism, "parallelism", 1, "max nodes to run concurrently within one execution level")
 	cmd.Flags().StringVar(&output, "output", "text", "output format: text or json")
+	cmd.Flags().StringVar(&approve, "approve", "safe", "default policy to assess: none, safe, or all (does not authorize apply)")
 	return cmd
 }
 

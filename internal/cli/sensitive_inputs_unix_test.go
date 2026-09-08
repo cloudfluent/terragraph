@@ -189,6 +189,7 @@ func TestPlan_ValidSensitiveInputStillReachesRuntime(t *testing.T) {
 	writeFixtureFile(t, bp, valid)
 	writeFixtureFile(t, filepath.Join(dir, "terraform-fake"), `#!/bin/sh
 case "$1" in
+  show) printf '%s\n' '{"format_version":"1.2","resource_changes":[]}'; exit 0 ;;
   init) mkdir -p "$TF_DATA_DIR"; exit 0 ;;
   plan)
     for arg in "$@"; do
