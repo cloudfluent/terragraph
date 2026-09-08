@@ -35,7 +35,7 @@ func (rc *resolveContext) push(dir, name string) (func(), error) {
 	return func() { rc.stack = rc.stack[:len(rc.stack)-1] }, nil
 }
 
-// parseGroupDir returns dir merged as a Blueprint (every .hcl file directly inside it, see blueprint.ParseDir), parsing it at most once per Build() call regardless of how many `use` blocks reference dir.
+// parseGroupDir returns dir merged as a Blueprint (eligible .hcl files directly inside it, see blueprint.ParseDir), parsing it at most once per Build() call regardless of how many `use` blocks reference dir.
 func (rc *resolveContext) parseGroupDir(dir string) (*blueprint.Blueprint, error) {
 	if bp, ok := rc.groupDirs[dir]; ok {
 		return bp, nil

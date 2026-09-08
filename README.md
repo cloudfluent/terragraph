@@ -31,7 +31,7 @@ Install **Terragraph Blueprint** from the VS Code Marketplace to get completion 
 
 ## Quick look
 
-A blueprint is a flat list of `node` and `edge` facts. Save this example as `blueprint.hcl`, the CLI's default path:
+A blueprint is a flat list of `node` and `edge` facts. Save this example as `blueprint.hcl` in your working directory:
 
 ```hcl
 node "vpc" { source = "./stacks/vpc" }
@@ -49,7 +49,7 @@ terragraph apply --parallelism 2 --auto-approve
 
 `terragraph` resolves the graph, runs `terraform`/`tofu` for each node in dependency order, and passes `vpc`'s real `vpc_id` output into `eks`'s input at runtime. See [`examples/basic`](examples/basic) for this exact setup running end to end.
 
-Filenames are flexible: `--blueprint topology.hcl` reads that file alone, while `--blueprint .` merges every `.hcl` file directly in the current directory. Without the flag, only `blueprint.hcl` is read. A group's `group.hcl` filename is also a convention; groups are selected by their block names. See [file loading and a split blueprint example](docs/blueprint.md#files-and-loading) and [group source directories](docs/groups.md#source-directories-and-filenames).
+By default, commands merge the `.hcl` files directly in the current directory, excluding `.terraform.lock.hcl`. Filenames are flexible: `--blueprint topology.hcl` reads that file alone, while `--blueprint path/to/config` selects another directory. To keep the previous single-file behavior, pass `--blueprint blueprint.hcl`; sibling `.hcl` files are now included unless a file is explicitly selected. A group's `group.hcl` filename is also a convention; groups are selected by their block names. See [file loading and a split blueprint example](docs/blueprint.md#files-and-loading) and [group source directories](docs/groups.md#source-directories-and-filenames).
 
 ## Documentation
 

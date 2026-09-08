@@ -3,6 +3,7 @@ package blueprint
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -170,5 +171,73 @@ func TestLoadPath_Directory(t *testing.T) {
 	}
 	if baseDir != dir {
 		t.Fatalf("baseDir = %q, want %q", baseDir, dir)
+	}
+}
+
+func TestParseDir_ExcludesTerraformLockButKeepsHiddenConfiguration(t *testing.T) {
+	dir := writeDirTemp(t, map[string]string{
+		".terraform.lock.hcl": `provider "registry.terraform.io/hashicorp/null" { version = "3.2.4" }`,
+		".nodes.hcl":          `node "a" { source = "./a" }`,
+	})
+	bp, err := ParseDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bp.Nodes) != 1 || bp.Nodes[0].Name != "a" {
+		t.Fatalf("got = %v, want node a", bp.Nodes)
+	}
+}
+
+func TestParseDir_RejectsOtherToolsHCL(t *testing.T) {
+	dir := writeDirTemp(t, map[string]string{"backend.hcl": `bucket = "state"`})
+	if _, err := ParseDir(dir); err == nil || !strings.Contains(err.Error(), "Unsupported argument") {
+		t.Fatalf("got = %v, want unsupported argument", err)
+	}
+}
+
+func TestLoadPath_RejectsDirectoryWithoutConfiguration(t *testing.T) {
+	for _, contents := range []struct {
+		name  string
+		files map[string]string
+	}{
+		{name: "empty"},
+		{name: "terraform_only", files: map[string]string{"main.tf": `output "id" { value = "a" }`}},
+		{name: "lock_only", files: map[string]string{".terraform.lock.hcl": `provider "example" {}`}},
+		{name: "nested_only", files: map[string]string{"nested/nodes.hcl": `node "a" { source = "./a" }`}},
+	} {
+		t.Run(contents.name, func(t *testing.T) {
+			dir := writeDirTemp(t, contents.files)
+			_, _, err := LoadPath(dir)
+			if err == nil || !strings.Contains(err.Error(), "no configuration files") || !strings.Contains(err.Error(), "--blueprint") {
+				t.Fatalf("got = %v, want missing configuration with path remedy", err)
+			}
+		})
+	}
+}
+
+func TestLoadPath_AcceptsConfigurationWithoutExecutableNodes(t *testing.T) {
+	for _, source := range []string{"", `group "empty" {}`} {
+		dir := writeDirTemp(t, map[string]string{"configuration.hcl": source})
+		bp, _, err := LoadPath(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(bp.Nodes) != 0 {
+			t.Fatalf("got = %v, want no nodes", bp.Nodes)
+		}
+	}
+}
+
+func TestLoadPath_ExplicitFileIgnoresDirectoryFilter(t *testing.T) {
+	dir := writeDirTemp(t, map[string]string{
+		".terraform.lock.hcl": `node "explicit" { source = "./a" }`,
+		"invalid.hcl":         "not valid hcl {{{",
+	})
+	bp, _, err := LoadPath(filepath.Join(dir, ".terraform.lock.hcl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bp.Nodes) != 1 || bp.Nodes[0].Name != "explicit" {
+		t.Fatalf("got = %v, want explicit file's node", bp.Nodes)
 	}
 }
