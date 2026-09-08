@@ -106,6 +106,9 @@ esac
 	if err == nil {
 		t.Fatal("unavailable sibling must fail")
 	}
+	if strings.Contains(stdout, `"outputs"`) {
+		t.Fatalf("status contains an output payload field: %s", stdout)
+	}
 	if strings.Contains(stdout+stderr, "CANARY") || strings.Contains(stdout, "applied") {
 		t.Fatalf("unsafe status = %s %s", stdout, stderr)
 	}
@@ -205,5 +208,15 @@ func TestOutput_MissingLockfileDoesNotInitialize(t *testing.T) {
 	}
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
 		t.Fatal("missing lockfile reached init")
+	}
+}
+
+func TestOutput_EmptyCollectionRemainsPresent(t *testing.T) {
+	bp := writeObservationFixture(t)
+	fake := filepath.Join(filepath.Dir(bp), "runtime")
+	writeFixtureFile(t, fake, "#!/bin/sh\ncase \"$1\" in\ninit) exit 0 ;;\noutput) printf '{}'; exit 0 ;;\nesac\n")
+	stdout, _, err := runCmdAt(t, bp, "output", "--node", "a", "--output", "json")
+	if err != nil || !strings.Contains(stdout, `"outputs":{}`) {
+		t.Fatalf("got = %q, %v, want an empty output collection", stdout, err)
 	}
 }
