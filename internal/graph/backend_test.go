@@ -554,3 +554,112 @@ func hasErrorContaining(problems []Problem, substr string) bool {
 	}
 	return false
 }
+
+func TestValidate_SharedLocalStateWithDifferentBackupIsError(t *testing.T) {
+	root := t.TempDir()
+	writeBackendModule(t, filepath.Join(root, "module"), localBackend)
+	writeFixtureFile(t, filepath.Join(root, "blueprint.hcl"), `
+node "a" {
+  source = "./module"
+  backend_config = { path = "shared.tfstate", backup = "a.backup" }
+}
+node "b" {
+  source = "./module"
+  backend_config = { path = "shared.tfstate", backup = "b.backup" }
+}
+`)
+	bp, err := blueprint.ParseFile(filepath.Join(root, "blueprint.hcl"))
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	g, err := Build(bp, root)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if problems := Validate(g); !hasErrorContaining(problems, "same local state") {
+		t.Fatalf("got = %v, want shared local state error", problems)
+	}
+}
+
+func TestValidate_S3StateAddressAcrossSourcesIsError(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"a", "b"} {
+		writeBackendModule(t, filepath.Join(root, name), `
+terraform {
+  backend "s3" {
+    bucket = "shared-bucket"
+    key = "shared.tfstate"
+    region = "us-east-1"
+  }
+}
+`)
+	}
+	writeFixtureFile(t, filepath.Join(root, "blueprint.hcl"), `
+node "a" { source = "./a" }
+node "b" { source = "./b" }
+`)
+	bp, err := blueprint.ParseFile(filepath.Join(root, "blueprint.hcl"))
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	g, err := Build(bp, root)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if problems := Validate(g); !hasErrorContaining(problems, "same s3 state") {
+		t.Fatalf("got = %v, want shared s3 state error", problems)
+	}
+}
+
+func TestValidate_LocalStateAbsolutePathAcrossSourcesIsError(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"a", "b"} {
+		writeBackendModule(t, filepath.Join(root, name), localBackend)
+	}
+	writeFixtureFile(t, filepath.Join(root, "blueprint.hcl"), `
+node "a" { source = "./a" }
+node "b" { source = "./b" }
+`)
+	bp, err := blueprint.ParseFile(filepath.Join(root, "blueprint.hcl"))
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	for i := range bp.Nodes {
+		bp.Nodes[i].BackendConfig = map[string]string{"path": filepath.Join(root, "shared.tfstate")}
+	}
+	g, err := Build(bp, root)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if problems := Validate(g); !hasErrorContaining(problems, "same local state") {
+		t.Fatalf("got = %v, want same local state error", problems)
+	}
+}
+
+func TestValidate_LocalStateExplicitWorkspacesRemainDistinct(t *testing.T) {
+	root := t.TempDir()
+	writeBackendModule(t, filepath.Join(root, "module"), localBackend)
+	writeFixtureFile(t, filepath.Join(root, "blueprint.hcl"), `
+node "a" {
+  source = "./module"
+  backend_config = { path = "shared.tfstate", backup = "a.backup" }
+  env = { TF_WORKSPACE = "first" }
+}
+node "b" {
+  source = "./module"
+  backend_config = { path = "shared.tfstate", backup = "b.backup" }
+  env = { TF_WORKSPACE = "second" }
+}
+`)
+	bp, err := blueprint.ParseFile(filepath.Join(root, "blueprint.hcl"))
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	g, err := Build(bp, root)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if problems := Validate(g); len(problems) != 0 {
+		t.Fatalf("got = %v, want separate workspace states", problems)
+	}
+}
