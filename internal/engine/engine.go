@@ -22,6 +22,8 @@ import (
 
 // Engine holds a loaded blueprint's graph and the I/O streams terraform/tofu subprocess output is forwarded to.
 type Engine struct {
+	// Context lets CLI cancellation reach every runtime and prevents later nodes from starting after interruption.
+	Context   context.Context
 	Binary    exec.Binary
 	BaseDir   string
 	Blueprint *blueprint.Blueprint
@@ -41,7 +43,7 @@ type Engine struct {
 // approvals is the single reader every prompt shares. A fresh bufio.Reader per question would buffer past the newline it needed and swallow the next question's answer.
 func (e *Engine) approvals() *bufio.Reader {
 	if e.stdin == nil {
-		e.stdin = bufio.NewReader(e.Stdin)
+		e.stdin = bufio.NewReader(approvalInput(e.context(), e.Stdin))
 	}
 	return e.stdin
 }
@@ -62,12 +64,22 @@ func (e *Engine) approve(name string, out io.Writer) (bool, error) {
 	}
 	_, _ = fmt.Fprintf(out, "\nApply these changes to node %s? [y/N]: ", name)
 	line, err := e.approvals().ReadString('\n')
+	if cancelled := e.context().Err(); cancelled != nil {
+		return false, cancelled
+	}
 	answer := strings.ToLower(strings.TrimSpace(line))
 	if answer == "" && err != nil {
 		_, _ = fmt.Fprintln(out)
 		return false, noApprovalError(name)
 	}
 	return answer == "y" || answer == "yes", nil
+}
+
+func (e *Engine) context() context.Context {
+	if e.Context != nil {
+		return e.Context
+	}
+	return context.Background()
 }
 
 func (e *Engine) logger() *slog.Logger {
@@ -82,11 +94,24 @@ func (e *Engine) logger() *slog.Logger {
 // one lock. See internal/runlock. The returned func releases a lock this call acquired;
 // it is a no-op when LoadLocked already holds one.
 func (e *Engine) lockRun() (func(), error) {
+	// Programmatic graphs can bypass parsing; check every node before acquiring locks or letting upstream output errors fall back to snapshots.
+	if e.Graph != nil {
+		names := make([]string, 0, len(e.Graph.Nodes))
+		for name := range e.Graph.Nodes {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			if err := e.runner(name).ValidateEnv(); err != nil {
+				return nil, fmt.Errorf("node.%s: %w", name, err)
+			}
+		}
+	}
 	if e.runLock != nil {
 		return func() {}, nil
 	}
 	e.logger().Debug("acquiring blueprint lock", "dir", e.BaseDir)
-	lock, err := runlock.Acquire(e.BaseDir, e.Stderr)
+	lock, err := runlock.AcquireContext(e.context(), e.BaseDir, e.Stderr)
 	if err != nil {
 		return nil, fmt.Errorf("locking blueprint: %w", err)
 	}
@@ -100,7 +125,7 @@ func (e *Engine) lockGraph() (func(), error) {
 		return func() {}, nil
 	}
 	e.logger().Debug("acquiring graph lock")
-	held, err := acquireRemoteLock(context.Background(), e.Blueprint.Lock)
+	held, err := acquireRemoteLock(e.context(), e.Blueprint.Lock)
 	if err != nil {
 		return nil, fmt.Errorf("locking graph: %w", err)
 	}
@@ -117,13 +142,18 @@ func (e *Engine) lockGraph() (func(), error) {
 
 // Load parses the blueprint at blueprintPath and builds its graph. blueprintPath may name a single file or a directory (every .hcl file directly inside it is merged, see blueprint.LoadPath); node sources are resolved relative to the resulting base directory. It does not take the process lock; use LoadLocked for plan/apply/destroy so graph.Build cannot inspect module files while vendor rewrites them.
 func Load(blueprintPath string, binary exec.Binary, stdout, stderr io.Writer) (*Engine, error) {
-	e, _, err := load(blueprintPath, binary, stdout, stderr, false)
+	e, _, err := load(context.Background(), blueprintPath, binary, stdout, stderr, false)
 	return e, err
 }
 
 // LoadLocked is Load after taking the blueprint process lock, and holds it across graph.Build so a concurrent vendor cannot rewrite module sources underneath Inspect. The caller must invoke the returned func when the run ends.
 func LoadLocked(blueprintPath string, binary exec.Binary, stdout, stderr io.Writer) (*Engine, func(), error) {
-	e, lock, err := load(blueprintPath, binary, stdout, stderr, true)
+	return LoadLockedContext(context.Background(), blueprintPath, binary, stdout, stderr)
+}
+
+// LoadLockedContext carries cancellation into the lock wait before module inspection, rather than attaching it only after a loaded engine exists.
+func LoadLockedContext(ctx context.Context, blueprintPath string, binary exec.Binary, stdout, stderr io.Writer) (*Engine, func(), error) {
+	e, lock, err := load(ctx, blueprintPath, binary, stdout, stderr, true)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -133,7 +163,7 @@ func LoadLocked(blueprintPath string, binary exec.Binary, stdout, stderr io.Writ
 	}, nil
 }
 
-func load(blueprintPath string, binary exec.Binary, stdout, stderr io.Writer, takeLock bool) (*Engine, *runlock.Lock, error) {
+func load(ctx context.Context, blueprintPath string, binary exec.Binary, stdout, stderr io.Writer, takeLock bool) (*Engine, *runlock.Lock, error) {
 	bp, dir, err := blueprint.LoadPath(blueprintPath)
 	if err != nil {
 		return nil, nil, err
@@ -147,7 +177,7 @@ func load(blueprintPath string, binary exec.Binary, stdout, stderr io.Writer, ta
 
 	var lock *runlock.Lock
 	if takeLock {
-		lock, err = runlock.Acquire(baseDir, stderr)
+		lock, err = runlock.AcquireContext(ctx, baseDir, stderr)
 		if err != nil {
 			return nil, nil, fmt.Errorf("locking blueprint: %w", err)
 		}
@@ -165,6 +195,7 @@ func load(blueprintPath string, binary exec.Binary, stdout, stderr io.Writer, ta
 	g.ContractMode = bp.ContractMode
 
 	return &Engine{
+		Context:   ctx,
 		Binary:    binary,
 		BaseDir:   baseDir,
 		Blueprint: bp,
@@ -213,7 +244,7 @@ func (e *Engine) dataDir(name string) string {
 
 // runner builds a Runner for internal, non-buffered use (reading an upstream node's already-applied outputs). The per-node runners used for the actual plan/apply/destroy commands (see plan.go/apply.go/destroy.go) are built separately, against that node's own buffered output writer.
 func (e *Engine) runner(name string) *exec.Runner {
-	return &exec.Runner{Binary: e.runtimeFor(name), Dir: e.nodeDir(name), DataDir: e.dataDir(name), Env: e.envFor(name), Stdout: e.Stdout, Stderr: e.Stderr}
+	return &exec.Runner{Context: e.context(), Binary: e.runtimeFor(name), Dir: e.nodeDir(name), DataDir: e.dataDir(name), Env: e.envFor(name), Stdout: e.Stdout, Stderr: e.Stderr}
 }
 
 // envFor returns name's fully resolved extra environment variables (see graph.Node.Env): whatever an enclosing Use.Env cascade contributed, already merged with the node's own Env. Unlike runtimeFor, there is no further CLI-level fallback layer to apply on top: env has no CLI equivalent, so whatever the graph already resolved is final.

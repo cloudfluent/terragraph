@@ -3,6 +3,7 @@ package exec
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	osexec "os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // Binary selects which CLI terragraph shells out to.
@@ -23,11 +25,13 @@ const (
 
 // Runner executes one binary against one node's working directory.
 type Runner struct {
-	Binary Binary
-	Dir    string
+	// Context bounds subprocess lifetime so cancellation finishes before the engine releases its run lock.
+	Context context.Context
+	Binary  Binary
+	Dir     string
 	// DataDir, if set, becomes TF_DATA_DIR: it isolates where Terraform keeps .terraform/ (downloaded providers and, critically, its cached backend configuration) away from Dir. Without this, two nodes that reuse the same module Source but configure different backend_config would collide: Terraform stores which backend it was last configured with inside .terraform/, keyed by working directory, so the second node's init would fail with "Backend configuration changed" even though -backend-config correctly gave it its own state. DataDir sidesteps that by giving every node its own .terraform/ regardless of whether Dir is shared.
 	DataDir string
-	// Env, if set, adds extra environment variables (e.g. AWS_PROFILE for a per-node provider configuration; see blueprint.Node.Env) on top of the process's own environment. A key here overrides any same-named variable already inherited, the same "last one wins" rule DataDir already relies on for TF_DATA_DIR.
+	// Env overrides inherited variables, but an explicit TF_DATA_DIR (case-insensitive) conflicts with DataDir and fails before execution to prevent nodes sharing a backend cache.
 	Env map[string]string
 	// Stdin, if set, is handed to the subprocess. Nil leaves it at os/exec's default, the null device, which is what every non-interactive command wants: a terraform/tofu invocation that decides to ask a question there reads EOF and fails rather than hanging forever waiting on a terminal nobody is watching.
 	Stdin  io.Reader
@@ -35,9 +39,32 @@ type Runner struct {
 	Stderr io.Writer
 }
 
-func (r *Runner) env() []string {
+// ValidateEnv lets graph execution reject explicit managed-variable conflicts before any node runs, including before a live-output error can trigger snapshot fallback.
+func (r *Runner) ValidateEnv() error {
+	if r.DataDir == "" {
+		return nil
+	}
+	keys := make([]string, 0, len(r.Env))
+	for key := range r.Env {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		// The subprocess sees the name before the first equals sign, even when it appeared inside the caller's map key.
+		name, _, _ := strings.Cut(key, "=")
+		if strings.EqualFold(name, "TF_DATA_DIR") {
+			return fmt.Errorf("env.%s: TF_DATA_DIR is managed per node to isolate backend configuration; remove this env entry", key)
+		}
+	}
+	return nil
+}
+
+func (r *Runner) env() ([]string, error) {
+	if err := r.ValidateEnv(); err != nil {
+		return nil, err
+	}
 	if r.DataDir == "" && len(r.Env) == 0 {
-		return nil // nil -> os/exec inherits os.Environ() as-is
+		return nil, nil // nil -> os/exec inherits os.Environ() as-is
 	}
 
 	env := os.Environ()
@@ -54,17 +81,21 @@ func (r *Runner) env() []string {
 	for _, k := range keys {
 		env = append(env, k+"="+r.Env[k])
 	}
-	return env
+	return env, nil
 }
 
 func (r *Runner) run(args ...string) error {
+	env, err := r.env()
+	if err != nil {
+		return err
+	}
 	cmd := osexec.Command(string(r.Binary), args...)
 	cmd.Dir = r.Dir
-	cmd.Env = r.env()
+	cmd.Env = env
 	cmd.Stdin = r.Stdin
 	cmd.Stdout = r.Stdout
 	cmd.Stderr = r.Stderr
-	return cmd.Run()
+	return runCommand(r.Context, cmd)
 }
 
 // Init runs `terraform init`. backendConfig entries are passed as -backend-config=key=value flags (Terraform's partial backend configuration mechanism), which lets the same module be reused by multiple nodes with distinct backend settings (e.g. state file path) without generating or editing any .tf file. A nil/empty map passes no such flags, leaving the module's own backend configuration as-is.
@@ -137,13 +168,17 @@ func (c ResourceChange) IsReplace() bool {
 //
 // Only the enhanced backends cannot support this, and they cannot produce a plan file to read in the first place (see SupportsSavedPlan), so a caller holding a plan file can always inspect it.
 func (r *Runner) PlanChangeSet(planPath string) ([]ResourceChange, error) {
+	env, err := r.env()
+	if err != nil {
+		return nil, err
+	}
 	var stdout bytes.Buffer
 	cmd := osexec.Command(string(r.Binary), "show", "-json", planPath)
 	cmd.Dir = r.Dir
-	cmd.Env = r.env()
+	cmd.Env = env
 	cmd.Stdout = &stdout
 	cmd.Stderr = r.Stderr
-	if err := cmd.Run(); err != nil {
+	if err := runCommand(r.Context, cmd); err != nil {
 		return nil, fmt.Errorf("running %s show -json in %s: %w", r.Binary, r.Dir, err)
 	}
 
@@ -229,13 +264,17 @@ func (outputs Outputs) Values() map[string]any {
 
 // Outputs runs `terraform output -json` and retains each output value and its runtime sensitivity. It errors if the node has never been applied (no state / no outputs); callers use that to distinguish "not yet applied" from a real failure.
 func (r *Runner) Outputs() (Outputs, error) {
+	env, err := r.env()
+	if err != nil {
+		return nil, err
+	}
 	var stdout bytes.Buffer
 	cmd := osexec.Command(string(r.Binary), "output", "-json")
 	cmd.Dir = r.Dir
-	cmd.Env = r.env()
+	cmd.Env = env
 	cmd.Stdout = &stdout
 	cmd.Stderr = r.Stderr
-	if err := cmd.Run(); err != nil {
+	if err := runCommand(r.Context, cmd); err != nil {
 		return nil, fmt.Errorf("running %s output -json in %s: %w", r.Binary, r.Dir, err)
 	}
 
