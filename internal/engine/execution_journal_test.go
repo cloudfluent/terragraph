@@ -143,3 +143,26 @@ func TestExecutionJournal_HistorySurfacesForeignScope(t *testing.T) {
 		t.Fatalf("got = %+v, %v", record, err)
 	}
 }
+
+func TestExecutionJournal_FinishedSavedOutcomeSurvivesCleanupFailure(t *testing.T) {
+	e, _ := journalFixture(t)
+	s, err := e.beginExecution("saved_apply", []string{"example"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.close()
+	if err := s.transition("example", "completed", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.finishSaved(nil); err != nil {
+		t.Fatal(err)
+	}
+	finished := s.record.FinishedAt
+	revision := s.revision
+	if err := s.finishSaved(errors.New("cleanup unavailable")); err != nil {
+		t.Fatal(err)
+	}
+	if s.record.Status != "completed" || s.record.FinishedAt != finished || s.revision != revision {
+		t.Fatalf("got = %+v", s.record)
+	}
+}
