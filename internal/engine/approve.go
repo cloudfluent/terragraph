@@ -73,14 +73,18 @@ func notPermitted(changes []exec.ResourceChange, level blueprint.Approve) []exec
 	return blocked
 }
 
-// gateError explains what a node's plan wanted to do that it was not permitted to, and how to permit it. It names both routes deliberately: the blueprint declaration is the durable answer for a node whose plan is destructive by design, and the flag is the one-off.
-func gateError(name string, level blueprint.Approve, blocked []exec.ResourceChange) error {
+// gateError offers the CLI override only when no node or use declaration would keep that retry blocked.
+func (e *Engine) gateError(name string, level blueprint.Approve, blocked []exec.ResourceChange) error {
 	var b strings.Builder
 	fmt.Fprintf(&b, "node %s plans %d change(s) its approve level (%s) does not permit:", name, len(blocked), level)
 	for _, c := range blocked {
 		fmt.Fprintf(&b, "\n  %s  %s", c.Address, describeAction(c))
 	}
 	b.WriteString("\n\nStopped before applying, so no later level ran.")
-	fmt.Fprintf(&b, "\nIf this is intended, declare approve = %q on that node, or re-run with --approve=all.", blueprint.ApproveAll)
+	if e.Graph.Nodes[name].Approve != "" {
+		fmt.Fprintf(&b, "\nIf this is intended, set approve = %q on the node or enclosing use declaration that sets this policy.", blueprint.ApproveAll)
+	} else {
+		fmt.Fprintf(&b, "\nIf this is intended, declare approve = %q on that node, or re-run with --approve=all.", blueprint.ApproveAll)
+	}
 	return fmt.Errorf("%s", b.String())
 }

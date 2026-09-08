@@ -123,7 +123,7 @@ node's own approve  >  enclosing use block  >  --approve  >  safe
 
 ...including the rule that a CLI flag only ever fills a gap nothing else spoke to. `--approve=all` does not override a node that declared `approve = "safe"`; a node that declared `approve = "all"` is not reined in by `--approve=none`. The blueprint is where a standing decision lives, and it goes through review.
 
-When a node's plan exceeds its level, the run stops **before that node is applied**. Levels execute in order, so nothing downstream runs either — the cascade is cut at its source rather than audited afterwards:
+When a node's plan exceeds its level, the run stops **before that node is applied**. Levels execute in order, so nothing downstream runs either — the cascade is cut at its source rather than audited afterwards. For a node using the run's default policy:
 
 ```
 node vpc: 3 to add, 1 to change, 0 to destroy
@@ -137,7 +137,7 @@ Stopped before applying, so no later level ran.
 If this is intended, declare approve = "all" on that node, or re-run with --approve=all.
 ```
 
-This is checked whether or not anyone is watching. An interactive `yes` answers "apply this plan", not "override the standing policy"; overriding it is `--approve=all`, which is a visible, deliberate act.
+If a node or enclosing `use` declares its policy, the error instead asks you to set `approve = "all"` on the declaration that sets it. `--approve=all` cannot override that declaration. The policy is checked whether or not anyone is watching; an interactive `yes` only approves a plan already permitted by the resolved policy.
 
 `destroy` is held to the same policy without a plan to read. Teardown is delete-only, so a node that **declared** anything short of `approve = "all"` has already said it must not be torn down, and destroy refuses before anything runs — with or without `--auto-approve`, for the same reason apply's check does not care whether anyone is watching. A node that declared nothing is unaffected: `terragraph destroy` on an ordinary blueprint behaves exactly as it always has, gated by Terraform's own confirmation prompt.
 
