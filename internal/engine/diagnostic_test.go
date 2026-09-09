@@ -37,9 +37,12 @@ func TestExecutionJournal_BarrierDiagnosticReferencesPreviousRun(t *testing.T) {
 	if err := s.transition("example", "applying", "", ""); err != nil {
 		t.Fatal(err)
 	}
+	previousID := s.record.ID
+	// A prior executor releases its directory handle before the next opens the store, which Windows enforces.
+	s.close()
 	result, err := e.Apply(Options{AutoApprove: true})
 	got := Diagnostics(err, Diagnostic{})
-	if result.ExecutionID != "" || len(got) != 1 || got[0].Code != "recovery_required" || got[0].RelatedExecutionID != s.record.ID {
+	if result.ExecutionID != "" || len(got) != 1 || got[0].Code != "recovery_required" || got[0].RelatedExecutionID != previousID {
 		t.Fatalf("got = %+v, %+v, %v", result, got, err)
 	}
 }
