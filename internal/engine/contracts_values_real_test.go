@@ -331,3 +331,27 @@ func TestContracts_RealRetainedFrontiersRecheckEffectiveInputs(t *testing.T) {
 		t.Fatalf("got = %v, want consumer frontier rejected", err)
 	}
 }
+
+func TestContracts_RealSnapshotChecksOnlyObservedPorts(t *testing.T) {
+	e := contractRuntimeFixture(t, `"valid"`, `type = string`, `producer "./producer" {
+ output "value" { type = string }
+ output "sentinel" { type = bool }
+}`)
+	e.Graph.Snapshots = true
+	if _, err := e.Apply(Options{AutoApprove: true}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, ok := e.readSnapshot("producer")
+	if !ok {
+		t.Fatal("snapshot missing")
+	}
+	if _, ok := snapshot.Outputs["sentinel"]; ok {
+		t.Fatal("unconsumed port was persisted")
+	}
+	if err := os.WriteFile(filepath.Join(e.BaseDir, ".terragraph", "state", "producer.tfstate"), []byte("invalid state"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Apply(Options{Nodes: []string{"consumer"}, AutoApprove: true}); err != nil {
+		t.Fatal(err)
+	}
+}

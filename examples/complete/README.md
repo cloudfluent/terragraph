@@ -186,16 +186,16 @@ fake value. Snapshots store consumed non-sensitive outputs and record
 temporary input files while running, retained plan bytes, and native state
 backups. Sensitivity is not encryption or a replacement for access control.
 
-Contracts compare declarations, not returned values. They do not validate
-that a producer returned the promised type or that a VPC belongs to an
-account. Fixture preconditions separately reject incorrect account/VPC
+Contracts check declarations during `validate` and actual output types and
+effective input requirements during plan/apply. They do not prove that a VPC
+belongs to an account. Fixture preconditions separately reject incorrect account/VPC
 connections, public production EKS endpoints, insufficient production
 database retention, and undersized production cache configurations.
 The runnable verifier demonstrates a plan that passes contract validation
 but fails the production endpoint precondition.
 
-`optional(...)` defaults belong in module variables. Contract type strings
-use the one-argument optional form accepted by the current contract parser.
+`optional(...)` defaults belong in module variables. Contracts use the
+one-argument optional form, either in native type expressions or legacy strings.
 Non-null claims describe these always-present roots; disabling a resource
 would require redesigning its contract and downstream graph.
 

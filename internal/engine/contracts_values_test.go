@@ -44,3 +44,25 @@ func TestContractPolicy_DoesNotExposeNestedKeys(t *testing.T) {
 		t.Fatalf("got = %v, want redacted violation", err)
 	}
 }
+
+func TestCheckVarType_ContractSensitivityProtectsConversionErrors(t *testing.T) {
+	root := t.TempDir()
+	if err := osWriteFile(filepath.Join(root, "m", "main.tf"), []byte(`variable "value" { type = map(number) }`)); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "blueprint.hcl")
+	if err := osWriteFile(path, []byte(`node "a" { source = "./m" }
+consumer "./m" {
+ input "value" { sensitive = true }
+}`)); err != nil {
+		t.Fatal(err)
+	}
+	e, err := Load(path, exec.Terraform, io.Discard, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = e.checkVarType("a", "value", map[string]any{"PRIVATE_KEY": []any{"PRIVATE_VALUE"}}, false)
+	if err == nil || strings.Contains(err.Error(), "PRIVATE") || !strings.Contains(err.Error(), "withheld") {
+		t.Fatalf("got = %v, want protected conversion error", err)
+	}
+}

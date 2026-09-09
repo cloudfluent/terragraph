@@ -101,7 +101,8 @@ func (e *Engine) resolveInputsWithBasis(name string, applied map[string]exec.Out
 			)
 		}
 
-		if err := e.validateOutputContracts(edge.From.Node, outputs); err != nil {
+		// Snapshots intentionally omit unconsumed and sensitive ports, so absence outside the consumed edge is not a new violation.
+		if err := e.contractPolicy(e.outputContractChecks(edge.From.Node, outputs, source != "snapshot"), true); err != nil {
 			return nil, err
 		}
 		if err := e.checkType(edge, val); err != nil {
@@ -130,6 +131,11 @@ func (e *Engine) checkType(edge blueprint.Edge, output exec.Output) error {
 	sourceSensitive := e.Graph.Nodes[edge.From.Node].Schema.OutputDetails[edge.From.Name].Sensitive
 	// Runtime metadata survives live reads and level boundaries so conversion failures cannot expose protected payloads.
 	sourceSensitive = sourceSensitive || output.Sensitive == nil || *output.Sensitive
+	if dc := e.nodeContracts(edge.From.Node); dc != nil {
+		if p := dc.Producer[edge.From.Name]; p.Sensitive != nil && *p.Sensitive {
+			sourceSensitive = true
+		}
+	}
 	if err := e.checkVarType(edge.To.Node, edge.To.Name, output.Value, sourceSensitive); err != nil {
 		return fmt.Errorf("value from %s: %w", edge.From, err)
 	}
@@ -146,6 +152,12 @@ func (e *Engine) checkVarType(nodeName, varName string, val any, sourceSensitive
 		return fmt.Errorf("node.%s.input.%s: const inputs cannot be supplied by dynamic edges or vars; configure the module initialization input directly", nodeName, varName)
 	}
 
+	// Contract classification also protects diagnostics in warn mode while module declarations are being corrected.
+	if dc := e.nodeContracts(nodeName); dc != nil {
+		if p := dc.Consumer[varName]; p.Sensitive != nil && *p.Sensitive {
+			sourceSensitive = true
+		}
+	}
 	// Encoding and conversion errors can contain payload keys; replace the error rather than wrapping it so callers cannot recover sensitive details from the chain.
 	if v.Sensitive || sourceSensitive {
 		defer func() {

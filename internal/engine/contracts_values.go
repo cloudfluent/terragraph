@@ -96,7 +96,7 @@ func (e *Engine) contractPolicy(checks []ContractCheck, requireKnown bool) error
 	return nil
 }
 
-func (e *Engine) outputContractChecks(name string, outputs exec.Outputs) []ContractCheck {
+func (e *Engine) outputContractChecks(name string, outputs exec.Outputs, complete bool) []ContractCheck {
 	dc := e.nodeContracts(name)
 	if dc == nil {
 		return nil
@@ -105,6 +105,9 @@ func (e *Engine) outputContractChecks(name string, outputs exec.Outputs) []Contr
 	for _, port := range contractPorts(dc.Producer) {
 		p := dc.Producer[port]
 		output, ok := outputs[port]
+		if !ok && !complete {
+			continue
+		}
 		value := cty.NilVal
 		if ok {
 			v, err := output.CtyValue()
@@ -125,7 +128,7 @@ func (e *Engine) outputContractChecks(name string, outputs exec.Outputs) []Contr
 }
 
 func (e *Engine) validateOutputContracts(name string, outputs exec.Outputs) error {
-	return e.contractPolicy(e.outputContractChecks(name, outputs), true)
+	return e.contractPolicy(e.outputContractChecks(name, outputs, true), true)
 }
 
 // inspectContractPlan checks selected external inputs too, since managed vars alone cannot establish what the module receives.
@@ -142,7 +145,7 @@ func (e *Engine) inspectContractPlan(name string, r *exec.Runner, path string, r
 		return nil, checks, nil
 	}
 	inputs := e.inputContractChecks(name, values)
-	outputs := e.outputContractChecks(name, values.Outputs)
+	outputs := e.outputContractChecks(name, values.Outputs, true)
 	checks := append(append([]ContractCheck{}, inputs...), outputs...)
 	if err := e.contractPolicy(inputs, requireInputs); err != nil {
 		return values, checks, err
