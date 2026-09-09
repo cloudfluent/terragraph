@@ -77,6 +77,7 @@ var nodeSchema = &hcl.BodySchema{
 	Attributes: []hcl.AttributeSchema{
 		{Name: "source", Required: true},
 		{Name: "backend_config", Required: false},
+		{Name: "backend_address", Required: false},
 		{Name: "vars", Required: false},
 		{Name: "runtime", Required: false},
 		{Name: "env", Required: false},
@@ -118,6 +119,7 @@ var useSchema = &hcl.BodySchema{
 		{Name: "vars", Required: false},
 		{Name: "approve", Required: false},
 		{Name: "backend_config", Required: false},
+		{Name: "backend_address", Required: false},
 	},
 }
 
@@ -745,14 +747,20 @@ func parseNodeBlock(block *hcl.Block) (Node, error) {
 		return Node{}, err
 	}
 
+	backendAddress, err := ParseBackendAddress(content.Attributes["backend_address"])
+	if err != nil {
+		return Node{}, fmt.Errorf("node.%s: %w", block.Labels[0], err)
+	}
+
 	return Node{
-		Name:          block.Labels[0],
-		Source:        val.AsString(),
-		BackendConfig: backendConfig,
-		Vars:          vars,
-		Runtime:       runtime,
-		Env:           env,
-		Approve:       approve,
+		Name:           block.Labels[0],
+		Source:         val.AsString(),
+		BackendConfig:  backendConfig,
+		BackendAddress: backendAddress,
+		Vars:           vars,
+		Runtime:        runtime,
+		Env:            env,
+		Approve:        approve,
 	}, nil
 }
 
@@ -1206,15 +1214,21 @@ func parseUseBlock(block *hcl.Block) (Use, error) {
 		}
 	}
 
+	backendAddress, err := ParseBackendAddress(content.Attributes["backend_address"])
+	if err != nil {
+		return Use{}, fmt.Errorf("use.%s: %w", asVal.AsString(), err)
+	}
+
 	return Use{
-		GroupName:     block.Labels[0],
-		As:            asVal.AsString(),
-		Source:        sourceVal.AsString(),
-		Runtime:       runtime,
-		Env:           env,
-		Vars:          vars,
-		Approve:       approve,
-		BackendConfig: backendConfig,
+		GroupName:      block.Labels[0],
+		As:             asVal.AsString(),
+		Source:         sourceVal.AsString(),
+		Runtime:        runtime,
+		Env:            env,
+		Vars:           vars,
+		Approve:        approve,
+		BackendConfig:  backendConfig,
+		BackendAddress: backendAddress,
 	}, nil
 }
 

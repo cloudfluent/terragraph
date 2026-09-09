@@ -42,7 +42,7 @@ type Graph struct {
 	Snapshots bool
 }
 
-// cloneNode returns a value copy of n with its BackendConfig/Vars/Env maps deep-copied. n.Nodes for a group instantiation come from a group definition that resolveContext.parseGroupDir may hand back to more than one `use` site (see loadGroupDef); without this, every instance of the same group would share the exact same underlying BackendConfig/Vars/Env map objects, since a plain struct copy only copies the map header, not its contents.
+// cloneNode deep-copies node maps because cached group definitions otherwise let one instance's resolved settings mutate every other instance.
 func cloneNode(n blueprint.Node) blueprint.Node {
 	if n.BackendConfig != nil {
 		clone := make(map[string]string, len(n.BackendConfig))
@@ -50,6 +50,13 @@ func cloneNode(n blueprint.Node) blueprint.Node {
 			clone[k] = v
 		}
 		n.BackendConfig = clone
+	}
+	if n.BackendAddress != nil {
+		clone := make(map[string]string, len(n.BackendAddress))
+		for k, v := range n.BackendAddress {
+			clone[k] = v
+		}
+		n.BackendAddress = clone
 	}
 	if n.Vars != nil {
 		clone := make(map[string]any, len(n.Vars))
@@ -101,7 +108,7 @@ func buildRoot(bp *blueprint.Blueprint, baseDir string, observation bool, cliBin
 	if rt, ok := bp.DefaultRuntime(); ok {
 		fallback = rt.Binary
 	}
-	g, _, err := build(bp, baseDir, "", nil, nil, nil, "", &resolveContext{observation: observation, rootDir: baseDir, rootVendorDir: filepath.Join(baseDir, bp.VendorDirectory()), fallbackBinary: fallback})
+	g, _, err := build(bp, baseDir, "", nil, nil, nil, nil, "", &resolveContext{observation: observation, rootDir: baseDir, rootVendorDir: filepath.Join(baseDir, bp.VendorDirectory()), fallbackBinary: fallback})
 	if g != nil {
 		g.Lock = bp.Lock
 		g.Snapshots = bp.Snapshots != nil && bp.Snapshots.Enabled
@@ -125,7 +132,7 @@ func fillLocalBackendPath(cfg map[string]string, schema *module.Schema, rootDir,
 }
 
 // build resolves bp into a Graph, also returning this scope's own use instances (keyed by their unqualified `as` name), needed by a caller that is itself resolving a group's Export, since an export mapping may reference either a plain internal node or one of this same group's own use instances (see resolveExportEndpoint). ambient is the runtime, if any, this whole scope inherits from the `use` block that instantiated it (nil at the top level, or when that use set none): it becomes a node's Runtime when the node names no blueprint.Node.Runtime of its own, and it cascades unchanged into a nested use's own recursive build unless that nested use sets its own override (see the loop below). ambientEnv is the analogous inherited environment, except it merges rather than replaces at every layer (see mergeEnv). ambientBackendConfig is the analogous inherited backend_config, merged the same way.
-func build(bp *blueprint.Blueprint, baseDir, namespace string, ambient *blueprint.Runtime, ambientEnv, ambientBackendConfig map[string]string, ambientApprove blueprint.Approve, rc *resolveContext) (*Graph, map[string]useInfo, error) {
+func build(bp *blueprint.Blueprint, baseDir, namespace string, ambient *blueprint.Runtime, ambientEnv, ambientBackendConfig, ambientAddress map[string]string, ambientApprove blueprint.Approve, rc *resolveContext) (*Graph, map[string]useInfo, error) {
 	g := &Graph{
 		Nodes: make(map[string]*Node),
 		Out:   make(map[string][]string),
@@ -179,7 +186,15 @@ func build(bp *blueprint.Blueprint, baseDir, namespace string, ambient *blueprin
 		}
 		qn := cloneNode(n)
 		qn.Name = qualify(n.Name)
-		qn.BackendConfig = fillLocalBackendPath(mergeEnv(ambientBackendConfig, qn.BackendConfig), schema, rc.rootDir, qn.Name)
+		qn.BackendAddress = mergeBackendAddress(ambientAddress, qn.BackendAddress)
+		qn.BackendConfig = mergeEnv(ambientBackendConfig, qn.BackendConfig)
+		if err := fillBackendAddress(&qn, schema); err != nil {
+			if !rc.observation {
+				return nil, nil, err
+			}
+			observationError = err
+		}
+		qn.BackendConfig = fillLocalBackendPath(qn.BackendConfig, schema, rc.rootDir, qn.Name)
 
 		env := mergeEnv(ambientEnv, n.Env)
 
@@ -201,12 +216,13 @@ func build(bp *blueprint.Blueprint, baseDir, namespace string, ambient *blueprin
 		}
 		nextAmbientEnv := mergeEnv(ambientEnv, u.Env)
 		nextAmbientBackend := mergeEnv(ambientBackendConfig, u.BackendConfig)
+		nextAmbientAddress := mergeBackendAddress(ambientAddress, u.BackendAddress)
 		nextAmbientApprove := ambientApprove
 		if u.Approve != "" {
 			nextAmbientApprove = u.Approve
 		}
 
-		info, internal, err := resolveUse(u, baseDir, qualify(u.As), nextAmbient, nextAmbientEnv, nextAmbientBackend, nextAmbientApprove, rc)
+		info, internal, err := resolveUse(u, baseDir, qualify(u.As), nextAmbient, nextAmbientEnv, nextAmbientBackend, nextAmbientAddress, nextAmbientApprove, rc)
 		if err != nil {
 			return nil, nil, fmt.Errorf("use %q as %q: %w", u.GroupName, u.As, err)
 		}
@@ -247,7 +263,7 @@ func build(bp *blueprint.Blueprint, baseDir, namespace string, ambient *blueprin
 }
 
 // resolveUse loads and builds the group instantiated by u (recursing through the group's own nested `use` blocks, if any), validates it, and returns both its expanded internal graph (nodes already namespaced under instancePrefix, ready to splice into the caller's graph) and a useInfo describing how the caller's edges should resolve references to this instance. ambient is u's own resolved runtime override, if any (already merged with whatever u itself inherited from further out), the new default every node inside this instance inherits unless it names its own; ambientEnv is the analogous already-merged environment; ambientBackendConfig is the analogous already-merged backend_config.
-func resolveUse(u blueprint.Use, referencingDir, instancePrefix string, ambient *blueprint.Runtime, ambientEnv, ambientBackendConfig map[string]string, ambientApprove blueprint.Approve, rc *resolveContext) (useInfo, *Graph, error) {
+func resolveUse(u blueprint.Use, referencingDir, instancePrefix string, ambient *blueprint.Runtime, ambientEnv, ambientBackendConfig, ambientAddress map[string]string, ambientApprove blueprint.Approve, rc *resolveContext) (useInfo, *Graph, error) {
 	groupDir := filepath.Join(referencingDir, u.Source)
 
 	pop, err := rc.push(groupDir, u.GroupName)
@@ -262,7 +278,7 @@ func resolveUse(u blueprint.Use, referencingDir, instancePrefix string, ambient 
 
 	// def.Nodes/Uses may reference a runtime by name (blueprint.Node.Runtime / blueprint.Use.Runtime); those names resolve against groupRuntimes, the `runtime` blocks declared in this same group source directory, never against whatever the outer scope that wrote u happens to have declared (see blueprint.validateRuntimes, which already enforced this scoping at parse time).
 	innerBP := &blueprint.Blueprint{Nodes: def.Nodes, Edges: def.Edges, Uses: def.Uses, Runtimes: groupRuntimes, Vendor: groupVendor}
-	internal, innerUses, err := build(innerBP, groupDir, instancePrefix, ambient, ambientEnv, ambientBackendConfig, ambientApprove, rc)
+	internal, innerUses, err := build(innerBP, groupDir, instancePrefix, ambient, ambientEnv, ambientBackendConfig, ambientAddress, ambientApprove, rc)
 	if err != nil {
 		return useInfo{}, nil, err
 	}

@@ -60,7 +60,9 @@ type Node struct {
 	Name          string
 	Source        string
 	BackendConfig map[string]string
-	Vars          map[string]any
+	// BackendAddress is nil to inherit; an empty rule disables inherited generation without removing explicit backend settings.
+	BackendAddress map[string]string
+	Vars           map[string]any
 	// Runtime is the name of a `runtime` block this node explicitly selects (e.g. "tofu" for `runtime = runtime.tofu`), or "" if unset. An unset Runtime doesn't necessarily mean "the built-in terraform default": it may still inherit a runtime from an enclosing Use.Runtime override, or from the blueprint's own default-marked runtime block; see graph.Node.Runtime for the fully resolved value and engine.Engine.runtimeFor for where CLI/built-in fallback is applied on top of that.
 	Runtime string
 	// Env is optional and sets extra environment variables the node's terraform/tofu subprocess runs with (e.g. AWS_PROFILE, AWS_REGION for a per-account/per-region provider configuration), keyed by variable name. Unlike Runtime (a single, replace-on-override choice), Env cascades by merging: a node's own Env entries win key-by-key over whatever an enclosing Use.Env contributed, rather than discarding the rest of it. See graph.Node.Env for the fully merged result an enclosing chain of Use.Env overrides plus this node's own Env produces.
@@ -100,8 +102,10 @@ type Use struct {
 	Vars map[string]any
 	// Approve, if set, becomes the approve level for every node this instantiation expands to, unless that node sets its own. Like Runtime, only the instantiation site can set this and a group definition has no equivalent: how much of a reusable group may be changed unattended is a fact about where it is deployed, not about the group.
 	Approve Approve
-	// BackendConfig, if set, is merged into every node this instantiation expands to, the same way Env merges: leaf keys win. Instantiation-site fact (bucket, profile, region). Do not invent a remote key from the instance name.
+	// BackendConfig merges beneath leaf keys; shared explicit addresses must remain intact even when BackendAddress selects generation.
 	BackendConfig map[string]string
+	// BackendAddress merges prefix and file-name fields beneath leaf choices; an empty object stops inherited generation.
+	BackendAddress map[string]string
 }
 
 // ExportInput is one input port a group exposes to the outside. To may list more than one internal target: a single exposed value sometimes needs to fan out to several internal nodes that each independently need it, and, unlike execution ordering (which is inferable from the internal graph's shape), there is no way to infer that fan-out from structure alone, so the group author must declare it explicitly.

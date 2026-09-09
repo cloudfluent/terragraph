@@ -171,10 +171,59 @@ async function checkContractEditing(root: string): Promise<void> {
   );
 }
 
+async function checkBackendAddressEditing(root: string): Promise<void> {
+  const dir = path.join(root, "backend-address");
+  await fs.mkdir(path.join(dir, "module"), { recursive: true });
+  await fs.writeFile(
+    path.join(dir, "module", "main.tf"),
+    'output "id" { value = "x" }\n',
+  );
+  const uri = vscode.Uri.file(path.join(dir, "blueprint.hcl"));
+  const initial =
+    'node "app" {\n source = "./module"\n backend_address = {\n  s3_key_\n }\n}\n';
+  await fs.writeFile(uri.fsPath, initial);
+  const document = await vscode.workspace.openTextDocument(uri);
+  await vscode.window.showTextDocument(document);
+  await eventually("backend address prefix and name completions", async () => {
+    const completions =
+      await vscode.commands.executeCommand<vscode.CompletionList>(
+        "vscode.executeCompletionItemProvider",
+        uri,
+        document.positionAt(initial.indexOf("s3_key_") + "s3_key_".length),
+      );
+    return ["s3_key_prefix", "s3_key_name"].every((name) =>
+      completions?.items.some((item) => item.label === name),
+    );
+  });
+  const invalid = initial.replace(
+    "s3_key_",
+    's3_key_name = "../shared.tfstate"',
+  );
+  await replace(document, invalid);
+  await eventually("backend address file name diagnostic", () =>
+    vscode.languages
+      .getDiagnostics(uri)
+      .some(
+        (diagnostic) =>
+          diagnostic.source === "terragraph" &&
+          diagnostic.message.includes("backend_address.s3_key_name"),
+      ),
+  );
+  await replace(document, invalid.replace("../shared.tfstate", "state.json"));
+  await eventually(
+    "backend address repaired",
+    () => vscode.languages.getDiagnostics(uri).length === 0,
+  );
+  console.log(
+    "PASS backend address: prefix and name completion, unsaved diagnostics and repair",
+  );
+}
+
 export async function run(): Promise<void> {
   const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   assert.ok(root, "test workspace is required");
   await checkContractEditing(root);
+  await checkBackendAddressEditing(root);
   for (const [filename, group] of [
     ["blueprint.hcl", false],
     ["group.hcl", true],
