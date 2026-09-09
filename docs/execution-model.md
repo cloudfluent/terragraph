@@ -27,7 +27,7 @@ terragraph destroy --node checkout.cluster --downstream
 
 A single `--node` without `--downstream` still selects only that leaf. Names are case-sensitive and are neither trimmed nor interpreted as patterns. Empty names, unknown names, group instance names, and `--downstream` without a starting node are errors. `--node b,x` is a literal name, not a comma-separated list; use `--node b --node x`. Positional node names such as `terragraph apply checkout.cluster` are rejected. `--downstream=false` does not expand a selection and preserves whole-graph behavior when no nodes were specified.
 
-Membership is fixed before runtime calls. terragraph filters the original full-graph levels, removes empty levels, and numbers the remaining levels consecutively. It preserves alphabetical order within each level. It does not recompute a more parallel schedule after removing external dependencies. `destroy` uses the same membership with reversed levels. An unchanged upstream never skips a selected downstream node's fresh plan.
+Membership is fixed before runtime calls. terragraph filters the original full-graph levels, removes empty levels, and numbers the remaining levels consecutively. It preserves alphabetical order within each level. These levels remain stable report labels, not scheduling barriers: only selected prerequisites gate dispatch. `destroy` uses the same membership with reversed levels and waits for selected consumers before their producers. An unchanged upstream never skips a selected downstream node's fresh plan.
 
 Selection limits execution, not validation or coordination: errors anywhere in the blueprint can block the run, and existing local/remote locks and unresolved-execution recovery barriers still apply. Per-node data directories, approval policies, failure handling, and the requirement for `--auto-approve` with concurrent apply/destroy are unchanged. A failure can follow successful changes to other selected nodes; selection provides no atomicity or automatic rollback.
 
@@ -65,7 +65,7 @@ For `a -> b -> c`, selecting `b` with downstream expansion produces:
 }
 ```
 
-`mode` is `exact` or `downstream`. Requested leaves retain `reason: "requested"` even if also reachable from another seed. Other leaves list their selected immediate predecessors in `via`, not every possible path. `requested`, `nodes`, and `via` are sorted by name. Boundary edges sort by source node/port, destination node/port, then kind. Ordering edges use `kind: "ordering"` and omit ports. All array fields are arrays, including empty arrays. Execution order comes from `levels` or each result node's `level`, not selection array order.
+`mode` is `exact` or `downstream`. Requested leaves retain `reason: "requested"` even if also reachable from another seed. Other leaves list their selected immediate predecessors in `via`, not every possible path. `requested`, `nodes`, and `via` are sorted by name. Boundary edges sort by source node/port, destination node/port, then kind. Ordering edges use `kind: "ordering"` and omit ports. All array fields are arrays, including empty arrays. Report order comes from `levels` or each result node's `level`, not selection array order; concurrent execution can overlap levels.
 
 Selected DOT output includes selected leaves and adjacent boundary context. External leaves are gray and labeled `not selected`; edges between two external leaves are omitted. Solid/dashed lines still distinguish data/ordering, and the legend and boundary labels distinguish scope. `--output json --format dot` remains invalid.
 
@@ -129,7 +129,7 @@ terragraph apply --approve all
 
 Resolution is `node's own approve > enclosing use > --approve > safe`. Nested groups use the nearest declaration. The CLI flag fills an unset policy: `--approve all` cannot override an explicit `approve = "safe"`, and `--approve none` cannot restrict an explicit `approve = "all"`.
 
-When a plan exceeds its policy, that node fails before apply and later execution levels do not run. The error identifies the disallowed actions and the declaration or flag to change. Other nodes in the same level can still finish; see [failure and retry](#failure-and-retry).
+When a plan exceeds its policy, that node fails before apply. By default, no new work beyond its execution level starts; `--on-failure` can change this dispatch policy. The error identifies the disallowed actions and the declaration or flag to change. Other nodes in the same level and already-running nodes can still finish; see [failure and retry](#failure-and-retry).
 
 `destroy` checks the selected nodes before running any of them. An explicit `approve = "none"` or `"safe"`, including one inherited from `use`, blocks teardown. Nodes without a declared policy are allowed to reach Terraform's own confirmation prompt. `destroy` has no `--approve` flag: change the declaration if teardown is intended. `--auto-approve` does not bypass this policy.
 
@@ -143,7 +143,7 @@ Without `--auto-approve`, terragraph asks before applying each node that has cha
 Apply these changes to node eks? [y/N]:
 ```
 
-- Only `y` or `yes` approves. A refusal fails that node and prevents later levels from running.
+- Only `y` or `yes` approves. A refusal fails that node and, by default, prevents new work in later levels from starting; `--on-failure` can change this dispatch policy.
 - Unchanged nodes need no confirmation.
 - Piped input is supported, but each changed node needs an answer. If no input is available, the command fails with a remedy to use `--auto-approve`.
 - Both `--parallelism N` with N greater than 1 and `--output json` require `--auto-approve` for `apply` and `destroy`. `plan` needs no confirmation.
@@ -152,7 +152,7 @@ For `destroy`, the confirmation comes from Terraform/OpenTofu itself. It does no
 
 ## Execution levels and parallelism
 
-Nodes in the same execution level have no dependency edge between them. The default `--parallelism 1` runs them sequentially and streams output live. `--parallelism N` runs up to N nodes in a level concurrently, buffering output into a separate `=== node <name> ===` block per node. terragraph completes a level before starting the next one.
+Nodes start when all their selected prerequisites have succeeded and a concurrency slot is free. Both data and ordering edges gate execution; destroy reverses those dependencies. A ready child can start while an unrelated root is still running. The default `--parallelism 1` runs sequentially and streams output live. `--parallelism N` runs up to N ready nodes across levels concurrently, buffering output into a separate `=== node <name> ===` block per node. Ready nodes are considered in report order (level, then name); reports retain that order regardless of completion order. Successful outputs are published before dependent actions start.
 
 ```sh
 terragraph apply --parallelism 4 --auto-approve
@@ -162,9 +162,15 @@ This limit controls concurrent **nodes**; each Terraform/OpenTofu process still 
 
 ## Failure and retry
 
-An ordinary node failure, policy rejection, or declined confirmation does not cancel its siblings: **the other nodes in that level continue, even with `--parallelism 1`**. No later level starts. Interrupting the command has different behavior, described [below](#interrupting-an-execution).
+By default, an ordinary node failure, policy rejection, or declined confirmation does not cancel its siblings: **the other nodes in that level continue, even with `--parallelism 1`**. After a failure is observed, no new node beyond the earliest failed execution level starts. Nodes already running, including nodes in later levels, finish normally; their outcomes remain in the report and execution journal. Interrupting the command has different behavior, described [below](#interrupting-an-execution).
 
 terragraph does not roll back completed changes. A failed apply may also have changed some resources before failing, or may have succeeded before a subsequent output read failed. Inspect the reported error and current state, fix the cause, and rerun `terragraph apply`. It plans again against current state and skips unchanged nodes. Use `--node` alone to retry that leaf; add `--downstream` when its reachable consumers should also be selected.
+
+### Failure handling
+
+`plan`, `apply`, and `destroy` accept `--on-failure stop` or `--on-failure continue`. Omission preserves the existing command default: review planning continues independent branches, while ordinary plan/apply/destroy finish queued siblings in the failed level and start no new work beyond that level once the failure is observed. `stop` stops all new dispatch after an observed failure; already-running actions finish normally. `continue` runs independent branches and blocks transitive dependents of failures (producers in destroy's reverse direction). Every failure still returns a nonzero exit status. Reports retain existing statuses and diagnostics, and the execution journal retains observed mutation outcomes.
+
+This is invocation scheduling policy, not a retry or recovery mechanism. Saved frontier commands (`plan --save`, `--continue`, and `apply --plan`) reject the flag and retain their explicit continuation/recovery rules. Cancellation always stops new dispatch regardless of this setting.
 
 ## How values are passed
 
@@ -392,13 +398,16 @@ A subsequent apply still creates and inspects a fresh plan and applies those
 same bytes under the existing confirmation, policy, and lock rules. Neither
 a JSON result nor a `pass` assessment authorizes it.
 
-Review planning continues independent branches after failures. Dependents of a
+By default, review planning continues independent branches after failures. Dependents of a
 failed selected node retain status `not run` with a dependency diagnostic;
 their counts and change verdict remain unknown. A missing output is distinct
 from credential, provider, and live-read failures. No placeholder values are
 injected. Snapshot fallback remains opt-in and is reported explicitly.
-This scheduling change applies to CLI plan review only; apply/destroy still stop
-before subsequent levels after a failed level.
+Without `--on-failure`, this independent-branch behavior applies to CLI plan
+review only; ordinary plan/apply/destroy stop starting nodes beyond the earliest
+failed level once the failure is observed. `--on-failure stop|continue` overrides
+these defaults as described in [failure handling](#failure-handling).
+Already-running nodes finish normally.
 
 Saved-plan inspection is unavailable for remote/cloud execution backends.
 JSON reports `inspection_unsupported` and exits nonzero; text keeps native plan

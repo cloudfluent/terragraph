@@ -12,6 +12,9 @@ import (
 
 // SavePlans freezes only the current frontier; later inputs must come from real upstream outputs after the reviewed frontier has been applied.
 func (e *Engine) SavePlans(opts Options, continueID string) (record ExecutionRecord, resultErr error) {
+	if err := opts.validateFailurePolicy(true); err != nil {
+		return record, err
+	}
 	if continueID != "" && opts.hasSelectionFlags() {
 		return record, WithDiagnostic(fmt.Errorf("--continue already fixes node selection; omit --node and --downstream"), Diagnostic{Code: "invalid_arguments", Category: "arguments", Phase: "arguments"})
 	}
@@ -177,6 +180,9 @@ func (e *Engine) saveFrontierNode(s *executionSession, name string, opts Options
 
 // ApplySavedPlans applies exactly the stored frontier and never plans or applies downstream nodes in the same invocation.
 func (e *Engine) ApplySavedPlans(id string, opts Options) (result RunResult, resultErr error) {
+	if err := opts.validateFailurePolicy(true); err != nil {
+		return result, err
+	}
 	if opts.hasSelectionFlags() {
 		return result, WithDiagnostic(fmt.Errorf("--plan already fixes node selection; omit --node and --downstream"), Diagnostic{Code: "invalid_arguments", Category: "arguments", Phase: "arguments"})
 	}
