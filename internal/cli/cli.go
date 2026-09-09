@@ -131,10 +131,14 @@ func checkValidate(cmd *cobra.Command, e *engine.Engine) error {
 	return nil
 }
 
-// finishRun emits a run's JSON report when requested and returns the run's error. The report is printed even for a failed run — per-node outcomes are exactly what an automation consumer needs when things went wrong — but not when nothing ran at all (the run failed before any node, e.g. a lock error), where there is no run to report.
-func finishRun(cmd *cobra.Command, output string, runs []engine.NodeRun, err error) error {
-	if output == "json" && (len(runs) > 0 || err == nil) {
-		if werr := writeJSON(cmd.OutOrStdout(), runResult{Nodes: nodeRunsToDTO(runs)}); werr != nil {
+// finishRun preserves resolved scope on preparation failures without changing the default no-result behavior of unselected runs.
+func finishRun(cmd *cobra.Command, output string, runs []engine.NodeRun, err error, selection ...*selectionDTO) error {
+	var scope *selectionDTO
+	if len(selection) > 0 {
+		scope = selection[0]
+	}
+	if output == "json" && (len(runs) > 0 || err == nil || scope != nil) {
+		if werr := writeJSON(cmd.OutOrStdout(), runResult{Nodes: nodeRunsToDTO(runs), Selection: scope}); werr != nil {
 			return werr
 		}
 	}
@@ -185,10 +189,12 @@ func newValidateCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf
 }
 
 func newGraphCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf func() *slog.Logger) *cobra.Command {
+	var selection selectionFlags
 	var format string
 	var output string
 	cmd := &cobra.Command{
 		Use:   "graph",
+		Args:  validateRunArgs,
 		Short: "Print the resolved execution levels or a Graphviz DOT rendering",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if output != "text" && output != "json" {
@@ -206,17 +212,27 @@ func newGraphCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fu
 				return err
 			}
 
+			scope, err := graph.Select(e.Graph, selection.nodes, selection.downstream)
+			if err != nil {
+				return err
+			}
+			var names []string
+			if scope != nil {
+				names = scope.Names()
+			}
+			levels, err := graph.SelectedLevels(e.Graph, names, false)
+			if err != nil {
+				return err
+			}
+			dto := selectionToDTO(scope)
 			switch format {
 			case "dot":
-				_, _ = fmt.Fprint(cmd.OutOrStdout(), graph.DOT(e.Graph))
+				_, _ = fmt.Fprint(cmd.OutOrStdout(), graph.SelectionDOT(e.Graph, scope))
 			case "list", "":
-				levels, err := e.Levels()
-				if err != nil {
-					return err
-				}
 				if output == "json" {
-					return writeJSON(cmd.OutOrStdout(), graphResult{Levels: levels})
+					return writeJSON(cmd.OutOrStdout(), graphResult{Levels: levels, Selection: dto})
 				}
+				printSelection(cmd.OutOrStdout(), dto, nil)
 				for i, level := range levels {
 					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "level %d: %s\n", i+1, joinNames(level))
 				}
@@ -226,6 +242,7 @@ func newGraphCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fu
 			return nil
 		},
 	}
+	selection.add(cmd)
 	cmd.Flags().StringVar(&format, "format", "list", "output format: list or dot")
 	cmd.Flags().StringVar(&output, "output", "text", "output stream encoding: text or json (json is only supported with --format list)")
 	return cmd
@@ -251,7 +268,8 @@ func validateRunArgs(cmd *cobra.Command, args []string) error {
 }
 
 func newPlanCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf func() *slog.Logger) *cobra.Command {
-	var node, output, approve string
+	var selection selectionFlags
+	var output, approve string
 	var save bool
 	var continueID string
 	var parallelism int
@@ -261,12 +279,13 @@ func newPlanCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fun
 		RunE: func(cmd *cobra.Command, args []string) (resultErr error) {
 			var runs []engine.NodeRun
 			var savedRecord engine.ExecutionRecord
+			var scope *selectionDTO
 			phase := "arguments"
 			defer func() {
 				if save {
-					resultErr = finishSavedExecution(cmd, output, savedRecord, resultErr)
+					resultErr = finishSavedExecution(cmd, output, savedRecord, resultErr, scope)
 				} else {
-					resultErr = finishPlan(cmd, output, runs, phase, resultErr)
+					resultErr = finishPlan(cmd, output, runs, phase, resultErr, scope)
 				}
 			}()
 			if err := validateRunArgs(cmd, args); err != nil {
@@ -277,6 +296,9 @@ func newPlanCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fun
 			}
 			if continueID != "" && !save {
 				return fmt.Errorf("--continue requires --save")
+			}
+			if continueID != "" && selection.specified(cmd) {
+				return fmt.Errorf("--continue already fixes node selection; omit --node and --downstream")
 			}
 			policy, policyErr := blueprint.ParseApprove(approve)
 			if policyErr != nil {
@@ -294,15 +316,17 @@ func newPlanCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fun
 			}
 			e.Stdout = cmd.ErrOrStderr()
 			phase = "prepare"
+			opts := selection.options(cmd, output, &scope)
+			opts.Parallelism, opts.Approve = parallelism, policy
 			if save {
-				savedRecord, err = e.SavePlans(engine.Options{Node: node, Parallelism: parallelism, Approve: policy}, continueID)
+				savedRecord, err = e.SavePlans(opts, continueID)
 				return err
 			}
-			runs, err = e.ReviewPlan(engine.Options{Node: node, Parallelism: parallelism, Approve: policy}, output == "text")
+			runs, err = e.ReviewPlan(opts, output == "text")
 			return err
 		},
 	}
-	cmd.Flags().StringVar(&node, "node", "", "restrict to a single node")
+	selection.add(cmd)
 	cmd.Flags().IntVar(&parallelism, "parallelism", 1, "max nodes to run concurrently within one execution level")
 	cmd.Flags().StringVar(&output, "output", "text", "output format: text or json")
 	cmd.Flags().BoolVar(&save, "save", false, "save only the ready graph frontier for a later apply --plan")
@@ -313,7 +337,7 @@ func newPlanCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fun
 }
 
 func newApplyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf func() *slog.Logger) *cobra.Command {
-	var node string
+	var selection selectionFlags
 	var planID string
 	var retainPlan bool
 	var autoApprove bool
@@ -326,6 +350,9 @@ func newApplyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fu
 		Short: "Run terraform/tofu apply across the graph in dependency order, wiring outputs to inputs",
 		Args:  validateRunArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if planID != "" && selection.specified(cmd) {
+				return fmt.Errorf("--plan already fixes node selection; omit --node and --downstream")
+			}
 			if output != "text" && output != "json" {
 				return fmt.Errorf("unknown output %q (want \"text\" or \"json\")", output)
 			}
@@ -349,7 +376,9 @@ func newApplyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fu
 			if output == "json" {
 				e.Stdout = cmd.ErrOrStderr()
 			}
-			opts := engine.Options{Node: node, AutoApprove: autoApprove, Approve: level, Parallelism: parallelism, RetainPlan: retainPlan}
+			var scope *selectionDTO
+			opts := selection.options(cmd, output, &scope)
+			opts.AutoApprove, opts.Approve, opts.Parallelism, opts.RetainPlan = autoApprove, level, parallelism, retainPlan
 			var runs []engine.NodeRun
 			if planID != "" {
 				if retainPlan {
@@ -359,10 +388,10 @@ func newApplyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fu
 			} else {
 				runs, err = e.Apply(opts)
 			}
-			return finishRun(cmd, output, runs, err)
+			return finishRun(cmd, output, runs, err, scope)
 		},
 	}
-	cmd.Flags().StringVar(&node, "node", "", "restrict to a single node")
+	selection.add(cmd)
 	cmd.Flags().StringVar(&planID, "plan", "", "apply the stored frontier of a saved execution without replanning")
 	cmd.Flags().BoolVar(&retainPlan, "retain-plan", false, "retain optional plan artifacts while ordinary apply continues")
 	cmd.Flags().BoolVar(&autoApprove, "auto-approve", false, "skip the interactive approval prompt")
@@ -376,7 +405,7 @@ func newApplyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fu
 }
 
 func newDestroyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf func() *slog.Logger) *cobra.Command {
-	var node string
+	var selection selectionFlags
 	var autoApprove bool
 	var parallelism int
 	var output string
@@ -404,11 +433,14 @@ func newDestroyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf 
 			if output == "json" {
 				e.Stdout = cmd.ErrOrStderr()
 			}
-			runs, err := e.Destroy(engine.Options{Node: node, AutoApprove: autoApprove, Parallelism: parallelism})
-			return finishRun(cmd, output, runs, err)
+			var scope *selectionDTO
+			opts := selection.options(cmd, output, &scope)
+			opts.AutoApprove, opts.Parallelism = autoApprove, parallelism
+			runs, err := e.Destroy(opts)
+			return finishRun(cmd, output, runs, err, scope)
 		},
 	}
-	cmd.Flags().StringVar(&node, "node", "", "restrict to a single node")
+	selection.add(cmd)
 	cmd.Flags().BoolVar(&autoApprove, "auto-approve", false, "skip interactive approval")
 	cmd.Flags().IntVar(&parallelism, "parallelism", 1, "max nodes to run concurrently within one execution level")
 	cmd.Flags().StringVar(&output, "output", "text", "output format: text or json")

@@ -21,6 +21,12 @@ func (e *Engine) ReviewPlan(opts Options, allowTextFallback bool) ([]NodeRun, er
 }
 
 func (e *Engine) plan(opts Options, inspect, allowTextFallback bool) (runs []NodeRun, resultErr error) {
+	opts, selectionErr := e.resolveSelection(opts)
+	if selectionErr != nil {
+		return nil, selectionErr
+	}
+	opts.announceSelection(false)
+
 	unlock, err := e.lockRun()
 	if err != nil {
 		return nil, err
@@ -50,7 +56,7 @@ func (e *Engine) plan(opts Options, inspect, allowTextFallback bool) (runs []Nod
 		}
 	}()
 
-	e.logger().Info("plan starting", "node", opts.Node, "parallelism", opts.parallelism())
+	e.logger().Info("plan starting", "nodes", opts.Nodes, "parallelism", opts.parallelism())
 	var reviewMu sync.Mutex
 	reviews := map[string]*PlanReview{}
 	runs, runErr := e.runLevels(opts, false, func(name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
@@ -67,7 +73,7 @@ func (e *Engine) plan(opts Options, inspect, allowTextFallback bool) (runs []Nod
 			return nil, "", err
 		}
 		if inspect {
-			if err := e.checkRuntimeFiles(Options{Node: name}); err != nil {
+			if err := e.checkRuntimeFiles(Options{Nodes: []string{name}}); err != nil {
 				return fail("runtime_incompatible", "prepare", err)
 			}
 		}

@@ -11,7 +11,7 @@ import (
 
 func TestExecutionCleanup_PreservesOldUnknownRecordsAndBundles(t *testing.T) {
 	e, _ := journalFixture(t)
-	s, err := e.beginExecution("apply", []string{"example"})
+	s, err := e.beginExecution("apply", []string{"example"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +48,7 @@ func TestExecutionCleanup_PreservesOldUnknownRecordsAndBundles(t *testing.T) {
 
 func TestExecutionCleanup_ExpiresPausedPlansBeforeDeletingRecords(t *testing.T) {
 	e, _ := journalFixture(t)
-	s, err := e.beginExecution("saved_apply", []string{"example"})
+	s, err := e.beginExecution("saved_apply", []string{"example"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestExecutionCleanup_ExpiresPausedPlansBeforeDeletingRecords(t *testing.T) 
 
 func TestExecutionCleanup_RemovesBackupOnlyWithExpiredResolvedRecord(t *testing.T) {
 	e, _ := journalFixture(t)
-	s, err := e.beginExecution("run_state_rm", []string{"example"})
+	s, err := e.beginExecution("run_state_rm", []string{"example"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

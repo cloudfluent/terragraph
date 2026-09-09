@@ -106,7 +106,7 @@ func TestSavedExecution_RealFrontierAndExactApplication(t *testing.T) {
 
 func TestSavedExecution_RealChangedSourceRefused(t *testing.T) {
 	e := savedRuntimeFixture(t)
-	record, err := e.SavePlans(Options{Node: "upstream"}, "")
+	record, err := e.SavePlans(Options{Nodes: []string{"upstream"}}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

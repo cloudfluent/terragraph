@@ -13,23 +13,27 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/cloudfluent/terragraph/internal/graph"
 )
 
 // ExecutionRecord records observed command outcomes, never a second copy of infrastructure state.
 type ExecutionRecord struct {
-	SchemaVersion int             `json:"schema_version"`
-	Preparation   string          `json:"preparation,omitempty"`
-	Backup        bool            `json:"backup,omitempty"`
-	ID            string          `json:"id"`
-	Scope         string          `json:"scope"`
-	Binding       string          `json:"binding,omitempty"`
-	Operation     string          `json:"operation"`
-	Status        string          `json:"status"`
-	CreatedAt     time.Time       `json:"created_at"`
-	UpdatedAt     time.Time       `json:"updated_at"`
-	FinishedAt    *time.Time      `json:"finished_at,omitempty"`
-	RecoveryAt    *time.Time      `json:"recovery_at,omitempty"`
-	Nodes         []ExecutionNode `json:"nodes"`
+	// Selection is explanatory only; Nodes remains authoritative for saved execution membership.
+	Selection     *graph.Selection `json:"selection,omitempty"`
+	SchemaVersion int              `json:"schema_version"`
+	Preparation   string           `json:"preparation,omitempty"`
+	Backup        bool             `json:"backup,omitempty"`
+	ID            string           `json:"id"`
+	Scope         string           `json:"scope"`
+	Binding       string           `json:"binding,omitempty"`
+	Operation     string           `json:"operation"`
+	Status        string           `json:"status"`
+	CreatedAt     time.Time        `json:"created_at"`
+	UpdatedAt     time.Time        `json:"updated_at"`
+	FinishedAt    *time.Time       `json:"finished_at,omitempty"`
+	RecoveryAt    *time.Time       `json:"recovery_at,omitempty"`
+	Nodes         []ExecutionNode  `json:"nodes"`
 }
 
 // ExecutionNode separates successful mutation from output collection so failed post-processing cannot cause a blind replay.
@@ -151,6 +155,15 @@ func readExecutionRecord(ctx context.Context, store executionStore, id string) (
 	if record.SchemaVersion != 1 || record.ID != id || record.Scope == "" || record.Status == "" {
 		return ExecutionRecord{}, "", fmt.Errorf("execution record is incompatible or incomplete; restore a valid record")
 	}
+	if record.Selection != nil {
+		names := make([]string, 0, len(record.Nodes))
+		for _, node := range record.Nodes {
+			names = append(names, node.Name)
+		}
+		if err := record.Selection.ValidateMembership(names); err != nil {
+			return ExecutionRecord{}, "", err
+		}
+	}
 	return record, obj.Revision, nil
 }
 
@@ -170,7 +183,7 @@ func executionNeedsRecovery(record ExecutionRecord) bool {
 	return false
 }
 
-func (e *Engine) beginExecution(operation string, names []string, readOnly ...bool) (*executionSession, error) {
+func (e *Engine) beginExecution(operation string, names []string, selection *graph.Selection, readOnly ...bool) (*executionSession, error) {
 	store, err := e.openExecutionStore()
 	if err != nil {
 		return nil, err
@@ -192,7 +205,7 @@ func (e *Engine) beginExecution(operation string, names []string, readOnly ...bo
 		return nil, err
 	}
 	now := time.Now().UTC()
-	record := ExecutionRecord{SchemaVersion: 1, ID: newExecutionID("run"), Scope: scope, Operation: operation, Status: "preparing", CreatedAt: now, UpdatedAt: now, Nodes: []ExecutionNode{}}
+	record := ExecutionRecord{Selection: selection, SchemaVersion: 1, ID: newExecutionID("run"), Scope: scope, Operation: operation, Status: "preparing", CreatedAt: now, UpdatedAt: now, Nodes: []ExecutionNode{}}
 	for _, name := range names {
 		target, err := e.executionTarget(name)
 		if err != nil {
@@ -336,7 +349,7 @@ func (e *Engine) startExecution(operation string, opts Options, reverse bool) (*
 	for _, level := range levels {
 		names = append(names, level...)
 	}
-	return e.beginExecution(operation, names)
+	return e.beginExecution(operation, names, opts.selection)
 }
 
 // GetExecution reads only the requested object so corrupt siblings cannot hide recovery evidence.

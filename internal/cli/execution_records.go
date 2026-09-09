@@ -17,6 +17,7 @@ type executionNodeDTO struct {
 }
 
 type executionDTO struct {
+	Selection   *selectionDTO      `json:"selection,omitempty"`
 	ID          string             `json:"id"`
 	Preparation string             `json:"preparation,omitempty"`
 	Backup      bool               `json:"backup_available"`
@@ -30,13 +31,14 @@ type executionDTO struct {
 }
 
 type executionHistoryDTO struct {
+	Selection     *selectionDTO   `json:"selection,omitempty"`
 	SchemaVersion int             `json:"schema_version"`
 	Executions    []executionDTO  `json:"executions"`
 	Diagnostics   []diagnosticDTO `json:"diagnostics"`
 }
 
 func executionToDTO(record engine.ExecutionRecord) executionDTO {
-	dto := executionDTO{ID: record.ID, Preparation: record.Preparation, Backup: record.Backup, Operation: record.Operation, Status: record.Status, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt, FinishedAt: record.FinishedAt, RecoveryAt: record.RecoveryAt, Nodes: []executionNodeDTO{}}
+	dto := executionDTO{Selection: selectionToDTO(record.Selection), ID: record.ID, Preparation: record.Preparation, Backup: record.Backup, Operation: record.Operation, Status: record.Status, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt, FinishedAt: record.FinishedAt, RecoveryAt: record.RecoveryAt, Nodes: []executionNodeDTO{}}
 	for _, node := range record.Nodes {
 		dto.Nodes = append(dto.Nodes, executionNodeDTO{Node: node.Name, Review: reviewToDTO(node.Review), Phase: node.Phase, PlanID: node.PlanID, Code: node.Code})
 	}
@@ -73,6 +75,7 @@ func newExecutionHistoryCmd(kind string, path *string) *cobra.Command {
 				for _, record := range result.Executions {
 					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s  %s  %s\n", record.ID, record.Operation, record.Status)
 					if kind == "show" {
+						printSelection(cmd.OutOrStdout(), record.Selection, nil)
 						if record.Backup {
 							_, _ = fmt.Fprintln(cmd.OutOrStdout(), "  backup: available (export with plan show --backup)")
 						}

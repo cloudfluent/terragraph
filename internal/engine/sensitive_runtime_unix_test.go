@@ -41,7 +41,11 @@ func TestApply_RuntimeSensitiveInputErrorsWithholdPayload(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					runs, err := e.Apply(Options{Node: node, AutoApprove: true, Parallelism: 2})
+					var nodes []string
+					if node != "" {
+						nodes = []string{node}
+					}
+					runs, err := e.Apply(Options{Nodes: nodes, AutoApprove: true, Parallelism: 2})
 					if metadata == `"sensitive":false,` {
 						if err == nil || !strings.Contains(err.Error(), "PRIVATE_PAYLOAD_KEY") || strings.Contains(err.Error(), "value details withheld") {
 							t.Fatalf("error = %v, want detailed public input error", err)

@@ -9,9 +9,11 @@ terragraph graph [flags]
 ### Options
 
 ```
-      --format string   output format: list or dot (default "list")
-  -h, --help            help for graph
-      --output string   output stream encoding: text or json (json is only supported with --format list) (default "text")
+      --downstream         include all successors of --node across data and ordering edges
+      --format string      output format: list or dot (default "list")
+  -h, --help               help for graph
+      --node stringArray   select an exact leaf name (repeat for multiple nodes; commas are literal)
+      --output string      output stream encoding: text or json (json is only supported with --format list) (default "text")
 ```
 
 ### Options inherited from parent commands
