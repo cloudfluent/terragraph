@@ -112,9 +112,69 @@ async function checkEditingFeatures(
   );
 }
 
+async function checkContractEditing(root: string): Promise<void> {
+  const dir = path.join(root, "native-contracts");
+  await fs.mkdir(path.join(dir, "module"), { recursive: true });
+  await fs.writeFile(
+    path.join(dir, "module", "main.tf"),
+    'variable "value" { type = list(string) }\n',
+  );
+  const uri = vscode.Uri.file(path.join(dir, "contracts.hcl"));
+  const initial =
+    'consumer "./module" {\n input "value" {\n  type = li\n }\n}\n';
+  await fs.writeFile(uri.fsPath, initial);
+  const document = await vscode.workspace.openTextDocument(uri);
+  await vscode.window.showTextDocument(document);
+  await eventually("native contract completion", async () => {
+    const result = await vscode.commands.executeCommand<vscode.CompletionList>(
+      "vscode.executeCompletionItemProvider",
+      uri,
+      document.positionAt(initial.indexOf("li\n") + 2),
+    );
+    return result?.items.some((item) => item.label === "list") ?? false;
+  });
+  const valid = initial.replace("type = li", "type = list(string)");
+  await replace(document, valid);
+  await eventually("native contract hover", async () => {
+    const hovers = await vscode.commands.executeCommand<vscode.Hover[]>(
+      "vscode.executeHoverProvider",
+      uri,
+      document.positionAt(valid.indexOf("type =")),
+    );
+    return (
+      hovers?.some((hover) =>
+        hover.contents.some((content) =>
+          typeof content === "string"
+            ? content.includes("list(string)")
+            : content.value.includes("list(string)"),
+        ),
+      ) ?? false
+    );
+  });
+  await replace(document, valid.replace("list(string)", "list(invalid_type)"));
+  await eventually("native contract type diagnostic", () =>
+    vscode.languages
+      .getDiagnostics(uri)
+      .some(
+        (diagnostic) =>
+          diagnostic.source === "terragraph" &&
+          diagnostic.message.includes("type"),
+      ),
+  );
+  await replace(document, valid);
+  await eventually(
+    "native contract repaired",
+    () => vscode.languages.getDiagnostics(uri).length === 0,
+  );
+  console.log(
+    "PASS native contracts: type completion, inherited type hover, unsaved type diagnostics",
+  );
+}
+
 export async function run(): Promise<void> {
   const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   assert.ok(root, "test workspace is required");
+  await checkContractEditing(root);
   for (const [filename, group] of [
     ["blueprint.hcl", false],
     ["group.hcl", true],

@@ -19,9 +19,10 @@ func (e *Engine) snapshotPath(name string) string {
 
 // snapshotFile is the on-disk shape of an output snapshot. Schema lets a future reader refuse a format it does not understand instead of guessing at it.
 type snapshotFile struct {
-	Schema  int            `json:"schema"`
-	Node    string         `json:"node"`
-	Outputs map[string]any `json:"outputs"`
+	Schema  int                        `json:"schema"`
+	Node    string                     `json:"node"`
+	Types   map[string]json.RawMessage `json:"types,omitempty"`
+	Outputs map[string]any             `json:"outputs"`
 	// Withheld retains only port names so fallback can explain an omitted secret without persisting its value.
 	Withheld []string `json:"withheld,omitempty"`
 }
@@ -29,6 +30,11 @@ type snapshotFile struct {
 // snapshotOutputAllowed requires known non-sensitive metadata so a missing detail can never silently authorize persistent storage.
 func (e *Engine) snapshotOutputAllowed(node, output string) bool {
 	detail, known := e.Graph.Nodes[node].Schema.OutputDetails[output]
+	if dc := e.nodeContracts(node); dc != nil {
+		if p, ok := dc.Producer[output]; ok && p.Sensitive != nil && *p.Sensitive {
+			return false
+		}
+	}
 	return known && !detail.Sensitive
 }
 
@@ -46,6 +52,7 @@ func (e *Engine) writeSnapshot(name string, outputs exec.Outputs) error {
 	}
 
 	published := make(map[string]any, len(consumed))
+	types := map[string]json.RawMessage{}
 	var withheld []string
 	for out := range consumed {
 		output, present := outputs[out]
@@ -54,6 +61,7 @@ func (e *Engine) writeSnapshot(name string, outputs exec.Outputs) error {
 			continue
 		}
 		published[out] = output.Value
+		types[out] = output.Type
 	}
 	if len(published) == 0 && len(withheld) == 0 {
 		// The edge set can change between applies (an edge removed, a rename): a prior file whose consumers are all gone is a stale secret with no reader, so "no consumers → no file" must hold on re-apply too, not only on first write.
@@ -69,7 +77,7 @@ func (e *Engine) writeSnapshot(name string, outputs exec.Outputs) error {
 	}
 	// encoding/json sorts map keys; sorting port names keeps withheld-only snapshots deterministic too.
 	sort.Strings(withheld)
-	data, err := json.MarshalIndent(snapshotFile{Schema: 2, Node: name, Outputs: published, Withheld: withheld}, "", "  ")
+	data, err := json.MarshalIndent(snapshotFile{Schema: 3, Node: name, Outputs: published, Withheld: withheld, Types: types}, "", "  ")
 	if err != nil {
 		return fmt.Errorf("node %s: encoding output snapshot: %w", name, err)
 	}
@@ -95,7 +103,7 @@ func (e *Engine) readSnapshot(name string) (snapshotFile, bool) {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
 	// Every writer emits an outputs object, even when empty; a missing or null object is corruption, not an output lookup miss.
-	if err := decoder.Decode(&f); err != nil || (f.Schema != 1 && f.Schema != 2) || f.Node != name || f.Outputs == nil {
+	if err := decoder.Decode(&f); err != nil || (f.Schema != 1 && f.Schema != 2 && f.Schema != 3) || f.Node != name || f.Outputs == nil {
 		e.logger().Debug("output snapshot present but unreadable, ignoring it", "node", name, "err", err)
 		return snapshotFile{}, false
 	}

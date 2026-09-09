@@ -390,7 +390,9 @@ func copyPorts(m map[string]blueprint.PortContract) map[string]blueprint.PortCon
 
 // sameClaims compares two ports' promises, ignoring Scope (the same directory can be spelled differently from different files) and Name (equal by construction here): the digest-relevant claims only.
 func sameClaims(a, b blueprint.PortContract) bool {
-	return a.Type == b.Type && eqBoolPtr(a.Nullable, b.Nullable) && eqBoolPtr(a.Sensitive, b.Sensitive)
+	at, ae := blueprint.CanonicalContractType(a.Type)
+	bt, be := blueprint.CanonicalContractType(b.Type)
+	return ae == nil && be == nil && at == bt && eqBoolPtr(a.Nullable, b.Nullable) && eqBoolPtr(a.Sensitive, b.Sensitive)
 }
 
 func eqBoolPtr(a, b *bool) bool {

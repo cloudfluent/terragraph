@@ -43,14 +43,19 @@ func (e *Engine) planBinding(name string, r *exec.Runner, vars map[string]any) (
 	if err != nil {
 		return "", err
 	}
+	contracts, err := e.Graph.Contracts.Digest()
+	if err != nil {
+		return "", err
+	}
 	return executionDigest(struct {
-		Target       string
-		Runtime      exec.PlanRuntimeIdentity
-		Binary       exec.Binary
-		Dir, DataDir string
-		Files        map[string]string
-		Vars         map[string]any
-	}{target, runtime, r.Binary, r.Dir, r.DataDir, files, vars})
+		Contracts, ContractMode string
+		Target                  string
+		Runtime                 exec.PlanRuntimeIdentity
+		Binary                  exec.Binary
+		Dir, DataDir            string
+		Files                   map[string]string
+		Vars                    map[string]any
+	}{contracts, e.Graph.ContractMode, target, runtime, r.Binary, r.Dir, r.DataDir, files, vars})
 }
 
 // planSourceFiles includes ordinary data files alongside configuration so changing file() inputs inside a source tree invalidates a retained plan.

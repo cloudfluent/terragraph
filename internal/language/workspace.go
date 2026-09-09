@@ -87,6 +87,9 @@ func (w *Workspace) Complete(_ context.Context, path string, offset int) []Compl
 	if literalAt(text, offset) {
 		return nil
 	}
+	if contractPortPath(blocks) && directionAt(text, offset) == "type" {
+		return contractTypeCompletions(text, offset)
+	}
 	start := traversalStart(text, offset)
 	fragment := string(text[start:offset])
 	objectAttribute, insideObject := objectAttributeAt(text, offset)
@@ -380,6 +383,9 @@ type attributeSpec struct {
 
 var completionSchemas = map[string][]attributeSpec{
 	"": {
+		{name: "producer", insert: "producer \"./module\" {\n}", detail: "Output contracts"},
+		{name: "consumer", insert: "consumer \"./module\" {\n}", detail: "Input contracts"},
+		{name: "contracts", insert: "contracts {\n  mode = \"warn\"\n}", detail: "Contract enforcement mode"},
 		{name: "node", insert: "node \"name\" {\n  source = \"\"\n}", detail: "Blueprint block", documentation: "Declares one Terraform or OpenTofu module in the graph."},
 		{name: "edge", insert: "edge {\n  from = node.source.output.value\n  to   = node.target.input.value\n}", detail: "Blueprint block", documentation: "Connects a source node output to a target node input."},
 		{name: "runtime", insert: "runtime \"name\" {\n  binary = \"tofu\"\n}", detail: "Blueprint block", documentation: "Declares a reusable Terraform or OpenTofu runtime."},
@@ -392,6 +398,8 @@ var completionSchemas = map[string][]attributeSpec{
 		{name: "snapshots", insert: "snapshots { }", detail: "Blueprint block", documentation: "Opts the graph into local output snapshots, consumed as the input source of last resort."},
 	},
 	"group": {
+		{name: "producer", insert: "producer \"./module\" {\n}", detail: "Output contracts"},
+		{name: "consumer", insert: "consumer \"./module\" {\n}", detail: "Input contracts"},
 		{name: "node", insert: "node \"name\" {\n  source = \"\"\n}", detail: "Group block"},
 		{name: "edge", insert: "edge {\n  from = node.\n  to = node.\n}", detail: "Group block"},
 		{name: "use", insert: "use \"group\" {\n  as = \"name\"\n  source = \"\"\n}", detail: "Group block"},
@@ -410,7 +418,12 @@ var completionSchemas = map[string][]attributeSpec{
 		{name: "plan_ttl", insert: "plan_ttl = \"24h\"", detail: "optional string", documentation: "Maximum age at which a retained plan may begin applying."},
 		{name: "record_retention", insert: "record_retention = \"720h\"", detail: "optional string", documentation: "Retention after an execution is resolved and finished."},
 	},
-	"snapshots": {},
+	"producer":        {{name: "output", insert: "output \"name\" {\n  type = string\n}", detail: "Additional output guarantee"}},
+	"consumer":        {{name: "input", insert: "input \"name\" {\n  nullable = false\n}", detail: "Additional input requirement"}},
+	"contracts":       {{name: "mode", insert: "mode = \"warn\"", detail: "warn or enforce"}},
+	"producer.output": contractPortSchema,
+	"consumer.input":  contractPortSchema,
+	"snapshots":       {},
 	"node": {
 		{name: "source", insert: "source = \"\"", detail: "required string", documentation: "Path or remote source of the Terraform or OpenTofu module."},
 		{name: "vars", insert: "vars = {\n}", detail: "object", documentation: "Literal Terraform input values. Use an edge for another node's output."},
@@ -691,7 +704,7 @@ func (w *Workspace) Diagnose(_ context.Context, path string) []Diagnostic {
 	if !ok {
 		return nil
 	}
-	diagnostics := []Diagnostic{}
+	diagnostics := contractDiagnostics(body)
 	walkAttributes(body, func(attr *hclsyntax.Attribute) {
 		scope := model.at(text, attr.Range().Start.Byte)
 		for _, traversal := range attr.Expr.Variables() {
@@ -950,4 +963,10 @@ func absolute(path string) string {
 		return path
 	}
 	return result
+}
+
+var contractPortSchema = []attributeSpec{
+	{name: "type", insert: "type = string", detail: "optional type constraint", documentation: "Accepts native type expressions or legacy strings. Omit to keep only the module input type check."},
+	{name: "nullable", insert: "nullable = false", detail: "optional bool", documentation: "Checks the top-level effective value; nested nulls are not prohibited."},
+	{name: "sensitive", insert: "sensitive = true", detail: "optional bool", documentation: "Cannot downgrade module or runtime sensitivity."},
 }

@@ -48,3 +48,36 @@ jobs:
       # Not `make check`: fmt/lint/docs-check are OS-independent and already covered by the check job above on ubuntu-latest. This job exists only to catch OS-specific build/runtime bugs (path separators, process spawning) that cross-compiling for a target from one OS, as the release pipeline does, can't catch.
       - run: go build ./...
       - run: go test ./... -race
+
+  contract-runtimes:
+    name: contracts (${{ matrix.os }}, ${{ matrix.runtime.binary }} ${{ matrix.runtime.version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        runtime:
+          - { binary: terraform, version: "1.5.7" }
+          - { binary: terraform, version: "1.16.0" }
+          - { binary: tofu, version: "1.11.0" }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.27.1"
+          cache: true
+      - uses: hashicorp/setup-terraform@v4
+        if: matrix.runtime.binary == 'terraform'
+        with:
+          terraform_version: ${{ matrix.runtime.version }}
+          terraform_wrapper: false
+      - uses: opentofu/setup-opentofu@v2
+        if: matrix.runtime.binary == 'tofu'
+        with:
+          tofu_version: ${{ matrix.runtime.version }}
+          tofu_wrapper: false
+      # Native local-backend fixtures verify mutation ordering and JSON semantics without credentials or external providers.
+      - run: go test -race ./internal/engine -run '^TestContracts_Real' -v
+        shell: bash
+        env:
+          TERRAGRAPH_TEST_RUNTIME: ${{ matrix.runtime.binary }}

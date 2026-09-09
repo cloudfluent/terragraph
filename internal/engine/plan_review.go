@@ -19,6 +19,7 @@ type PlanReview struct {
 	Policy         blueprint.Approve
 	PolicyDecision string
 	Inputs         []InputBasis
+	Contracts      []ContractCheck
 	Limitations    []string
 	Diagnostic     *Diagnostic
 }

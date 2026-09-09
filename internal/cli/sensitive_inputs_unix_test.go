@@ -53,7 +53,7 @@ func TestPlan_SensitiveInputErrorRedactsPayload(t *testing.T) {
 			t.Fatal("sensitive payload remains in the error chain")
 		}
 	}
-	for _, context := range []string{"node.a.input.credentials", "object({ count = number })", "sensitive", "check"} {
+	for _, context := range []string{"node.a.input.credentials", "module variable declaration", "sensitive", "check"} {
 		if !strings.Contains(err.Error(), context) {
 			t.Fatalf("error = %v, want context %q", err, context)
 		}

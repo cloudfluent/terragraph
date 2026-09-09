@@ -74,7 +74,7 @@ func (s *server) Initialize(_ context.Context, params *protocol.InitializeParams
 		s.workspace.SetRoot(filePath(string(folders[0].URI)))
 	}
 	full := protocol.TextDocumentSyncKindFull
-	return &protocol.InitializeResult{Capabilities: protocol.ServerCapabilities{TextDocumentSync: full, CompletionProvider: &protocol.CompletionOptions{TriggerCharacters: []string{"."}}, DefinitionProvider: protocol.Boolean(true), PositionEncoding: protocol.PositionEncodingKindUTF16}, ServerInfo: protocol.ServerInfo{Name: "terragraph"}}, nil
+	return &protocol.InitializeResult{Capabilities: protocol.ServerCapabilities{TextDocumentSync: full, CompletionProvider: &protocol.CompletionOptions{TriggerCharacters: []string{"."}}, DefinitionProvider: protocol.Boolean(true), HoverProvider: protocol.Boolean(true), PositionEncoding: protocol.PositionEncodingKindUTF16}, ServerInfo: protocol.ServerInfo{Name: "terragraph"}}, nil
 }
 func (s *server) DidOpen(ctx context.Context, params *protocol.DidOpenTextDocumentParams) error {
 	s.documentMu.Lock()
@@ -290,4 +290,19 @@ func offsetPosition(text []byte, offset int) protocol.Position {
 		index += size
 	}
 	return protocol.Position{Line: line, Character: character}
+}
+
+func (s *server) Hover(ctx context.Context, params *protocol.HoverParams) (*protocol.Hover, error) {
+	if s.hasShutdown() {
+		return nil, jsonrpc2.ErrInvalidRequest
+	}
+	s.documentMu.Lock()
+	defer s.documentMu.Unlock()
+	path := filePath(string(params.TextDocument.URI))
+	text := s.workspace.Document(path)
+	content := s.workspace.Hover(ctx, path, positionOffset(text, params.Position))
+	if content == "" {
+		return nil, nil
+	}
+	return &protocol.Hover{Contents: &protocol.MarkupContent{Kind: protocol.MarkupKindMarkdown, Value: content}}, nil
 }

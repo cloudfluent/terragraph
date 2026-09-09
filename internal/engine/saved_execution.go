@@ -153,6 +153,10 @@ func (e *Engine) saveFrontierNode(s *executionSession, name string, opts Options
 	}
 	// Native show validates the produced artifact before publishing it as reviewable, including no-change plans.
 	review := newPlanReview(e.approveFor(name, opts.Approve))
+	_, review.Contracts, err = e.inspectContractPlan(name, r, plan.path, false)
+	if err != nil {
+		return err
+	}
 	review.Limitations = []string{"only this ready frontier is saved; downstream nodes require a new plan after applying upstream"}
 	changes, err := r.PlanChangeSet(plan.path, &review.Outputs)
 	if err != nil {
@@ -354,10 +358,15 @@ func (e *Engine) savedGraphBinding(record ExecutionRecord) (string, error) {
 			Files       map[string]string
 		}{actual.Node, actual.Runtime, actual.Env, actual.Approve, e.runtimeFor(node.Name), files}
 	}
+	contracts, err := e.Graph.Contracts.Digest()
+	if err != nil {
+		return "", err
+	}
 	return executionDigest(struct {
-		Nodes map[string]any
-		Edges any
-	}{nodes, e.Graph.Edges})
+		Contracts, ContractMode string
+		Nodes                   map[string]any
+		Edges                   any
+	}{contracts, e.Graph.ContractMode, nodes, e.Graph.Edges})
 }
 
 func (e *Engine) resolveLiveInputs(name string) (map[string]any, error) {

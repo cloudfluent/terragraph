@@ -40,21 +40,33 @@ type canonicalPort struct {
 }
 
 type canonicalEntry struct {
-	Role string        `json:"role"` // "producer" | "consumer"
-	Port canonicalPort `json:"port"`
+	Source string        `json:"source"`
+	Role   string        `json:"role"` // "producer" | "consumer"
+	Port   canonicalPort `json:"port"`
 }
 
-// Digest is the contract set's identity: sha256 hex over a canonical JSON form covering exactly the checked claims — scope, role, port, type, nullable, sensitive — with every port sorted by (scope, role, name). Entries are collected and sorted rather than marshalled straight from the maps so iteration order can never leak into identity.
-//
-// Nothing calls this yet. It is kept, rather than deleted and rewritten later, because the resume condition the run journal needs — "does this incomplete run's contract set still match?" — is exactly this value, and because the property its tests pin (reordering blocks must not change identity, changing any claim must) is easier to keep true continuously than to re-establish. Delete it if that consumer is abandoned.
+// Digest binds execution to semantic claims, retaining optional attributes and explicit false flags across equivalent syntax.
 func (c *Contracts) Digest() (string, error) {
 	entries := make([]canonicalEntry, 0)
+	if c == nil {
+		c = &Contracts{}
+	}
 	for _, dc := range c.ByDir {
 		for name, p := range dc.Producer {
-			entries = append(entries, canonicalEntry{Role: "producer", Port: canonicalPort{Scope: dc.Scope, Port: name, Type: p.Type, Nullable: p.Nullable, Sensitive: p.Sensitive}})
+			typ, err := CanonicalContractType(p.Type)
+			if err != nil {
+				return "", err
+			}
+			p.Type = typ
+			entries = append(entries, canonicalEntry{Source: dc.Dir, Role: "producer", Port: canonicalPort{Scope: dc.Scope, Port: name, Type: p.Type, Nullable: p.Nullable, Sensitive: p.Sensitive}})
 		}
 		for name, p := range dc.Consumer {
-			entries = append(entries, canonicalEntry{Role: "consumer", Port: canonicalPort{Scope: dc.Scope, Port: name, Type: p.Type, Nullable: p.Nullable, Sensitive: p.Sensitive}})
+			typ, err := CanonicalContractType(p.Type)
+			if err != nil {
+				return "", err
+			}
+			p.Type = typ
+			entries = append(entries, canonicalEntry{Source: dc.Dir, Role: "consumer", Port: canonicalPort{Scope: dc.Scope, Port: name, Type: p.Type, Nullable: p.Nullable, Sensitive: p.Sensitive}})
 		}
 	}
 	sort.Slice(entries, func(i, j int) bool {
@@ -64,9 +76,15 @@ func (c *Contracts) Digest() (string, error) {
 		if entries[i].Role != entries[j].Role {
 			return entries[i].Role < entries[j].Role
 		}
-		return entries[i].Port.Port < entries[j].Port.Port
+		if entries[i].Port.Port != entries[j].Port.Port {
+			return entries[i].Port.Port < entries[j].Port.Port
+		}
+		return entries[i].Source < entries[j].Source
 	})
-	data, err := json.Marshal(entries)
+	data, err := json.Marshal(struct {
+		Version int
+		Entries []canonicalEntry
+	}{1, entries})
 	if err != nil {
 		return "", fmt.Errorf("contracts digest: %w", err)
 	}

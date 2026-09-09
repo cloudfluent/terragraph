@@ -36,12 +36,20 @@ func (e *Engine) prepareNodePlan(name string, runner *exec.Runner, args ...strin
 // applyPreparedPlan keeps policy, confirmation and post-apply reads identical for every producer of a prepared plan.
 func (e *Engine) applyPreparedPlan(plan *preparedNodePlan, opts Options) (exec.Outputs, string, error) {
 	name, out := plan.name, plan.runner.Stdout
+	evidence, _, err := e.inspectContractPlan(name, plan.runner, plan.path, true)
+	if err != nil {
+		return nil, "", err
+	}
 	if !plan.changed && !plan.verifyUnchanged {
 		e.logger().Debug("plan reports no changes, skipping apply", "node", name)
 		_, _ = fmt.Fprintf(out, "node %s: unchanged, skipping apply\n", name)
 		outputs, err := plan.runner.Outputs()
 		if err != nil {
 			return nil, "", fmt.Errorf("plan says unchanged but outputs are unreadable: %w", err)
+		}
+		outputs = e.completePlanOutputs(name, outputs, evidence)
+		if err := e.validateOutputContracts(name, outputs); err != nil {
+			return nil, "", err
 		}
 		if err := e.writeSnapshot(name, outputs); err != nil {
 			return nil, "", err
@@ -90,6 +98,10 @@ func (e *Engine) applyPreparedPlan(plan *preparedNodePlan, opts Options) (exec.O
 		return nil, "", fmt.Errorf("reading outputs after apply: %w", err)
 	}
 	// Both exits that produce current reality publish the same snapshot (the unchanged branch does too), so nothing about the file reveals which path wrote it.
+	outputs = e.completePlanOutputs(name, outputs, evidence)
+	if err := e.validateOutputContracts(name, outputs); err != nil {
+		return nil, "", err
+	}
 	if err := e.writeSnapshot(name, outputs); err != nil {
 		return nil, "", err
 	}

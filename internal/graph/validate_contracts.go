@@ -142,7 +142,9 @@ func contractProblems(g *Graph) []Problem {
 			}
 		}
 		// Absent producer nullable means "may be null" (the lenient claim), so an explicit non-null requirement is violated by it; absent consumer nullable accepts null and can never be violated by nullability.
-		if c.Nullable != nil && !*c.Nullable && (p.Nullable == nil || *p.Nullable) {
+		variable := g.Nodes[e.To.Node].Schema.Variables[e.To.Name]
+		nullDefault := variable.Nullable != nil && !*variable.Nullable && variable.Default != cty.NilVal && !variable.Default.IsNull()
+		if c.Nullable != nil && !*c.Nullable && (p.Nullable == nil || *p.Nullable) && !nullDefault {
 			report("contract.[C004] producer %s.output.%s may be null but consumer %s.input.%s requires non-null; the producer must promise nullable = false", from.Scope, e.From.Name, to.Scope, e.To.Name)
 		}
 		if p.Sensitive != nil && *p.Sensitive && (c.Sensitive == nil || !*c.Sensitive) {

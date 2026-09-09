@@ -92,6 +92,9 @@ func (e *Engine) Destroy(opts Options) (runs []NodeRun, resultErr error) {
 				r.Stdin = answered
 			}
 		}
+		if dc := e.nodeContracts(name); dc != nil && len(dc.Consumer) > 0 {
+			return nil, StatusDestroyed, e.destroyContractPlan(name, r, session, opts, exec.VarFileArgs(varsPath, vars))
+		}
 		if err := session.transition(name, "operating", "", ""); err != nil {
 			return nil, "", err
 		}
@@ -123,4 +126,42 @@ func (c *countingReader) Read(p []byte) (int, error) {
 	n, err := c.r.Read(p)
 	c.n += int64(n)
 	return n, err
+}
+
+// destroyContractPlan validates effective external inputs before executing the same native destroy plan, without demanding deleted outputs.
+func (e *Engine) destroyContractPlan(name string, r *exec.Runner, session *executionSession, opts Options, args []string) error {
+	path := e.planPath(name)
+	cleanup, err := prepareSavedPlan(path)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	_, err = r.PlanChanges(path, append([]string{"-destroy"}, args...)...)
+	if err != nil {
+		return fmt.Errorf("destroy plan: %w", err)
+	}
+	values, err := r.PlanValues(path)
+	if err != nil {
+		if policyErr := e.contractPolicy([]ContractCheck{{"node." + name, "destroy input evidence", blueprint.ContractDeferred}}, true); policyErr != nil {
+			return fmt.Errorf("%w: %w", policyErr, err)
+		}
+	} else if err := e.contractPolicy(e.inputContractChecks(name, values), true); err != nil {
+		return err
+	}
+	if !opts.AutoApprove {
+		approved, err := e.approve(name, r.Stdout)
+		if err != nil {
+			return err
+		}
+		if !approved {
+			return fmt.Errorf("destroy cancelled: node %s was not approved", name)
+		}
+	}
+	if err := session.transition(name, "operating", "", ""); err != nil {
+		return err
+	}
+	if err := r.ApplyPlan(path); err != nil {
+		return session.fail(name, "indeterminate", fmt.Errorf("destroy: %w", err))
+	}
+	return session.transition(name, "completed", "", "")
 }

@@ -105,12 +105,12 @@ func (e *Engine) plan(opts Options, inspect, allowTextFallback bool) (runs []Nod
 			return fail("journal_failed", "init", err)
 		}
 
-		if inspect {
+		if inspect || e.hasContracts() {
 			backend := e.Graph.Nodes[name].Schema.Backend
 			if backend == "remote" || backend == "cloud" || !r.SupportsSavedPlan() {
 				capability := fmt.Errorf("backend does not support saved-plan inspection; use text plan for native preview")
 				review.failure(name, "inspection_unsupported", "capability", capability)
-				if !allowTextFallback {
+				if inspect && !allowTextFallback {
 					return nil, "", capability
 				}
 			} else {
@@ -128,12 +128,19 @@ func (e *Engine) plan(opts Options, inspect, allowTextFallback bool) (runs []Nod
 				if err != nil {
 					return fail("inspection_failed", "inspect", err)
 				}
+				_, review.Contracts, err = e.inspectContractPlan(name, r, planPath, false)
+				if err != nil {
+					return fail("contract_failed", "contracts", err)
+				}
 				review.normalize(changed)
 				if err := session.transition(name, "completed", "", ""); err != nil {
 					return fail("journal_failed", "plan", err)
 				}
 				return nil, StatusPlanned, nil
 			}
+		}
+		if e.hasContracts() {
+			e.logger().Warn("contract.[C011] plan contracts deferred: backend cannot provide saved-plan evidence", "node", name)
 		}
 		if err := r.Plan(exec.VarFileArgs(varsPath, vars)...); err != nil {
 			return fail("plan_failed", "plan", fmt.Errorf("plan: %w", err))
