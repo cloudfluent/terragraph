@@ -38,7 +38,7 @@ func TestRecoverExecution_AppliedOnlyReadsOutputs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s, err := e.beginExecution("apply", names[0])
+	s, err := e.beginExecution("apply", names[0], nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestRecoverExecution_AppliedOnlyReadsOutputs(t *testing.T) {
 
 func TestRecoverExecution_UnknownRequiresInspectionAndPreservesOutcome(t *testing.T) {
 	e, _ := journalFixture(t)
-	s, err := e.beginExecution("apply", []string{"example"})
+	s, err := e.beginExecution("apply", []string{"example"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func TestRecoverExecution_UnknownRequiresInspectionAndPreservesOutcome(t *testin
 	if err != nil || record.Nodes[0].Phase != "indeterminate" || record.Status != "recovered_replan_required" {
 		t.Fatalf("got = %+v, %v", record, err)
 	}
-	next, err := e.beginExecution("apply", []string{"example"})
+	next, err := e.beginExecution("apply", []string{"example"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestRecoverExecution_MixedUnknownDoesNotHideAppliedSibling(t *testing.T) {
 	peer := *e.Graph.Nodes["cached"]
 	peer.Name = "peer"
 	e.Graph.Nodes["peer"] = &peer
-	s, err := e.beginExecution("apply", []string{"cached", "peer"})
+	s, err := e.beginExecution("apply", []string{"cached", "peer"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestRecoverExecution_MixedUnknownDoesNotHideAppliedSibling(t *testing.T) {
 	if err != nil || record.Nodes[0].Phase != "completed" || record.Nodes[1].Phase != "indeterminate" || record.RecoveryAt != nil {
 		t.Fatalf("got = %+v, %v", record, err)
 	}
-	if _, err := e.beginExecution("apply", []string{"cached"}); err == nil {
+	if _, err := e.beginExecution("apply", []string{"cached"}, nil); err == nil {
 		t.Fatal("partial recovery released barrier")
 	}
 }

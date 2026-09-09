@@ -579,7 +579,7 @@ func runApplyChild(t *testing.T) {
 		t.Fatalf("LoadLocked: %v", err)
 	}
 	defer unlock()
-	if _, err := e.Apply(Options{Node: os.Getenv(applyChildNodeEnv), AutoApprove: true}); err != nil {
+	if _, err := e.Apply(Options{Nodes: []string{os.Getenv(applyChildNodeEnv)}, AutoApprove: true}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 }

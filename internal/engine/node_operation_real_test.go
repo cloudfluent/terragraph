@@ -61,7 +61,7 @@ resource "terraform_data" "second" {}
 
 func TestRunNode_RealUsesOrdinaryApplyInitialization(t *testing.T) {
 	e := savedRuntimeFixture(t)
-	if _, err := e.Apply(Options{Node: "upstream", AutoApprove: true}); err != nil {
+	if _, err := e.Apply(Options{Nodes: []string{"upstream"}, AutoApprove: true}); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.RunNode("upstream", []string{"state", "pull"}); err != nil {

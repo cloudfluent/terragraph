@@ -23,7 +23,8 @@ type validateResult struct {
 
 // graphResult is the JSON payload for `terragraph graph --output json` (list format only; DOT has no JSON form).
 type graphResult struct {
-	Levels [][]string `json:"levels"`
+	Selection *selectionDTO `json:"selection,omitempty"`
+	Levels    [][]string    `json:"levels"`
 }
 
 // vendorResultDTO is the JSON-facing shape of one vendor.Result. vendor.Result.Err is an error interface, which encoding/json can't marshal usefully; this flattens it to a status string plus an optional message.
@@ -71,7 +72,8 @@ type nodeRunDTO struct {
 
 // runResult is the JSON payload for `terragraph plan|apply|destroy --output json`.
 type runResult struct {
-	Nodes []nodeRunDTO `json:"nodes"`
+	Selection *selectionDTO `json:"selection,omitempty"`
+	Nodes     []nodeRunDTO  `json:"nodes"`
 }
 
 func nodeRunsToDTO(runs []engine.NodeRun) []nodeRunDTO {

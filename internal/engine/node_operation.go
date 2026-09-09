@@ -52,7 +52,7 @@ func (e *Engine) RunNode(name string, args []string) (resultErr error) {
 			return fmt.Errorf("run: %s", problem.Message)
 		}
 	}
-	if err := e.checkRuntimeFiles(Options{Node: name}); err != nil {
+	if err := e.checkRuntimeFiles(Options{Nodes: []string{name}}); err != nil {
 		return err
 	}
 	if !op.init {
@@ -65,7 +65,7 @@ func (e *Engine) RunNode(name string, args []string) (resultErr error) {
 		return err
 	}
 	defer unlockGraph()
-	s, err := e.beginExecution("run_"+strings.ReplaceAll(op.name, " ", "_"), []string{name}, op.readOnly)
+	s, err := e.beginExecution("run_"+strings.ReplaceAll(op.name, " ", "_"), []string{name}, nil, op.readOnly)
 	if err != nil {
 		return err
 	}

@@ -83,7 +83,7 @@ func TestRunNode_ReadAllowedDuringUnknownButMutationBlocked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s, err := e.beginExecution("apply", []string{"cached"})
+	s, err := e.beginExecution("apply", []string{"cached"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

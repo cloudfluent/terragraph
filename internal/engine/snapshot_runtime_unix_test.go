@@ -53,7 +53,7 @@ func snapshotRefusedAfterTofuSensitivityChanges(t *testing.T, ext string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.Apply(Options{Node: "a", AutoApprove: true}); err != nil {
+	if _, err := e.Apply(Options{Nodes: []string{"a"}, AutoApprove: true}); err != nil {
 		t.Fatalf("publish public snapshot: %v", err)
 	}
 	public, err := os.ReadFile(e.snapshotPath("a"))
@@ -125,11 +125,11 @@ func TestApply_LegacySnapshotNeedsRuntimeVerifiedRepublishing(t *testing.T) {
 		t.Fatal("reading a legacy snapshot changed its file")
 	}
 	t.Setenv("TG_OUTPUT_FAIL_NODE", "")
-	if _, err := e.Apply(Options{Node: "a", AutoApprove: true}); err != nil {
+	if _, err := e.Apply(Options{Nodes: []string{"a"}, AutoApprove: true}); err != nil {
 		t.Fatalf("republish: %v", err)
 	}
 	t.Setenv("TG_OUTPUT_FAIL_NODE", "a")
-	if _, err := e.Apply(Options{Node: "b", AutoApprove: true}); err != nil {
+	if _, err := e.Apply(Options{Nodes: []string{"b"}, AutoApprove: true}); err != nil {
 		t.Fatalf("fallback after republishing: %v", err)
 	}
 	if !strings.Contains(varfileSeen(t, e, "b"), "first") {
@@ -190,7 +190,7 @@ func TestApply_RuntimeSensitiveValuesFlowLiveButNotThroughSnapshot(t *testing.T)
 
 func TestApply_SnapshotRewriteRemovesRuntimeSensitiveValue(t *testing.T) {
 	e := loadFallbackEngine(t, true)
-	if _, err := e.Apply(Options{Node: "a", AutoApprove: true}); err != nil {
+	if _, err := e.Apply(Options{Nodes: []string{"a"}, AutoApprove: true}); err != nil {
 		t.Fatalf("initial Apply: %v", err)
 	}
 	path := filepath.Join(e.BaseDir, "terraform-fake")
@@ -202,7 +202,7 @@ func TestApply_SnapshotRewriteRemovesRuntimeSensitiveValue(t *testing.T) {
 	if err := os.WriteFile(path, script, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.Apply(Options{Node: "a", AutoApprove: true}); err != nil {
+	if _, err := e.Apply(Options{Nodes: []string{"a"}, AutoApprove: true}); err != nil {
 		t.Fatalf("sensitive Apply: %v", err)
 	}
 	assertSnapshotWithheld(t, e, "a", "consumed")

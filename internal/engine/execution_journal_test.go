@@ -27,7 +27,7 @@ func journalFixture(t *testing.T) (*Engine, func()) {
 
 func TestExecutionJournal_BlocksNewRunAfterUncertainMutation(t *testing.T) {
 	e, _ := journalFixture(t)
-	session, err := e.beginExecution("apply", []string{"example"})
+	session, err := e.beginExecution("apply", []string{"example"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +39,7 @@ func TestExecutionJournal_BlocksNewRunAfterUncertainMutation(t *testing.T) {
 	}
 	id := session.record.ID
 	session.close()
-	if _, err := e.beginExecution("apply", []string{"example"}); err == nil || !strings.Contains(err.Error(), id) {
+	if _, err := e.beginExecution("apply", []string{"example"}, nil); err == nil || !strings.Contains(err.Error(), id) {
 		t.Fatalf("got = %v", err)
 	}
 	records, err := e.ListExecutions()
@@ -50,7 +50,7 @@ func TestExecutionJournal_BlocksNewRunAfterUncertainMutation(t *testing.T) {
 
 func TestExecutionJournal_PreservesAppliedWhenOutputReadFails(t *testing.T) {
 	e, _ := journalFixture(t)
-	s, err := e.beginExecution("apply", []string{"example"})
+	s, err := e.beginExecution("apply", []string{"example"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestExecutionJournal_PreservesAppliedWhenOutputReadFails(t *testing.T) {
 
 func TestExecutionJournal_FinishedRunDoesNotCreatePlanBundle(t *testing.T) {
 	e, _ := journalFixture(t)
-	s, err := e.beginExecution("apply", []string{"example"})
+	s, err := e.beginExecution("apply", []string{"example"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestExecutionJournal_FinishedRunDoesNotCreatePlanBundle(t *testing.T) {
 		t.Fatalf("got = %v, %v", keys, err)
 	}
 	s.close()
-	next, err := e.beginExecution("apply", []string{"example"})
+	next, err := e.beginExecution("apply", []string{"example"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func TestExecutionJournal_RecordsInterruptedResultAfterCancellation(t *testing.T
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	e.Context = ctx
-	s, err := e.beginExecution("apply", []string{"example"})
+	s, err := e.beginExecution("apply", []string{"example"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func TestExecutionJournal_RecordsInterruptedResultAfterCancellation(t *testing.T
 
 func TestExecutionJournal_HistorySurfacesForeignScope(t *testing.T) {
 	e, _ := journalFixture(t)
-	s, err := e.beginExecution("apply", []string{"example"})
+	s, err := e.beginExecution("apply", []string{"example"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +148,7 @@ func TestExecutionJournal_HistorySurfacesForeignScope(t *testing.T) {
 
 func TestExecutionJournal_FinishedSavedOutcomeSurvivesCleanupFailure(t *testing.T) {
 	e, _ := journalFixture(t)
-	s, err := e.beginExecution("saved_apply", []string{"example"})
+	s, err := e.beginExecution("saved_apply", []string{"example"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

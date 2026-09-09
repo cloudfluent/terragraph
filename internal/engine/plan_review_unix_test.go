@@ -150,7 +150,7 @@ func TestReviewPlan_UpstreamMissingDiffersFromCredentialFailure(t *testing.T) {
 	body := reviewNode("created") + reviewNode("consumer") + "edge {\n from = node.created.output.id\n to = node.consumer.input.input\n}\n"
 	e := reviewFixture(t, body)
 	t.Setenv("TG_REVIEW_OUTPUT_FAIL", "1")
-	runs, err := e.ReviewPlan(Options{Node: "consumer"}, false)
+	runs, err := e.ReviewPlan(Options{Nodes: []string{"consumer"}}, false)
 	if err == nil || runs[0].Review.Diagnostic.Code != "upstream_output_unavailable" || runs[0].Review.HasChanges != nil {
 		t.Fatalf("got = %+v, %v", runs, err)
 	}
@@ -162,7 +162,7 @@ func TestReviewPlan_UpstreamMissingDiffersFromCredentialFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("TG_REVIEW_OUTPUT_FAIL", "1")
-	runs, err = e.ReviewPlan(Options{Node: "consumer"}, false)
+	runs, err = e.ReviewPlan(Options{Nodes: []string{"consumer"}}, false)
 	if err == nil || runs[0].Review.Diagnostic.Code != "input_resolution_failed" || strings.Contains(err.Error(), "has not been applied") {
 		t.Fatalf("got = %+v, %v", runs, err)
 	}
@@ -171,7 +171,7 @@ func TestReviewPlan_UpstreamMissingDiffersFromCredentialFailure(t *testing.T) {
 func TestReviewPlan_LiveAndSnapshotBasis(t *testing.T) {
 	body := "snapshots {}\n" + reviewNode("created") + reviewNode("consumer") + "edge {\n from = node.created.output.id\n to = node.consumer.input.input\n}\n"
 	e := reviewFixture(t, body)
-	runs, err := e.ReviewPlan(Options{Node: "consumer"}, false)
+	runs, err := e.ReviewPlan(Options{Nodes: []string{"consumer"}}, false)
 	if err != nil || runs[0].Review.Inputs[0].Source != "live" || len(runs[0].Review.Limitations) < 2 {
 		t.Fatalf("got = %+v, %v", runs, err)
 	}
@@ -180,7 +180,7 @@ func TestReviewPlan_LiveAndSnapshotBasis(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("TG_REVIEW_OUTPUT_FAIL", "1")
-	runs, err = e.ReviewPlan(Options{Node: "consumer"}, false)
+	runs, err = e.ReviewPlan(Options{Nodes: []string{"consumer"}}, false)
 	if err != nil || runs[0].Review.Inputs[0].Source != "snapshot" {
 		t.Fatalf("got = %+v, %v", runs, err)
 	}
@@ -238,14 +238,14 @@ func TestReviewPlan_InspectionFailureRemovesPlan(t *testing.T) {
 func TestApply_MissingUpstreamStatePreservesReadFailure(t *testing.T) {
 	e := reviewFixture(t, reviewNode("created")+reviewNode("consumer")+"edge {\n from = node.created.output.id\n to = node.consumer.input.input\n}\n")
 	t.Setenv("TG_REVIEW_OUTPUT_FAIL", "1")
-	_, err := e.Apply(Options{Node: "consumer", AutoApprove: true})
+	_, err := e.Apply(Options{Nodes: []string{"consumer"}, AutoApprove: true})
 	assertMissingUpstreamState(t, e, err)
 }
 
 func TestDestroy_MissingUpstreamStatePreservesReadFailure(t *testing.T) {
 	e := reviewFixture(t, reviewNode("created")+reviewNode("consumer")+"edge {\n from = node.created.output.id\n to = node.consumer.input.input\n}\n")
 	t.Setenv("TG_REVIEW_OUTPUT_FAIL", "1")
-	_, err := e.Destroy(Options{Node: "consumer", AutoApprove: true})
+	_, err := e.Destroy(Options{Nodes: []string{"consumer"}, AutoApprove: true})
 	assertMissingUpstreamState(t, e, err)
 }
 
