@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"io"
 	"slices"
-	"sort"
-	"sync"
 
 	"github.com/cloudfluent/terragraph/internal/blueprint"
 	"github.com/cloudfluent/terragraph/internal/exec"
@@ -18,6 +16,8 @@ import (
 type Options struct {
 	// RetainPlan persists optional plan artifacts without pausing ordinary apply.
 	RetainPlan bool
+	// Pools constrain shared services without introducing artificial dependency edges.
+	Pools []ConcurrencyPool
 	// Nodes is nil for the whole graph; a non-nil empty list must never silently broaden execution.
 	Nodes []string
 	// Downstream follows both data and ordering dependencies so consumers cannot be omitted by edge kind.
@@ -32,7 +32,7 @@ type Options struct {
 	AutoApprove bool
 	// Approve is the run-wide default approve level (see blueprint.Approve) for nodes that declare none of their own. Empty means blueprint.ApproveSafe.
 	Approve blueprint.Approve
-	// Parallelism caps how many nodes within one execution level run concurrently. <=1 means sequential (the default), matching v1 behavior and avoiding surprising provider API rate-limit issues.
+	// Parallelism caps how many ready nodes run concurrently across execution levels. <=1 means sequential (the default), matching v1 behavior and avoiding surprising provider API rate-limit issues.
 	Parallelism int
 }
 
@@ -65,7 +65,7 @@ const (
 	StatusUnchanged = "unchanged" // apply skipped the node: its plan reported no changes
 	StatusDestroyed = "destroyed" // destroy ran to completion
 	StatusFailed    = "failed"    // the node's own step returned an error
-	StatusNotRun    = "not run"   // an earlier level failed, so the run never reached this node
+	StatusNotRun    = "not run"   // execution stopped or a prerequisite failed before this node started
 )
 
 // RunResult retains the persisted execution identity even when a later node or journal update fails.
@@ -88,146 +88,179 @@ type NodeRun struct {
 // nodeAction runs one node's step of a plan/apply/destroy: given the outputs applied so far this run and a writer for this node's terraform output, it returns the outputs to feed downstream (nil if the node produced none worth propagating, e.g. Destroy), the success status to record for the node, and an error.
 type nodeAction func(name string, applied map[string]exec.Outputs, out io.Writer) (outputs exec.Outputs, status string, err error)
 
-// runLevels is the shared execution loop behind Plan/Apply/Destroy: it walks the graph (or a single node) level by level, running up to opts.Parallelism nodes within a level concurrently. Nodes in the same level are guaranteed to have no edge between them, so a read-only snapshot of outputs applied so far is safe to share across the level's goroutines, and results are merged back only once the whole level completes (no data races). If any node in a level errors, already-started siblings finish but the next level never starts; the returned runs record those unreached nodes as StatusNotRun so a report covers the whole selection rather than stopping where execution did. afterLevel, if non-nil, runs once each level completes successfully; an error from it aborts the run the same way. Only review planning opts into preserveIndependent, which blocks failed descendants while continuing unrelated branches.
+// runLevels dispatches selected nodes as their prerequisites succeed, retaining level labels and the existing failure boundary so queued siblings still run after an ordinary failure.
 func (e *Engine) runLevels(opts Options, reverse bool, action nodeAction, afterLevel func() error, preserveIndependent ...bool) (runs []NodeRun, err error) {
+	if err := e.validatePools(opts); err != nil {
+		return nil, err
+	}
 	levels, err := e.executionLevels(opts, reverse)
 	if err != nil {
 		return nil, err
 	}
-
 	keepGoing := len(preserveIndependent) > 0 && preserveIndependent[0]
-	failed := map[string]bool{}
-	var firstError error
-	applied := map[string]exec.Outputs{}
-	var mu sync.Mutex
-	var outMu sync.Mutex
-	buffered := opts.parallelism() > 1
 	runs = make([]NodeRun, 0)
-	// Sort the final returned slice so failed runs include their not-run nodes in the same deterministic order as successful runs.
-	defer func() {
-		sort.Slice(runs, func(i, j int) bool {
-			if runs[i].Level != runs[j].Level {
-				return runs[i].Level < runs[j].Level
-			}
-			return runs[i].Node < runs[j].Node
-		})
-	}()
-
+	indices := map[string]int{}
+	poolUse := make([]int, len(opts.Pools))
+	poolFor := map[string][]int{}
+	for i, pool := range opts.Pools {
+		for _, name := range pool.Nodes {
+			poolFor[name] = append(poolFor[name], i)
+		}
+	}
 	for li, level := range levels {
-		if err := e.context().Err(); err != nil {
-			return markNotRun(runs, levels, li), err
+		for _, name := range level {
+			indices[name] = len(runs)
+			runs = append(runs, NodeRun{Node: name, Level: li + 1, Status: StatusNotRun})
 		}
-		blocked := map[string]bool{}
-		for name := range failed {
-			blocked[name] = true
-		}
-		mu.Lock()
-		snapshot := make(map[string]exec.Outputs, len(applied))
-		for k, v := range applied {
-			snapshot[k] = v
-		}
-		mu.Unlock()
-
-		sem := make(chan struct{}, opts.parallelism())
-		var wg sync.WaitGroup
-		errs := make([]error, len(level))
-
-		for i, name := range level {
-			wg.Add(1)
-			sem <- struct{}{}
-			go func(i int, name string) {
-				defer wg.Done()
-				defer func() { <-sem }()
-
-				var out = e.Stdout
-				var buf *bytes.Buffer
-				if buffered {
-					buf = &bytes.Buffer{}
-					out = buf
-				}
-
-				e.logger().Debug("running node", "node", name)
-				var outputs exec.Outputs
-				var status string
-				err := e.context().Err()
-				if err == nil && keepGoing {
-					for _, parent := range e.Graph.In[name] {
-						if blocked[parent] {
-							err = fmt.Errorf("%w: dependency %s has no successful plan evidence; resolve its diagnostic first", errPlanBlocked, parent)
-							break
-						}
-					}
-				}
-				if err == nil {
-					outputs, status, err = action(name, snapshot, out)
-				} else {
-					status = StatusNotRun
-				}
-
-				if buf != nil {
-					outMu.Lock()
-					_, _ = fmt.Fprintf(e.Stdout, "=== node %s ===\n", name)
-					_, _ = io.Copy(e.Stdout, buf)
-					outMu.Unlock()
-				}
-
-				mu.Lock()
-				if err != nil {
-					failed[name] = true
-					if status != StatusNotRun {
-						status = StatusFailed
-					}
-					runs = append(runs, NodeRun{Node: name, Level: li + 1, Status: status, Err: err, Diagnostics: Diagnostics(err, Diagnostic{Code: "runtime_failed", Category: "runtime", Phase: "execute", Subject: "node." + name})})
-				} else {
-					runs = append(runs, NodeRun{Node: name, Level: li + 1, Status: status})
-					if outputs != nil {
-						applied[name] = outputs
-					}
-				}
-				mu.Unlock()
-
-				if err != nil {
-					errs[i] = fmt.Errorf("node %q: %w", name, err)
-					return
-				}
-			}(i, name)
-		}
-		wg.Wait()
-
-		for _, err := range errs {
-			if err != nil {
-				if !keepGoing {
-					return markNotRun(runs, levels, li+1), err
-				}
-				if firstError == nil {
-					firstError = err
-				}
-			}
-		}
-
-		if afterLevel != nil {
-			if err := afterLevel(); err != nil {
-				return markNotRun(runs, levels, li+1), err
+	}
+	// Only the coordinator mutates reports and published outputs; each action receives its own immutable snapshot.
+	started, done := make([]bool, len(runs)), make([]bool, len(runs))
+	applied := map[string]exec.Outputs{}
+	type completion struct {
+		index   int
+		outputs exec.Outputs
+		status  string
+		err     error
+		buffer  *bytes.Buffer
+	}
+	completed := make(chan completion, opts.parallelism())
+	active, failureLevel, nextHook := 0, len(levels)+1, 1
+	var stopErr error
+	finish := func(i int, status string, nodeErr error) {
+		done[i] = true
+		runs[i].Status, runs[i].Err = status, nodeErr
+		if nodeErr != nil {
+			runs[i].Diagnostics = Diagnostics(nodeErr, Diagnostic{Code: "runtime_failed", Category: "runtime", Phase: "execute", Subject: "node." + runs[i].Node})
+			if !keepGoing && runs[i].Level < failureLevel {
+				failureLevel = runs[i].Level
 			}
 		}
 	}
-	return runs, firstError
+	for {
+		if cancelled := e.context().Err(); cancelled != nil {
+			stopErr = cancelled
+		}
+		// A caller-supplied level checkpoint must succeed before work beyond that checkpoint can start.
+		if afterLevel != nil && stopErr == nil {
+			for nextHook <= len(levels) && (keepGoing || nextHook < failureLevel) {
+				complete := true
+				for _, name := range levels[nextHook-1] {
+					complete = complete && done[indices[name]]
+				}
+				if !complete {
+					break
+				}
+				if hookErr := afterLevel(); hookErr != nil {
+					stopErr = hookErr
+					break
+				}
+				nextHook++
+			}
+		}
+		for i := range runs {
+			if active == opts.parallelism() || stopErr != nil {
+				break
+			}
+			if started[i] || done[i] || runs[i].Level > failureLevel || (afterLevel != nil && runs[i].Level > nextHook) {
+				continue
+			}
+			parents := e.Graph.In[runs[i].Node]
+			if reverse {
+				parents = e.Graph.Out[runs[i].Node]
+			}
+			ready, blocked := true, ""
+			for _, parent := range parents {
+				pi, selected := indices[parent]
+				if !selected {
+					continue
+				}
+				if !done[pi] {
+					ready = false
+				}
+				if done[pi] && runs[pi].Err != nil && (blocked == "" || parent < blocked) {
+					blocked = parent
+				}
+			}
+			if blocked != "" {
+				if keepGoing {
+					finish(i, StatusNotRun, fmt.Errorf("%w: dependency %s has no successful plan evidence; resolve its diagnostic first", errPlanBlocked, blocked))
+				}
+				continue
+			}
+			if !ready {
+				continue
+			}
+			for _, pi := range poolFor[runs[i].Node] {
+				if poolUse[pi] >= opts.Pools[pi].Limit {
+					ready = false
+					break
+				}
+			}
+			if !ready {
+				continue
+			}
+			for _, pi := range poolFor[runs[i].Node] {
+				poolUse[pi]++
+			}
+			snapshot := make(map[string]exec.Outputs, len(applied))
+			for name, outputs := range applied {
+				snapshot[name] = outputs
+			}
+			started[i], active = true, active+1
+			go func(i int) {
+				result := completion{index: i}
+				out := e.Stdout
+				if opts.parallelism() > 1 {
+					result.buffer = &bytes.Buffer{}
+					out = result.buffer
+				}
+				e.logger().Debug("running node", "node", runs[i].Node)
+				if result.err = e.context().Err(); result.err != nil {
+					result.status = StatusNotRun
+				} else {
+					result.outputs, result.status, result.err = action(runs[i].Node, snapshot, out)
+					if result.err != nil {
+						result.status = StatusFailed
+					}
+				}
+				completed <- result
+			}(i)
+		}
+		if active == 0 {
+			break
+		}
+		result := <-completed
+		active--
+		for _, pi := range poolFor[runs[result.index].Node] {
+			poolUse[pi]--
+		}
+		if result.buffer != nil {
+			_, _ = fmt.Fprintf(e.Stdout, "=== node %s ===\n", runs[result.index].Node)
+			_, _ = io.Copy(e.Stdout, result.buffer)
+		}
+		finish(result.index, result.status, result.err)
+		if result.err == nil && result.outputs != nil {
+			applied[runs[result.index].Node] = result.outputs
+		}
+	}
+	if stopErr != nil {
+		return runs, stopErr
+	}
+	for _, run := range runs {
+		if run.Err != nil {
+			return runs, fmt.Errorf("node %q: %w", run.Node, run.Err)
+		}
+	}
+	return runs, nil
 }
 
 var errPlanBlocked = errors.New("plan not reached")
 
-// markNotRun appends a StatusNotRun entry for every node in the levels an aborted run never reached, keeping each entry's Level aligned with the numbering the completed levels already used.
-func markNotRun(runs []NodeRun, levels [][]string, from int) []NodeRun {
-	for i := from; i < len(levels); i++ {
-		for _, name := range levels[i] {
-			runs = append(runs, NodeRun{Node: name, Level: i + 1, Status: StatusNotRun})
-		}
-	}
-	return runs
-}
-
 // resolveSelection freezes membership before runtime checks and keeps every scheduler on the same filtered levels.
 func (e *Engine) resolveSelection(opts Options) (Options, error) {
+	if err := e.validatePools(opts); err != nil {
+		return opts, err
+	}
 	selection, err := graph.Select(e.Graph, opts.Nodes, opts.Downstream)
 	if err != nil {
 		return opts, WithDiagnostic(err, Diagnostic{Code: "invalid_arguments", Category: "arguments", Phase: "selection", Subject: "selection", Remedy: "select expanded node names from graph output"})

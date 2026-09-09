@@ -12,6 +12,9 @@ import (
 
 // SavePlans freezes only the current frontier; later inputs must come from real upstream outputs after the reviewed frontier has been applied.
 func (e *Engine) SavePlans(opts Options, continueID string) (record ExecutionRecord, resultErr error) {
+	if len(opts.Pools) > 0 {
+		return record, WithDiagnostic(fmt.Errorf("--pool does not apply to sequential saved frontiers; omit it for saved execution commands"), Diagnostic{Code: "invalid_arguments", Category: "arguments", Phase: "arguments"})
+	}
 	if continueID != "" && opts.hasSelectionFlags() {
 		return record, WithDiagnostic(fmt.Errorf("--continue already fixes node selection; omit --node and --downstream"), Diagnostic{Code: "invalid_arguments", Category: "arguments", Phase: "arguments"})
 	}
@@ -177,6 +180,9 @@ func (e *Engine) saveFrontierNode(s *executionSession, name string, opts Options
 
 // ApplySavedPlans applies exactly the stored frontier and never plans or applies downstream nodes in the same invocation.
 func (e *Engine) ApplySavedPlans(id string, opts Options) (result RunResult, resultErr error) {
+	if len(opts.Pools) > 0 {
+		return result, WithDiagnostic(fmt.Errorf("--pool does not apply to sequential saved frontiers; omit it for saved execution commands"), Diagnostic{Code: "invalid_arguments", Category: "arguments", Phase: "arguments"})
+	}
 	if opts.hasSelectionFlags() {
 		return result, WithDiagnostic(fmt.Errorf("--plan already fixes node selection; omit --node and --downstream"), Diagnostic{Code: "invalid_arguments", Category: "arguments", Phase: "arguments"})
 	}
