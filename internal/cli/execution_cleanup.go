@@ -8,8 +8,9 @@ import (
 )
 
 type executionPruneDTO struct {
-	SchemaVersion int      `json:"schema_version"`
-	Removed       []string `json:"removed"`
+	Diagnostics   []diagnosticDTO `json:"diagnostics"`
+	SchemaVersion int             `json:"schema_version"`
+	Removed       []string        `json:"removed"`
 }
 
 func newExecutionCleanupCmd(kind string, path *string) *cobra.Command {
@@ -22,6 +23,7 @@ func newExecutionCleanupCmd(kind string, path *string) *cobra.Command {
 		if output != "text" && output != "json" {
 			return fmt.Errorf("unknown output %q (want text or json)", output)
 		}
+		diagnosticPhase(cmd, "record")
 		e, close, err := engine.OpenExecutionHistory(cmd.Context(), *path, cmd.ErrOrStderr())
 		if err != nil {
 			return err
@@ -33,7 +35,7 @@ func newExecutionCleanupCmd(kind string, path *string) *cobra.Command {
 		}
 		removed, err := e.PruneExecutions()
 		if output == "json" {
-			if writeErr := writeJSON(cmd.OutOrStdout(), executionPruneDTO{SchemaVersion: 1, Removed: removed}); writeErr != nil {
+			if writeErr := writeJSON(cmd, executionPruneDTO{SchemaVersion: 1, Removed: removed, Diagnostics: errorDiagnostics(err, engine.Diagnostic{Code: "execution_prune_failed", Category: "record", Phase: "record", Subject: "execution"})}); writeErr != nil {
 				return writeErr
 			}
 		} else {

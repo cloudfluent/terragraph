@@ -87,6 +87,7 @@ func newLanguageServerCmd() *cobra.Command {
 
 // loadEngine loads the blueprint into an Engine and wires the CLI's logger into it. Shared by every command that needs a built graph (validate/graph/plan/apply/destroy); vendor parses the blueprint directly instead (see newVendorCmd) since building the graph would fail for any not-yet-vendored remote node.
 func loadEngine(cmd *cobra.Command, blueprintPath *string, binaryOf func() exec.Binary, loggerOf func() *slog.Logger) (*engine.Engine, error) {
+	diagnosticPhase(cmd, "load")
 	e, err := engine.Load(*blueprintPath, binaryOf(), cmd.OutOrStdout(), cmd.ErrOrStderr())
 	if err != nil {
 		return nil, err
@@ -97,6 +98,7 @@ func loadEngine(cmd *cobra.Command, blueprintPath *string, binaryOf func() exec.
 
 // loadLockedEngine is loadEngine after taking the blueprint process lock, so plan/apply/destroy inspect module files only once a concurrent vendor cannot rewrite them. The caller must invoke the returned func when the command ends.
 func loadLockedEngine(cmd *cobra.Command, blueprintPath *string, binaryOf func() exec.Binary, loggerOf func() *slog.Logger) (*engine.Engine, func(), error) {
+	diagnosticPhase(cmd, "load")
 	e, unlock, err := engine.LoadLockedContext(cmd.Context(), *blueprintPath, binaryOf(), cmd.OutOrStdout(), cmd.ErrOrStderr())
 	if err != nil {
 		return nil, nil, err
@@ -126,15 +128,21 @@ func checkValidate(cmd *cobra.Command, e *engine.Engine) error {
 		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "[%s] %s\n", label, p.Message)
 	}
 	if errorCount > 0 {
-		return fmt.Errorf("blueprint has %d error(s); run \"terragraph validate\" for details", errorCount)
+		err := fmt.Errorf("blueprint has %d error(s); run \"terragraph validate\" for details", errorCount)
+		return &validationError{cause: err, problems: problems}
 	}
 	return nil
 }
 
-// finishRun emits a run's JSON report when requested and returns the run's error. The report is printed even for a failed run — per-node outcomes are exactly what an automation consumer needs when things went wrong — but not when nothing ran at all (the run failed before any node, e.g. a lock error), where there is no run to report.
-func finishRun(cmd *cobra.Command, output string, runs []engine.NodeRun, err error) error {
-	if output == "json" && (len(runs) > 0 || err == nil) {
-		if werr := writeJSON(cmd.OutOrStdout(), runResult{Nodes: nodeRunsToDTO(runs)}); werr != nil {
+// finishRun retains execution identity and independent diagnostics even when no node could start.
+func finishRun(cmd *cobra.Command, output string, result engine.RunResult, err error) error {
+	if output == "json" {
+		diagnostics := runDiagnostics(result, err)
+		var payload any = runResult{SchemaVersion: 1, ExecutionID: result.ExecutionID, Nodes: nodeRunsToDTO(result.Nodes), Diagnostics: diagnostics}
+		if err != nil && result.ExecutionID == "" && len(result.Nodes) == 0 {
+			payload = errorResultDTO{SchemaVersion: 1, Diagnostics: diagnostics}
+		}
+		if werr := writeJSON(cmd, payload); werr != nil {
 			return werr
 		}
 	}
@@ -164,7 +172,7 @@ func newValidateCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf
 						errorCount++
 					}
 				}
-				if err := writeJSON(cmd.OutOrStdout(), validateResult{Valid: errorCount == 0, Problems: problemsToDTO(problems)}); err != nil {
+				if err := writeJSON(cmd, validateResult{SchemaVersion: 1, Valid: errorCount == 0, Problems: problemsToDTO(problems)}); err != nil {
 					return err
 				}
 				if errorCount > 0 {
@@ -215,7 +223,7 @@ func newGraphCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fu
 					return err
 				}
 				if output == "json" {
-					return writeJSON(cmd.OutOrStdout(), graphResult{Levels: levels})
+					return writeJSON(cmd, graphResult{SchemaVersion: 1, Levels: levels, Diagnostics: problemDiagnostics(e.Validate())})
 				}
 				for i, level := range levels {
 					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "level %d: %s\n", i+1, joinNames(level))
@@ -259,7 +267,7 @@ func newPlanCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fun
 		Use:   "plan",
 		Short: "Review node plans, actions, approval policy, and evidence limitations",
 		RunE: func(cmd *cobra.Command, args []string) (resultErr error) {
-			var runs []engine.NodeRun
+			var runs engine.RunResult
 			var savedRecord engine.ExecutionRecord
 			phase := "arguments"
 			defer func() {
@@ -350,7 +358,7 @@ func newApplyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fu
 				e.Stdout = cmd.ErrOrStderr()
 			}
 			opts := engine.Options{Node: node, AutoApprove: autoApprove, Approve: level, Parallelism: parallelism, RetainPlan: retainPlan}
-			var runs []engine.NodeRun
+			var runs engine.RunResult
 			if planID != "" {
 				if retainPlan {
 					return fmt.Errorf("--plan already uses retained artifacts; omit --retain-plan")
@@ -423,6 +431,7 @@ func newForceUnlockCmd(blueprintPath *string) *cobra.Command {
 		Short: "Release a leftover graph lock object left by an interrupted run",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// The blueprint is parsed, not built into a graph: all this needs is the lock block, and graph.Build stats every node source — so a checkout with nothing vendored yet would abort the one command that exists to recover from an interrupted run. Same reason newVendorCmd parses directly.
+			diagnosticPhase(cmd, "load")
 			bp, dir, err := blueprint.LoadPath(*blueprintPath)
 			if err != nil {
 				return err
@@ -483,6 +492,7 @@ func newVendorCmd(blueprintPath *string, loggerOf func() *slog.Logger) *cobra.Co
 			logger := loggerOf()
 
 			// Parsed directly, not via engine.Load: building the full graph would fail for any not-yet-vendored remote node, but vendoring has to work *before* the graph is buildable.
+			diagnosticPhase(cmd, "load")
 			bp, dir, err := blueprint.LoadPath(*blueprintPath)
 			if err != nil {
 				return err
@@ -502,6 +512,7 @@ func newVendorCmd(blueprintPath *string, loggerOf func() *slog.Logger) *cobra.Co
 			if err != nil {
 				return err
 			}
+			diagnosticPhase(cmd, "selection")
 			var nodes []blueprint.Node
 			legacyDirs := make(map[string]string)
 			for _, source := range sources {
@@ -520,6 +531,7 @@ func newVendorCmd(blueprintPath *string, loggerOf func() *slog.Logger) *cobra.Co
 				return fmt.Errorf("unknown node %q", node)
 			}
 
+			diagnosticPhase(cmd, "artifact")
 			results, err := vendor.All(nodes, baseDir, bp.VendorDirectory(), filepath.Join(baseDir, bp.VendorManifestFile()), vendor.Options{Force: force, LegacyDirectories: legacyDirs})
 			errorCount := 0
 			for _, r := range results {
@@ -534,7 +546,16 @@ func newVendorCmd(blueprintPath *string, loggerOf func() *slog.Logger) *cobra.Co
 				}
 			}
 			if output == "json" {
-				if werr := writeJSON(cmd.OutOrStdout(), vendorResultsToDTO(results)); werr != nil {
+				var payload any = vendorResultsToDTO(results)
+				if err != nil {
+					diagnostics := errorDiagnostics(err, engine.Diagnostic{Code: "vendor_failed", Category: "artifact", Phase: "vendor", Subject: "vendor"})
+					if len(results) == 0 {
+						payload = errorResultDTO{SchemaVersion: 1, Diagnostics: diagnostics}
+					} else {
+						payload = vendorFailureDTO{SchemaVersion: 1, Results: vendorResultsToDTO(results), Diagnostics: diagnostics}
+					}
+				}
+				if werr := writeJSON(cmd, payload); werr != nil {
 					return werr
 				}
 			}

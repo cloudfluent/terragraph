@@ -37,7 +37,11 @@ func (review *PlanReview) failure(name, code, phase string, err error) {
 	if errors.Is(err, errPlanBlocked) {
 		code = "dependency_not_reached"
 	}
-	review.Diagnostic = &Diagnostic{Code: code, Phase: phase, Subject: "node." + name, Message: err.Error(), Remedy: "resolve this diagnostic and rerun plan; this result is not apply approval"}
+	category := "runtime"
+	if code == "cancelled" {
+		category = "cancelled"
+	}
+	review.Diagnostic = &Diagnostic{Category: category, Severity: "error", Code: code, Phase: phase, Subject: "node." + name, Message: err.Error(), Remedy: "resolve this diagnostic and rerun plan; this result is not apply approval"}
 }
 
 func (review *PlanReview) normalize(changed bool) {

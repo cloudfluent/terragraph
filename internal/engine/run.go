@@ -37,7 +37,7 @@ func (o Options) parallelism() int {
 func (e *Engine) executionLevels(opts Options, reverse bool) ([][]string, error) {
 	if opts.Node != "" {
 		if _, ok := e.Graph.Nodes[opts.Node]; !ok {
-			return nil, fmt.Errorf("unknown node %q", opts.Node)
+			return nil, WithDiagnostic(fmt.Errorf("unknown node %q", opts.Node), Diagnostic{Code: "invalid_arguments", Category: "arguments", Phase: "selection", Subject: "node." + opts.Node, Remedy: "select an expanded node from graph output"})
 		}
 		return [][]string{{opts.Node}}, nil
 	}
@@ -64,12 +64,19 @@ const (
 	StatusNotRun    = "not run"   // an earlier level failed, so the run never reached this node
 )
 
+// RunResult retains the persisted execution identity even when a later node or journal update fails.
+type RunResult struct {
+	ExecutionID string
+	Nodes       []NodeRun
+}
+
 // NodeRun records one node's outcome in a plan/apply/destroy run; reports are sorted by Level, then Node, regardless of concurrent completion order. Level is 1-based in execution order (reversed for destroy), so a caller can present results in run order without re-deriving the graph; Err is the node's own error, without the node %q prefix runLevels adds when failing the run.
 type NodeRun struct {
-	Node   string
-	Level  int
-	Status string
-	Err    error
+	Node        string
+	Level       int
+	Status      string
+	Err         error
+	Diagnostics []Diagnostic
 	// Review is present only for explicit plan inspection and never acts as apply authorization.
 	Review *PlanReview
 }
@@ -166,7 +173,7 @@ func (e *Engine) runLevels(opts Options, reverse bool, action nodeAction, afterL
 					if status != StatusNotRun {
 						status = StatusFailed
 					}
-					runs = append(runs, NodeRun{Node: name, Level: li + 1, Status: status, Err: err})
+					runs = append(runs, NodeRun{Node: name, Level: li + 1, Status: status, Err: err, Diagnostics: Diagnostics(err, Diagnostic{Code: "runtime_failed", Category: "runtime", Phase: "execute", Subject: "node." + name})})
 				} else {
 					runs = append(runs, NodeRun{Node: name, Level: li + 1, Status: status})
 					if outputs != nil {

@@ -113,6 +113,7 @@ func TestRunLevels_ReportsInExecutionOrder(t *testing.T) {
 				run := NodeRun{Node: name, Level: 1, Status: status}
 				if tc.failNode && name == first[1] {
 					run.Status, run.Err = StatusFailed, failure
+					run.Diagnostics = []Diagnostic{{Code: "runtime_failed", Category: "runtime", Severity: "error", Phase: "execute", Subject: "node." + name, Message: "boom"}}
 				}
 				want = append(want, run)
 			}

@@ -48,8 +48,8 @@ func TestRunCommands_RejectManagedDataDirEnvBeforeRuntime(t *testing.T) {
 					if !strings.Contains(stdout, "plan_load_failed") {
 						t.Fatalf("missing structured load failure: %s", stdout)
 					}
-				} else if stdout != "" {
-					t.Fatalf("stdout = %q, want no execution result", stdout)
+				} else if !strings.Contains(stdout, "load_failed") {
+					t.Fatalf("stdout = %q, want structured load failure", stdout)
 				}
 				if _, err := os.Stat(marker); !os.IsNotExist(err) {
 					t.Fatalf("runtime marker stat = %v, want no subprocess execution", err)

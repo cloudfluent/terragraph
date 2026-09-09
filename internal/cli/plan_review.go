@@ -44,6 +44,7 @@ type planReviewDTO struct {
 	Diagnostics []diagnosticDTO   `json:"diagnostics"`
 }
 type planResultDTO struct {
+	ExecutionID   string          `json:"execution_id,omitempty"`
 	SchemaVersion int             `json:"schema_version"`
 	Nodes         []nodeRunDTO    `json:"nodes"`
 	Diagnostics   []diagnosticDTO `json:"diagnostics"`
@@ -97,13 +98,14 @@ func reviewToDTO(review *engine.PlanReview) *planReviewDTO {
 }
 
 // finishPlan emits one additive, versioned result even when preparation fails before any node can start.
-func finishPlan(cmd *cobra.Command, format string, runs []engine.NodeRun, phase string, err error) error {
-	dto := planResultDTO{SchemaVersion: 1, Nodes: nodeRunsToDTO(runs), Diagnostics: []diagnosticDTO{}}
-	if err != nil && len(runs) == 0 {
-		dto.Diagnostics = append(dto.Diagnostics, diagnosticDTO{Source: errorLocation(err), Code: "plan_" + phase + "_failed", Phase: phase, Subject: "plan", Message: err.Error(), Remedy: "resolve the diagnostic and rerun plan"})
+func finishPlan(cmd *cobra.Command, format string, result engine.RunResult, phase string, err error) error {
+	dto := planResultDTO{SchemaVersion: 1, Nodes: nodeRunsToDTO(result.Nodes), ExecutionID: result.ExecutionID, Diagnostics: runDiagnostics(result, err)}
+	if err != nil && len(result.Nodes) == 0 {
+		dto.Diagnostics = errorDiagnostics(err, engine.Diagnostic{Code: "plan_" + phase + "_failed", Category: categoryForPhase(phase), Phase: phase, Subject: "plan", Remedy: "resolve the diagnostic and rerun plan"})
 	}
+
 	if format == "json" {
-		if writeErr := writeJSON(cmd.OutOrStdout(), dto); writeErr != nil {
+		if writeErr := writeJSON(cmd, dto); writeErr != nil {
 			return writeErr
 		}
 	} else {

@@ -9,10 +9,10 @@ import (
 // RecoverExecution either retries only output collection or retires an uncertain attempt after an operator has inspected actual state; it never replays a mutation.
 func (e *Engine) RecoverExecution(id string, confirmStopped, stateReviewed, replan bool, initializeBackend ...bool) (ExecutionRecord, error) {
 	if !confirmStopped {
-		return ExecutionRecord{}, fmt.Errorf("recovery requires --confirm-stopped after verifying the previous executor has stopped")
+		return ExecutionRecord{}, WithDiagnostic(fmt.Errorf("recovery requires --confirm-stopped after verifying the previous executor has stopped"), Diagnostic{Code: "invalid_arguments", Category: "arguments", Phase: "arguments", Remedy: "confirm that the previous executor has stopped before supplying --confirm-stopped"})
 	}
 	if replan && !stateReviewed {
-		return ExecutionRecord{}, fmt.Errorf("--replan requires --state-reviewed after inspecting the actual backend state and affected resources")
+		return ExecutionRecord{}, WithDiagnostic(fmt.Errorf("--replan requires --state-reviewed after inspecting the actual backend state and affected resources"), Diagnostic{Code: "invalid_arguments", Category: "arguments", Phase: "arguments", Remedy: "inspect actual state before supplying --state-reviewed"})
 	}
 	unlock, err := e.lockRun()
 	if err != nil {
@@ -35,13 +35,13 @@ func (e *Engine) RecoverExecution(id string, confirmStopped, stateReviewed, repl
 	}
 	scope, err := e.executionScope()
 	if err != nil {
-		return ExecutionRecord{}, err
+		return record, err
 	}
 	if record.Scope != scope {
-		return ExecutionRecord{}, fmt.Errorf("execution belongs to another coordination scope; select the original blueprint and lock")
+		return record, fmt.Errorf("execution belongs to another coordination scope; select the original blueprint and lock")
 	}
 	if !executionNeedsRecovery(record) {
-		return ExecutionRecord{}, fmt.Errorf("execution %s does not need recovery; inspect it with plan show", id)
+		return record, fmt.Errorf("execution %s does not need recovery; inspect it with plan show", id)
 	}
 	session := &executionSession{engine: e, store: store, record: record, revision: revision}
 	if replan {
@@ -50,7 +50,7 @@ func (e *Engine) RecoverExecution(id string, confirmStopped, stateReviewed, repl
 		next := record
 		next.Status, next.RecoveryAt, next.FinishedAt, next.UpdatedAt = "recovered_replan_required", &now, &now, now
 		if err := session.publish(next); err != nil {
-			return ExecutionRecord{}, err
+			return session.record, err
 		}
 		return session.record, nil
 	}
@@ -90,7 +90,7 @@ func (e *Engine) RecoverExecution(id string, confirmStopped, stateReviewed, repl
 	next := session.record
 	next.Status, next.RecoveryAt, next.FinishedAt, next.UpdatedAt = "recovered_replan_required", &now, &now, now
 	if err := session.publish(next); err != nil {
-		return ExecutionRecord{}, err
+		return session.record, err
 	}
 	return session.record, nil
 }

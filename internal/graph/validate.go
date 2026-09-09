@@ -19,8 +19,9 @@ const (
 
 // Problem is one validation issue found in a Graph. Validate collects all of them in one pass so a user fixing typos in a large blueprint sees every mistake at once instead of one-at-a-time.
 type Problem struct {
-	Severity Severity
-	Message  string
+	Code, Subject, Remedy string
+	Severity              Severity
+	Message               string
 }
 
 // IsError reports whether this problem should block graph/plan/apply, as opposed to a Warning, which is only surfaced.
@@ -39,6 +40,7 @@ func Validate(g *Graph) []Problem {
 		from := g.Nodes[e.From.Node]
 		if !from.Schema.HasOutput(e.From.Name) {
 			problems = append(problems, Problem{
+				Code: "missing_output", Subject: e.From.String(), Remedy: "declare the referenced output or correct the edge",
 				Severity: SeverityError,
 				Message:  fmt.Sprintf("%s: node %q has no output named %q", e.From, e.From.Node, e.From.Name),
 			})
@@ -46,6 +48,7 @@ func Validate(g *Graph) []Problem {
 		to := g.Nodes[e.To.Node]
 		if !to.Schema.HasVariable(e.To.Name) {
 			problems = append(problems, Problem{
+				Code: "missing_input", Subject: e.To.String(), Remedy: "declare the referenced variable or correct the edge",
 				Severity: SeverityError,
 				Message:  fmt.Sprintf("%s: node %q has no input variable named %q", e.To, e.To.Node, e.To.Name),
 			})
@@ -54,6 +57,7 @@ func Validate(g *Graph) []Problem {
 		if wired[key] {
 			if !reportedMulti[key] {
 				problems = append(problems, Problem{
+					Code: "input_conflict", Subject: "node." + e.To.Node + ".input." + e.To.Name, Remedy: "remove extra data edges",
 					Severity: SeverityError,
 					Message:  fmt.Sprintf("node.%s.input.%s: set by more than one data edge; remove extras", e.To.Node, e.To.Name),
 				})
@@ -80,6 +84,7 @@ func Validate(g *Graph) []Problem {
 		for _, varName := range keys {
 			if !node.Schema.HasVariable(varName) {
 				problems = append(problems, Problem{
+					Code: "missing_input", Subject: "node." + name + ".input." + varName, Remedy: "remove the vars entry or declare the variable",
 					Severity: SeverityError,
 					Message:  fmt.Sprintf("node.%s.input.%s: vars sets it, but node %q has no such input variable", name, varName, name),
 				})
@@ -88,6 +93,7 @@ func Validate(g *Graph) []Problem {
 			key := name + "." + varName
 			if wired[key] {
 				problems = append(problems, Problem{
+					Code: "input_conflict", Subject: "node." + name + ".input." + varName, Remedy: "remove the data edge or vars entry",
 					Severity: SeverityError,
 					Message:  fmt.Sprintf("node.%s.input.%s: set by both a data edge and vars; remove one", name, varName),
 				})
@@ -108,6 +114,7 @@ func Validate(g *Graph) []Problem {
 			v := node.Schema.Variables[varName]
 			if v.Required && !wired[name+"."+varName] {
 				problems = append(problems, Problem{
+					Code: "required_input_unwired", Subject: "node." + name + ".input." + varName, Remedy: "supply the variable through an edge, vars, or runtime input",
 					Severity: SeverityWarning,
 					Message:  fmt.Sprintf("node.%s.input.%s: required variable %q has no edge feeding it (must be supplied some other way, e.g. terraform.tfvars)", name, varName, varName),
 				})
@@ -117,6 +124,7 @@ func Validate(g *Graph) []Problem {
 
 	for _, cycle := range FindCycles(g) {
 		problems = append(problems, Problem{
+			Code: "dependency_cycle", Subject: "graph", Remedy: "remove an edge in the reported cycle",
 			Severity: SeverityError,
 			Message:  fmt.Sprintf("cycle detected: %s", strings.Join(cycle, " -> ")),
 		})
@@ -163,6 +171,7 @@ func remoteLockProblems(g *Graph) []Problem {
 				what = fmt.Sprintf("this module has backend %q", backend)
 			}
 			problems = append(problems, Problem{
+				Code: "remote_backend_required", Subject: "node." + name, Remedy: "use a remote state backend with a remote graph lock",
 				Severity: SeverityError,
 				Message:  fmt.Sprintf("node.%s: remote lock requires a remote backend (s3, gcs, azurerm, http, remote, or cloud); %s", name, what),
 			})
@@ -185,11 +194,13 @@ func remoteLockProblems(g *Graph) []Problem {
 		}
 		if collision {
 			problems = append(problems, Problem{
+				Code: "lock_state_conflict", Subject: "node." + name, Remedy: "use distinct keys for graph lock and state",
 				Severity: SeverityError,
 				Message:  fmt.Sprintf("node.%s: graph lock key %q must not be a node's state key", name, g.Lock.S3.Key),
 			})
 		} else if possibleCollision {
 			problems = append(problems, Problem{
+				Code: "lock_state_unverified", Subject: "node." + name, Remedy: "verify distinct lock and state addresses",
 				Severity: SeverityWarning,
 				Message:  fmt.Sprintf("node.%s: graph lock may share the node's s3 state because the AWS partition is not statically known; set explicit backend region and endpoint settings where applicable and verify that the resolved lock and state namespaces are distinct", name),
 			})
@@ -216,6 +227,7 @@ func backendProblems(g *Graph) []Problem {
 			}
 			if backend == "" || backend == "cloud" {
 				problems = append(problems, Problem{
+					Code: "backend_missing", Subject: "node." + name, Remedy: "declare a backend block or remove backend_config",
 					Severity: SeverityError,
 					Message:  fmt.Sprintf("node.%s: backend_config is set but the module declares no backend block", name),
 				})
@@ -224,6 +236,7 @@ func backendProblems(g *Graph) []Problem {
 		// Terraform resolves explicit relative paths from the module directory, which can put state inside a vendored source tree.
 		if statePath := node.BackendConfig["path"]; node.Schema != nil && node.Schema.Backend == "local" && statePath != "" && !filepath.IsAbs(statePath) {
 			problems = append(problems, Problem{
+				Code: "relative_state_path", Subject: "node." + name + ".backend_config.path", Remedy: "use an absolute state path outside the module",
 				Severity: SeverityWarning,
 				Message:  fmt.Sprintf("node.%s.backend_config.path: relative path %q for the default workspace is resolved from module directory %q, not the blueprint directory; use an absolute path outside the module or omit backend_config.path to use the managed state path", name, statePath, node.Dir),
 			})
@@ -268,6 +281,7 @@ func backendProblems(g *Graph) []Problem {
 				continue
 			}
 			problems = append(problems, Problem{
+				Code: "backend_conflict", Subject: dir, Remedy: "configure distinct backend addresses for these nodes",
 				Severity: SeverityError,
 				Message: fmt.Sprintf(
 					"%s: nodes %s share this module directory but resolve to identical backend_config",

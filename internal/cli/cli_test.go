@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -23,7 +24,7 @@ func runRootCmd(t *testing.T, args ...string) (stdout, stderr string, err error)
 	root.SetOut(&outBuf)
 	root.SetErr(&errBuf)
 	root.SetArgs(args)
-	err = root.Execute()
+	err = Execute(context.Background(), root, args)
 	return outBuf.String(), errBuf.String(), err
 }
 

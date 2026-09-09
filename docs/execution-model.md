@@ -191,14 +191,14 @@ terragraph destroy --output json --auto-approve
 
 | Command | JSON result |
 | --- | --- |
-| `validate` | Object with `valid` and `problems`; each problem has `severity` and `message`. Warnings can coexist with `valid: true`. |
-| `graph` | Object with `levels`, an array of arrays of node names. Cannot combine JSON with `--format dot`. |
-| `vendor` | Array of results with `node`, `status` (`vendored`, `skipped`, or `error`), and an optional `error`. |
-| `plan`, `apply`, `destroy` | Object with `nodes`; each entry has `node`, `level`, `status`, and an optional `error`. |
+| `validate` | Object with `valid` and `problems`; each problem has `code`, `category`, `phase`, `subject`, `severity`, `message`, and an optional `remedy`. Warnings can coexist with `valid: true`. |
+| `graph` | Object with `schema_version: 1`, `diagnostics`, and `levels`, an array of arrays of node names. Cannot combine JSON with `--format dot`. |
+| `vendor` | Array of results with `node`, `status` (`vendored`, `skipped`, or `error`), node `diagnostics`, and an optional `error`. Global failures use the shapes in [agent usage](agent-usage.md). |
+| `plan`, `apply`, `destroy` | Object with `schema_version: 1`, `nodes`, `diagnostics`, and `execution_id` when an execution session was acquired; node entries retain `node`, `level`, `status`, and optional `error`, and add `diagnostics`. |
 
 Run statuses are `planned`, `applied`, `unchanged`, `destroyed`, `failed`, or `not run`. Entries are ordered by execution level, then node name; destroy numbers levels in reverse dependency order.
 
-A run that fails after starting a node still emits its report and exits nonzero. A failure before execution, such as parsing, validation, or lock acquisition, may leave stdout empty. Check the exit status and allow for an absent JSON payload on failure. JSON `apply` and `destroy` require `--auto-approve` even when sequential; the `approve` policy still applies.
+Failures emit a single JSON result and exit nonzero when `--output json` can be identified and stdout is writable. Existing result shapes retain partial results; failures without a result use `{ "schema_version": 1, "diagnostics": [...] }`. Flag-parser failures use that error-only shape. Invalid or ambiguous output selection, help, native `run`, and output-write failures can still leave no JSON result. See [agent usage](agent-usage.md) for branching rules and compatibility details. JSON `apply` and `destroy` require `--auto-approve` even when sequential; the `approve` policy still applies.
 
 ## Output snapshots
 
@@ -279,14 +279,14 @@ There is no automatic output-snapshot fallback.
 
 The JSON observation contract has `schema_version: 1`, deterministic `nodes`,
 and `diagnostics`. Node status is `observed` or `failed`; diagnostics have
-`code`, `phase`, `subject`, `message`, and an optional `remedy`.
+`code`, `category`, `severity`, `phase`, `subject`, `message`, and an optional `remedy`.
 Unknown additive fields must be ignored; changing existing meanings requires
 a new schema version. Missing named outputs, unavailable state, credential,
 lockfile, preparation, and capability errors exit nonzero while retaining
 successful siblings. Successfully observed zero outputs is normal.
 Pre-execution load and selection failures produce the same envelope when JSON
-was selected and stdout is writable. Native flag-parser failures can occur
-before command dispatch and retain Cobra's ordinary stderr error contract.
+was selected and stdout is writable. Identifiable JSON flag-parser failures use
+the common error-only shape before command dispatch.
 
 
 ### Observing state status
@@ -334,7 +334,7 @@ Each node's `review` contains:
   opted-in `snapshot` provenance, without values. Unavailable bootstrap evidence
   can have source `unavailable`. `limitations` explain why existing upstream
   outputs cannot predict values after a later upstream apply.
-- Structured diagnostics with code, phase, subject, message, and remedy.
+- Structured diagnostics with code, category, severity, phase, subject, message, and remedy.
   Preparation failures also produce JSON before nodes start when possible.
   Source locations retained as HCL diagnostics appear in an optional `source` object
   (file, line, column); other existing parser context remains in messages.
