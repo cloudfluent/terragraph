@@ -44,7 +44,7 @@ edge {
 func TestSelect_DownstreamPreservesBoundaryAndGraph(t *testing.T) {
 	g := selectionFixture(t)
 	before, _ := json.Marshal(g)
-	s, err := Select(g, []string{"b"}, true)
+	s, err := Select(g, []string{"b"}, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,11 +75,11 @@ func TestSelect_DownstreamPreservesBoundaryAndGraph(t *testing.T) {
 
 func TestSelect_MultipleSeedsAreDeterministic(t *testing.T) {
 	g := selectionFixture(t)
-	a, err := Select(g, []string{"x", "b", "b"}, true)
+	a, err := Select(g, []string{"x", "b", "b"}, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := Select(g, []string{"b", "x"}, true)
+	b, err := Select(g, []string{"b", "x"}, true, false)
 	if err != nil || !reflect.DeepEqual(a, b) {
 		t.Fatalf("got = %+v, %v, want %+v", b, err, a)
 	}
@@ -90,14 +90,14 @@ func TestSelect_MultipleSeedsAreDeterministic(t *testing.T) {
 
 func TestSelect_ExactShowsOutgoingBoundary(t *testing.T) {
 	g := selectionFixture(t)
-	s, err := Select(g, []string{"b"}, false)
+	s, err := Select(g, []string{"b"}, false, false)
 	if err != nil || len(s.Nodes) != 1 || len(s.BoundaryEdges) != 2 {
 		t.Fatalf("got = %+v, %v", s, err)
 	}
 	if s.BoundaryEdges[1].To.Node != "c" {
 		t.Fatalf("got = %+v", s.BoundaryEdges)
 	}
-	s, err = Select(g, []string{"d"}, false)
+	s, err = Select(g, []string{"d"}, false, false)
 	if err != nil || len(s.BoundaryEdges) != 1 || s.BoundaryEdges[0].IsDataEdge() {
 		t.Fatalf("got = %+v, %v", s, err)
 	}
@@ -118,15 +118,15 @@ func TestSelectedLevels_CompactsGapsAndReverses(t *testing.T) {
 func TestSelect_InvalidSeedsNeverFallBackToAll(t *testing.T) {
 	g := selectionFixture(t)
 	for _, seeds := range [][]string{{}, {""}, {"b", "missing"}, {"b,x"}, {"B"}, {" b"}} {
-		s, err := Select(g, seeds, false)
+		s, err := Select(g, seeds, false, false)
 		if err == nil || s != nil || !strings.Contains(err.Error(), ";") && !strings.Contains(err.Error(), "specify") {
 			t.Fatalf("seeds = %q, got = %+v, %v", seeds, s, err)
 		}
 	}
-	if s, err := Select(g, nil, true); err == nil || s != nil {
+	if s, err := Select(g, nil, true, false); err == nil || s != nil {
 		t.Fatalf("got = %+v, %v", s, err)
 	}
-	if s, err := Select(g, nil, false); err != nil || s != nil {
+	if s, err := Select(g, nil, false, false); err != nil || s != nil {
 		t.Fatalf("got = %+v, %v", s, err)
 	}
 }
@@ -143,11 +143,11 @@ func TestSelect_QualifiedLeafDoesNotSelectSibling(t *testing.T) {
  source = "./group"
 }`)
 	g := parseAndBuild(t, root)
-	s, err := Select(g, []string{"checkout.cluster"}, true)
+	s, err := Select(g, []string{"checkout.cluster"}, true, false)
 	if err != nil || !reflect.DeepEqual(s.Names(), []string{"checkout.cluster"}) {
 		t.Fatalf("got = %+v, %v", s, err)
 	}
-	if _, err := Select(g, []string{"checkout"}, false); err == nil || !strings.Contains(err.Error(), "checkout.cluster") {
+	if _, err := Select(g, []string{"checkout"}, false, false); err == nil || !strings.Contains(err.Error(), "checkout.cluster") {
 		t.Fatalf("got = %v", err)
 	}
 }
@@ -162,7 +162,7 @@ func TestSelection_RejectsCorruptMembership(t *testing.T) {
 		func(s *Selection) { s.Nodes[1].Via = []string{"d"}; s.Nodes[2].Via = []string{"c"} },
 		func(s *Selection) { s.BoundaryEdges[0].From.Node = "b" },
 	} {
-		s, err := Select(g, []string{"b"}, true)
+		s, err := Select(g, []string{"b"}, true, false)
 		if err != nil {
 			t.Fatal(err)
 		}

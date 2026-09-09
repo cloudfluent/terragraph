@@ -18,7 +18,7 @@ type Selection struct {
 	BoundaryEdges []blueprint.Edge `json:"boundary_edges"`
 }
 
-// SelectionNode records immediate predecessors instead of exponentially many reachability paths.
+// SelectionNode records immediate neighbors toward requested leaves instead of exponentially many reachability paths.
 type SelectionNode struct {
 	Node   string   `json:"node"`
 	Reason string   `json:"reason"`
@@ -26,12 +26,11 @@ type SelectionNode struct {
 }
 
 // Select resolves exact leaf names; nil requests mean the default whole graph, while an empty non-nil request is invalid.
-func Select(g *Graph, requested []string, downstream bool, upstream ...bool) (*Selection, error) {
-	up := len(upstream) > 0 && upstream[0]
-	if up && downstream {
+func Select(g *Graph, requested []string, downstream, upstream bool) (*Selection, error) {
+	if upstream && downstream {
 		return nil, fmt.Errorf("selection: --upstream and --downstream cannot be combined; choose one expansion direction")
 	}
-	if requested == nil && !downstream && !up {
+	if requested == nil && !downstream && !upstream {
 		return nil, nil
 	}
 	if len(requested) == 0 {
@@ -63,10 +62,10 @@ func Select(g *Graph, requested []string, downstream bool, upstream ...bool) (*S
 		requestedSet[name] = true
 	}
 	adjacent := g.Out
-	if up {
+	if upstream {
 		adjacent = g.In
 	}
-	if downstream || up {
+	if downstream || upstream {
 		queue := append([]string{}, seeds...)
 		for i := 0; i < len(queue); i++ {
 			for _, name := range adjacent[queue[i]] {
@@ -81,7 +80,7 @@ func Select(g *Graph, requested []string, downstream bool, upstream ...bool) (*S
 	if downstream {
 		s.Mode = "downstream"
 	}
-	if up {
+	if upstream {
 		s.Mode = "upstream"
 	}
 	names := make([]string, 0, len(selected))
@@ -94,7 +93,7 @@ func Select(g *Graph, requested []string, downstream bool, upstream ...bool) (*S
 		if !requestedSet[name] {
 			n.Reason = s.Mode
 			via := g.In[name]
-			if up {
+			if upstream {
 				via = g.Out[name]
 			}
 			for _, parent := range via {

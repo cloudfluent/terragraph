@@ -16,16 +16,17 @@ The default graph output lists execution levels. DOT output can be rendered with
 
 ## Selecting nodes
 
-`graph`, `plan`, `apply`, and `destroy` select the whole graph by default. Repeat `--node <name>` to select exact leaves, including qualified names such as `checkout.cluster`. Add `--downstream` to include every reachable successor across both data edges and ordering-only edges. Multiple starting nodes contribute a union; each leaf runs once.
+`graph`, `plan`, `apply`, and `destroy` select the whole graph by default. Repeat `--node <name>` to select exact leaves, including qualified names such as `checkout.cluster`. Add `--downstream` to include every reachable successor, or `--upstream` to include every reachable predecessor, across both data edges and ordering-only edges. Choose one expansion direction; combining `--upstream` and `--downstream` is rejected. Multiple starting nodes contribute a union in that direction; each leaf runs once.
 
 ```sh
 terragraph graph --node checkout.cluster --downstream
-terragraph plan --node checkout.cluster --downstream
+terragraph graph --node checkout.cluster --upstream
+terragraph plan --node checkout.cluster --upstream
 terragraph apply --node checkout.cluster --node payments.cluster --downstream
 terragraph destroy --node checkout.cluster --downstream
 ```
 
-A single `--node` without `--downstream` still selects only that leaf. Names are case-sensitive and are neither trimmed nor interpreted as patterns. Empty names, unknown names, group instance names, and `--downstream` without a starting node are errors. `--node b,x` is a literal name, not a comma-separated list; use `--node b --node x`. Positional node names such as `terragraph apply checkout.cluster` are rejected. `--downstream=false` does not expand a selection and preserves whole-graph behavior when no nodes were specified.
+A single `--node` without either expansion flag still selects only that leaf. Names are case-sensitive and are neither trimmed nor interpreted as patterns. Empty names, unknown names, group instance names, and either expansion flag without a starting node are errors. `--node b,x` is a literal name, not a comma-separated list; use `--node b --node x`. Positional node names such as `terragraph apply checkout.cluster` are rejected. Explicitly false expansion flags (`--downstream=false` and `--upstream=false`) do not expand a selection and preserve whole-graph behavior when no nodes were specified.
 
 Membership is fixed before runtime calls. terragraph filters the original full-graph levels, removes empty levels, and numbers the remaining levels consecutively. It preserves alphabetical order within each level. It does not recompute a more parallel schedule after removing external dependencies. `destroy` uses the same membership with reversed levels. An unchanged upstream never skips a selected downstream node's fresh plan.
 
@@ -39,7 +40,7 @@ Boundary edges preserve their original direction. Incoming data edges explain ex
 
 ### Selection output and compatibility
 
-An explicit `--node` or true `--downstream` adds a scope summary. Text execution commands print it to stdout before the first runtime subprocess, without introducing an approval step. Text graph output shows the summary and forward execution levels; destroy shows reverse execution levels. Early validation or selection errors may have no summary.
+An explicit `--node` or true expansion flag (`--downstream` or `--upstream`) adds a scope summary. Text execution commands print it to stdout before the first runtime subprocess, without introducing an approval step. Text graph output shows the summary and forward execution levels; destroy shows reverse execution levels. Early validation or selection errors may have no summary.
 
 `graph` reads configuration only: it does not invoke Terraform/OpenTofu, write execution records, or verify output existence, accessibility, or freshness. A later ordinary command recomputes its selection from the then-current blueprint. Use a [saved execution](executions.md) to retain membership across commands.
 
@@ -65,11 +66,13 @@ For `a -> b -> c`, selecting `b` with downstream expansion produces:
 }
 ```
 
-`mode` is `exact` or `downstream`. Requested leaves retain `reason: "requested"` even if also reachable from another seed. Other leaves list their selected immediate predecessors in `via`, not every possible path. `requested`, `nodes`, and `via` are sorted by name. Boundary edges sort by source node/port, destination node/port, then kind. Ordering edges use `kind: "ordering"` and omit ports. All array fields are arrays, including empty arrays. Execution order comes from `levels` or each result node's `level`, not selection array order.
+`mode` is `exact`, `downstream`, or `upstream`. Requested leaves retain `reason: "requested"` and empty `via` even if also reachable from another seed. Expanded leaves use the expansion direction as `reason`. For downstream expansion, `via` lists selected immediate predecessors; for upstream expansion, it lists selected immediate successors toward the requested leaves, not every possible path. In the same `a -> b -> c` graph, `--node b --upstream` selects `a` and `b`: `a` has `reason: "upstream"` and `via: ["b"]`, while `b` remains requested. `requested`, `nodes`, and `via` are sorted by name. Boundary edges sort by source node/port, destination node/port, then kind. Ordering edges use `kind: "ordering"` and omit ports. All array fields are arrays, including empty arrays. Execution order comes from `levels` or each result node's `level`, not selection array order.
 
 Selected DOT output includes selected leaves and adjacent boundary context. External leaves are gray and labeled `not selected`; edges between two external leaves are omitted. Solid/dashed lines still distinguish data/ordering, and the legend and boundary labels distinguish scope. `--output json --format dot` remains invalid.
 
-Without explicit selection, existing output stays unchanged. Single-node membership also stays unchanged, but it now has a text summary and optional JSON selection. Repeated `--node` flags now select a union, replacing the previous implementation's last-value-wins behavior. `output`, `status`, `vendor`, and `run` retain their existing single-node interfaces. This feature does not add group selection, wildcards, upstream expansion, exclusions, or automatic change detection.
+Without explicit selection, existing output stays unchanged. Single-node membership also stays unchanged, but it now has a text summary and optional JSON selection. Repeated `--node` flags now select a union, replacing the previous implementation's last-value-wins behavior. `output`, `status`, `vendor`, and `run` retain their existing single-node interfaces. This feature does not add group selection, wildcards, exclusions, or automatic change detection.
+
+Saved executions retain their original membership and selection metadata in the existing journal. `apply --plan` and `plan --save --continue` reject every explicit scope override: omit `--node`, `--downstream`, and `--upstream`, including explicitly false expansion flags. Expansion is never recomputed to enroll new nodes during continuation. Older binaries that do not recognize `upstream` metadata reject the record rather than widen its scope; see [saved executions](executions.md#saved-graph-plans).
 
 ## Validation
 
@@ -422,9 +425,3 @@ never automatic replay. Contract meaning and mode participate in retained-plan
 bindings. Review JSON exposes independent conditions through `review.contracts`.
 Known null is reconstructed only from the same successful plan, never from a
 missing live output. See the contracts reference for restart and recovery limits.
-
-### Upstream selection
-
-`--node <leaf> --upstream` includes all transitive producers over both data and ordering edges. It is available on `graph`, `plan`, `apply`, and `destroy`; destroy retains reverse execution order. Scope inspection uses the existing graph output and selection object. `mode` and expanded-node `reason` are `upstream`; `via` lists selected immediate successors toward the requested leaves. Requested nodes retain `reason: "requested"`.
-
-Choose either `--upstream` or `--downstream`; combining them is rejected before execution. Both require at least one explicit leaf. Saved execution membership remains authoritative: `--continue` and `apply --plan` reject scope overrides, including an explicitly false `--upstream=false`. Upstream metadata is persisted in the existing execution journal; it never authorizes replay or replaces explicit recovery. Older binaries that do not recognize this selection mode reject these records rather than widen their scope.
