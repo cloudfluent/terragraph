@@ -21,7 +21,7 @@ def require(condition, message):
 
 class Lab:
     def __init__(self, binary, tofu, name):
-        self.base = Path(tempfile.mkdtemp(prefix=f"terragraph-compelete-{name}-"))
+        self.base = Path(tempfile.mkdtemp(prefix=f"terragraph-complete-{name}-"))
         self.root = self.base / "blueprint"
         shutil.copytree(SOURCE, self.root, ignore=shutil.ignore_patterns(".terragraph", "__pycache__"))
         self.command = [binary, "--blueprint", str(self.root)] + (["--tofu"] if tofu else [])

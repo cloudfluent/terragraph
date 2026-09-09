@@ -7,9 +7,9 @@ import (
 	"github.com/cloudfluent/terragraph/internal/blueprint"
 )
 
-// TestBuild_CompeleteExample keeps the large runnable example fully contracted because validation alone permits uncovered data edges.
-func TestBuild_CompeleteExample(t *testing.T) {
-	dir, err := filepath.Abs(filepath.Join("..", "..", "examples", "compelete"))
+// TestBuild_CompleteExample keeps the large runnable example fully contracted because validation alone permits uncovered data edges.
+func TestBuild_CompleteExample(t *testing.T) {
+	dir, err := filepath.Abs(filepath.Join("..", "..", "examples", "complete"))
 	if err != nil {
 		t.Fatal(err)
 	}
