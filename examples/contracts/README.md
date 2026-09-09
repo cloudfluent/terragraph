@@ -14,4 +14,10 @@ while the contract still says `string` and validate reports
 `contract.[C007] ...`: the module is the declaration of record, so the
 contract is the side to fix.
 
-See `docs/contracts.md` for the grammar and the full C001–C009 code table.
+See `docs/contracts.md` for the grammar and the full C001–C011 code table.
+
+Types can be written directly (`type = string`); legacy strings remain valid.
+`validate` checks declarations, while plan/apply also check explicit contracts
+against real outputs and effective module inputs. Omit a consumer `type` when
+its module variable already expresses the requirement. Enable `enforce` only
+after reviewing the default `warn` diagnostics.

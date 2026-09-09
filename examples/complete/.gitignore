@@ -1,0 +1,3 @@
+# Read-only observation requires a lockfile even when all resources are built in.
+!modules/*/.terraform.lock.hcl
+__pycache__/

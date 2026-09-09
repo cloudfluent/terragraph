@@ -1,6 +1,6 @@
 # Blueprint
 
-A blueprint describes independent Terraform/OpenTofu root modules (`node` blocks) and the connections between them (`edge` blocks). The CLI reads `blueprint.hcl` by default; select another file or a directory with `--blueprint`.
+A blueprint describes independent Terraform/OpenTofu root modules (`node` blocks) and the connections between them (`edge` blocks). The CLI reads the current directory by default, merging its `.hcl` files except `.terraform.lock.hcl`; select a single file or another directory with `--blueprint`.
 
 ```hcl
 node "vpc" {
@@ -46,7 +46,7 @@ node "data-apne2-dev-vpc" {
 
 Values can be strings, numbers, booleans, nulls, lists, or nested objects. Numeric precision is preserved when values are passed to Terraform. If you control the module interface, related settings can share an `object`-typed variable instead of many separate variables.
 
-`vars` accepts literal data with no variables or functions in scope. Another node's output needs an `edge`; putting `node.other.output.x` inside `vars` is an error and would not record the dependency. A `vars` key must name a real input and must not also be supplied by a data edge.
+`vars` accepts literal data and, when explicitly installed, [plugin functions](plugins.md). No variables are added to scope. Another node's output needs an `edge`; putting `node.other.output.x` inside `vars` is an error and would not record the dependency. A `vars` key must name a real input and must not also be supplied by a data edge.
 
 Resolved `vars` and edge values share the same temporary tfvars file and type checks. Terraform/OpenTofu performs the final conversion and variable validation. See [how values are passed](execution-model.md#how-values-are-passed) for the optional `tfvars` setting and cleanup behavior, and [group instance inputs](groups.md#setting-literal-inputs-for-an-instance) for `use.vars`.
 
@@ -79,11 +79,16 @@ Either endpoint may be a group instance, such as `use.checkout`. Its values reso
 
 | Invocation | Files read |
 |---|---|
-| `terragraph graph` | `blueprint.hcl` only |
+| `terragraph graph` | Eligible `.hcl` files directly in the current directory |
 | `terragraph graph --blueprint topology.hcl` | `topology.hcl` only |
-| `terragraph graph --blueprint .` | Every `.hcl` file directly in the current directory, non-recursively |
+| `terragraph graph --blueprint .` | Same as the default |
+| `terragraph graph --blueprint ./config` | Eligible `.hcl` files directly in `./config` |
 
-Single-file loading does not merge neighboring files. For example, adding `contracts.hcl` next to `blueprint.hcl` only includes those contracts when you select the directory. Directory loading includes hidden `.hcl` files too, including `.terraform.lock.hcl`; keep another tool's HCL configuration in its own directory. `.tf`, `.HCL`, and `.hcl.json` files are not collected by directory loading.
+Directory loading is non-recursive and excludes `.terraform.lock.hcl`. Other hidden `.hcl` files are included; keep another tool's HCL configuration in its own directory. `.tf`, `.HCL`, and `.hcl.json` files are not collected. Subdirectories are visited only through module and group source references.
+
+All configuration-loading commands use this default: `validate`, `graph`, `plan`, `apply`, `destroy`, `output`, `status`, `vendor`, and `force-unlock`. A selected directory with no eligible configuration files is an error, including one containing only Terraform files or `.terraform.lock.hcl`. An empty configuration file or a file containing only group definitions remains valid; having no executable nodes is distinct from having no configuration files.
+
+Previously, commands without `--blueprint` read only `blueprint.hcl`. They now also include sibling files such as `contracts.hcl`, which may add nodes, settings, or duplicate declarations. Pass `--blueprint blueprint.hcl` to retain single-file loading. Explicit file selection reads exactly that file, without applying the directory filename filter.
 
 You can split a blueprint without creating either `blueprint.hcl` or `group.hcl`. In a new directory, copy the `stacks` directory from [`examples/basic`](../examples/basic) and create these two files:
 
@@ -102,7 +107,7 @@ edge {
 ```
 
 ```sh
-terragraph graph --blueprint .
+terragraph graph
 # level 1: vpc
 # level 2: eks
 ```
@@ -129,7 +134,47 @@ This gives the default workspace a different state file for each node. A module 
 
 An explicit relative local-backend `backend_config.path` is passed through unchanged. For example, with `source = "./modules/vpc"`, `path = ".terragraph/state/vpc.tfstate"` places default-workspace state under `modules/vpc/.terragraph/state/`. `terragraph validate` warns about this relative path. Omit `backend_config.path` to use the automatic absolute path above, or supply an absolute path outside the module directory when choosing a custom location.
 
-Use `backend_config` for remote backend fields such as `bucket`, `key`, `region`, and `profile`, or for an explicit local path. Entries are passed to `terraform init` as `-backend-config` options. A non-empty map requires a `backend` block in the module; it is invalid with no backend block or with a `cloud` block. A group's [`use.backend_config`](groups.md#isolating-state-for-an-instance) can supply shared defaults.
+## Keeping backend configuration DRY
+
+Declare shared backend settings once per group instance instead of repeating them on every leaf. `use.backend_config` supplies common settings such as bucket, region, and profile; `use.backend_address` can also generate a distinct S3 key for each leaf. Adding a leaf to the group then inherits the settings and receives its own generated key without another backend configuration map.
+
+Each module still declares its backend type inside its own `terraform` block, for example `backend "s3" {}`. Terragraph injects the resolved settings through `terraform init -backend-config=key=value`; it never generates or edits a `.tf` backend block. The bucket and other backend infrastructure must already exist.
+
+Use `backend_config` for explicit backend fields, including an existing remote key or local path. A non-empty map requires a `backend` block in the module; it is invalid with no backend block or with a `cloud` block. Shared settings inherit through nested `use` blocks, and node settings take precedence. See [group inheritance](groups.md#keeping-backend-configuration-dry) and the [before/after example](../examples/group#keeping-backend-configuration-dry).
+
+### Generating per-leaf S3 keys
+
+For a group of modules declaring `backend "s3"`, combine shared configuration and optional address generation at the instance:
+
+```hcl
+use "eks-service" {
+  as     = "checkout"
+  source = "./groups/eks-service"
+  backend_config = {
+    bucket = "example-state"
+    region = "ap-northeast-2"
+  }
+  backend_address = {
+    s3_key_prefix = "prod"
+    s3_key_name   = "terraform.tfstate"
+  }
+}
+```
+
+Leaves named `cluster` and `nodegroup` receive `prod/checkout.cluster/terraform.tfstate` and `prod/checkout.nodegroup/terraform.tfstate` from this one declaration. The same `backend_address` object can be set on an individual `node` when it needs its own rule. Only `s3_key_prefix` and `s3_key_name` are supported; both are optional, but at least one must be present to enable generation. The construction is `[prefix/]<qualified-leaf>/<file-name>`, where the qualified leaf directory is always included automatically. Values are literal strings, with no placeholder substitution, functions, or references to other nodes.
+
+| Field | Default when generation is enabled | Meaning |
+|---|---|---|
+| `s3_key_prefix` | Empty | Literal object-key prefix, such as `prod` or `prod/team`. A trailing `/` can supply the separator before the leaf directory. |
+| `s3_key_name` | `terraform.tfstate` | Non-empty file name inside each leaf directory. `/`, `\`, `.` and `..` are not accepted as path separators or directory names. |
+
+Omitting `backend_address` inherits the enclosing `use` rule. Fields merge independently: an inner `use` overrides an outer one, and a node's fields win. Setting `s3_key_prefix = ""` clears an inherited prefix while retaining an inherited file name. Setting `backend_address = {}` disables inherited generation for that scope; a descendant may enable it again with either field.
+
+Generation runs only after existing `backend_config` inheritance is resolved, and only if `key` is absent both from that configuration and from the module's backend block. An explicit key always wins, including an inherited key or a module key whose value cannot be evaluated statically. Empty explicit keys are passed through rather than repaired. If the module cannot be inspected enough to establish key absence, terragraph requires an explicit key or disabling generation. Changing only `s3_key_name` never replaces an explicit `backend_config.key`.
+
+This convenience currently generates only the S3 `key` field. Other backend types ignore these generation fields and keep their existing configuration, including local default paths. The rule does not select a backend type or configure a bucket, credentials, workspaces, or locking. Existing static collision checks apply to generated and explicit addresses alike; inheriting one explicit key across several leaves can still be a collision. These checks retain their existing limitations for unknown backend settings and namespaces.
+
+Renaming a node or group instance, moving a leaf into a different group, or changing the selected prefix or file name can change its generated state address. Terragraph does not migrate state automatically. Preserve an existing location by setting its exact `backend_config.key` before adopting or changing a generation rule. Merely renaming a group's declaration without changing instance names or its leaf structure does not change the qualified leaf names.
 
 Validation rejects identical backend configuration maps on a shared source, known shared local state paths, and known shared S3 state addresses. It also rejects node names that collide on the filesystem, including case differences on a case-insensitive volume. These checks use statically known settings, including explicit `TF_WORKSPACE` values; they cannot resolve all backend expressions, external configuration, or credential-dependent namespaces. Warnings about unverified separation require checking the paths or backend namespaces yourself. Set distinct addresses and explicit region/endpoint settings where needed; a different profile alone does not establish a different state address.
 
@@ -235,6 +280,10 @@ Every node must then use a supported remote backend (`s3`, `gcs`, `azurerm`, `ht
 
 See [graph remote locking](execution-model.md#graph-remote-lock) for credentials, permissions, contention, and recovering a stale lock, and [backend limitations](execution-model.md#known-limitation) for `apply` support.
 
+## Execution record storage (`execution`)
+
+Use an optional root-level `execution` block to select local or S3 record storage and configure retained-plan and completed-record lifetimes. It does not change Terraform state backends or enable retained-plan execution by itself. See [execution records](executions.md) for the configuration and `plan list`/`plan show` commands.
+
 ## Output snapshots (`snapshots`)
 
 Add an empty top-level block to retain local output values for fallback when live upstream outputs are unavailable:
@@ -247,4 +296,4 @@ A blueprint may contain one `snapshots` block; it accepts no settings. During `a
 
 Snapshots are a last resort after this run's applied outputs and live `terraform output`. They may be stale and do not replace a refreshed plan or automatically apply upstream nodes. Without the block, snapshots are neither written nor used. See [output snapshots](execution-model.md#output-snapshots) for fallback conditions and refreshing existing snapshots.
 
-For additional checks on values exchanged between modules, see [producer and consumer contracts](contracts.md).
+For additional checks on values exchanged between modules, see [producer and consumer contracts](contracts.md). Contract types accept native expressions such as `type = list(string)` and legacy strings. Consumer type omission retains the module variable's type check. Explicit contracts add actual-value checks during plan/apply, with `warn` as the default and `enforce` to block violations.

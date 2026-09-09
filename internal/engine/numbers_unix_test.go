@@ -139,7 +139,7 @@ edge {
 
 func TestPlan_LiveOutputNumbersReachTerraformExactly(t *testing.T) {
 	e := loadNumberEdgeEngine(t)
-	if _, err := e.Plan(Options{Node: "b"}); err != nil {
+	if _, err := e.Plan(Options{Nodes: []string{"b"}}); err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
 	assertNumberInputs(t, e)
@@ -147,7 +147,7 @@ func TestPlan_LiveOutputNumbersReachTerraformExactly(t *testing.T) {
 
 func TestPlan_SnapshotNumbersReachTerraformExactlyAfterReload(t *testing.T) {
 	e := loadNumberEdgeEngine(t)
-	if _, err := e.Apply(Options{Node: "a"}); err != nil {
+	if _, err := e.Apply(Options{Nodes: []string{"a"}}); err != nil {
 		t.Fatalf("Apply upstream: %v", err)
 	}
 	if err := osWriteFile(filepath.Join(e.BaseDir, "producer", "output-unavailable"), nil); err != nil {
@@ -157,7 +157,7 @@ func TestPlan_SnapshotNumbersReachTerraformExactlyAfterReload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load after upstream apply: %v", err)
 	}
-	if _, err := reloaded.Plan(Options{Node: "b"}); err != nil {
+	if _, err := reloaded.Plan(Options{Nodes: []string{"b"}}); err != nil {
 		t.Fatalf("Plan using snapshot: %v", err)
 	}
 	assertNumberInputs(t, reloaded)
@@ -173,14 +173,14 @@ func TestPlan_LiveOutputRejectsTrailingJSON(t *testing.T) {
 	if err := osWriteFile(path, append(data, []byte("\n{}")...)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.Plan(Options{Node: "b"}); err == nil || !strings.Contains(err.Error(), "expected a single JSON value") {
+	if _, err := e.Plan(Options{Nodes: []string{"b"}}); err == nil || !strings.Contains(err.Error(), "expected a single JSON value") {
 		t.Fatalf("Plan error = %v, want malformed live output rejected", err)
 	}
 }
 
 func TestPlan_SnapshotRejectsTrailingJSON(t *testing.T) {
 	e := loadNumberEdgeEngine(t)
-	if _, err := e.Apply(Options{Node: "a"}); err != nil {
+	if _, err := e.Apply(Options{Nodes: []string{"a"}}); err != nil {
 		t.Fatalf("Apply upstream: %v", err)
 	}
 	if err := osWriteFile(filepath.Join(e.BaseDir, "producer", "output-unavailable"), nil); err != nil {
@@ -194,7 +194,7 @@ func TestPlan_SnapshotRejectsTrailingJSON(t *testing.T) {
 	if err := osWriteFile(path, append(data, []byte("\n{}")...)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.Plan(Options{Node: "b"}); err == nil || !strings.Contains(err.Error(), "output -json") {
+	if _, err := e.Plan(Options{Nodes: []string{"b"}}); err == nil || !strings.Contains(err.Error(), "output -json") {
 		t.Fatalf("Plan error = %v, want original live output failure without corrupt fallback", err)
 	}
 }

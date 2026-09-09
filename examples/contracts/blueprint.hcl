@@ -13,14 +13,14 @@ edge {
 
 producer "./modules/vpc" {
   output "vpc_id" {
-    type     = "string"
+    type     = string
     nullable = false
   }
 }
 
 consumer "./modules/app" {
   input "vpc_id" {
-    type     = "string"
+    type     = string
     nullable = false
   }
 }

@@ -41,7 +41,7 @@ edge {
 }
 ```
 
-The instance expands in memory into `checkout.cluster` and `checkout.nodegroup`; no configuration files are generated. Commands use these qualified leaf names, for example `terragraph plan --node checkout.cluster`. Selecting that leaf does not select the whole group or its dependencies. A downstream module can consume the public output through `use.checkout.output.cluster_id`.
+The instance expands in memory into `checkout.cluster` and `checkout.nodegroup`; no configuration files are generated. Commands use these qualified leaf names, for example `terragraph plan --node checkout.cluster`. Selecting that leaf alone does not select the whole group or its dependencies. For `graph`, `plan`, `apply`, and `destroy`, add `--downstream` to follow all data and ordering edges from the qualified leaf, including successors outside its group. Repeat `--node` to combine exact starting leaves. Group instance names such as `checkout` and wildcard prefixes are rejected with a qualified leaf example; unrelated siblings are not included by their shared prefix. A downstream module can consume the public output through `use.checkout.output.cluster_id`.
 
 Add another `use "eks-service"` with a different `as` and `vars` to deploy the same combination again. The [complete example](../examples/group) instantiates it as both `checkout` and `payments`.
 
@@ -71,11 +71,11 @@ Groups can contain nested `use` blocks, and exports can forward nested ports suc
 
 `use.source` names a **local directory**, not an individual file or a remote module address. It is resolved from the directory containing the calling blueprint or group definition. Local internal node sources and nested `use` sources are relative to the group's own source directory. Remote sources are supported for the group's nodes through [vendoring](#vendoring-group-nodes).
 
-Terragraph reads every `.hcl` file directly inside the group directory, non-recursively, then selects the `group` whose label matches the `use` label. In the example, it looks for `group "eks-service"` anywhere in `./groups/eks-service`. `group.hcl` is a convention: renaming it to `components.hcl` needs no change to the `use` block, and the directory name need not match the group name.
+Terragraph reads `.hcl` files directly inside the group directory, excluding `.terraform.lock.hcl` and without recursion, then selects the `group` whose label matches the `use` label. In the example, it looks for `group "eks-service"` anywhere in `./groups/eks-service`. `group.hcl` is a convention: renaming it to `components.hcl` needs no change to the `use` block, and the directory name need not match the group name.
 
 All files use the same syntax rules. A group's nodes, edges, nested uses, and `export` must be inside its body to belong to it; top-level nodes in neighboring files are not included automatically. A `runtime` declaration belongs outside the group body, in the same file or another `.hcl` file in that directory. Defining the same `group` name in two files is rejected rather than merging their bodies.
 
-The calling blueprint can also span arbitrary filenames such as `nodes.hcl` and `edges.hcl`; run it with `--blueprint .` to include both. See [files and loading](blueprint.md#files-and-loading) for a complete split example. Directory loading is explicit for the calling blueprint and always used for group sources.
+The calling blueprint can also span arbitrary filenames such as `nodes.hcl` and `edges.hcl`; commands include both by default when run in that directory. See [files and loading](blueprint.md#files-and-loading) for a complete split example. The calling blueprint can select one file with `--blueprint <file>`; group sources always use directory loading with the same filename filter.
 
 ## Setting literal inputs for an instance
 
@@ -104,7 +104,11 @@ The value reaches every leaf named by the export, including through nested group
 
 For local state, the group's modules can declare `backend "local" {}`. When no explicit `backend_config.path` is set, terragraph supplies a unique default-workspace path per qualified leaf, such as `.terragraph/state/checkout.cluster.tfstate` and `.terragraph/state/payments.cluster.tfstate`, under the root blueprint directory. See [module reuse](blueprint.md#reusing-the-same-module-across-instances) for explicit paths, workspaces, and migration considerations.
 
-For remote state, `use.backend_config` supplies defaults to every node in the instance:
+### Keeping backend configuration DRY
+
+Keep environment-specific backend settings at the `use` site so every leaf in the group can inherit them. For S3, combine `use.backend_config` for shared bucket, region, and profile settings with `use.backend_address` for distinct leaf keys. This removes both the repeated settings and the need to author a key for each new leaf.
+
+Each module declares a compatible backend type, such as `backend "s3" {}` inside its `terraform` block. Terragraph passes the resolved settings as `terraform init -backend-config` options, without writing backend configuration files. For modules declaring S3 backends:
 
 ```hcl
 use "eks-service" {
@@ -115,10 +119,22 @@ use "eks-service" {
     profile = "prod"
     region  = "ap-northeast-2"
   }
+  backend_address = {
+    s3_key_prefix = "prod"
+    s3_key_name   = "terraform.tfstate"
+  }
 }
 ```
 
-Each module must declare a compatible backend. An inner `use` overrides inherited keys, and a node's own keys win. Use shared fields such as `bucket`, `profile`, and `region` here, and give each leaf a distinct state address. A single `key` on `use` is inherited by every leaf; terragraph does not interpolate the instance or leaf name into it. When reusing the group, also separate the instances' backend namespaces, for example with different buckets.
+This generates `prod/checkout.cluster/terraform.tfstate` and `prod/checkout.nodegroup/terraform.tfstate`. Another instance named `payments` can use the same bucket and rule; its keys contain `payments.cluster` and `payments.nodegroup`. Nested instances include their full leaf name, such as `prod/checkout.inner.database/terraform.tfstate`. Select `dev` as the prefix to use a different environment namespace.
+
+The shared `backend_config` entries also cascade through nested groups: an inner `use` overrides inherited entries, and a node's own entries win. A new leaf needs only its module source and normal inputs to inherit this backend setup. See the [group example's before/after comparison](../examples/group#keeping-backend-configuration-dry) for the configuration this replaces.
+
+The prefix and file name inherit independently through nested `use` blocks. For example, a leaf can declare `backend_address = { s3_key_name = "state.json" }` to keep the instance's `prod` prefix while changing its file name. An empty prefix clears an inherited prefix; `backend_address = {}` stops generation for that scope, while descendants can opt in again. Without an inherited or explicit file name, generation uses `terraform.tfstate`.
+
+Explicit `backend_config.key` values, including inherited keys, and keys declared in module backend blocks always take precedence. A leaf can retain `backend_config = { key = "legacy/database.tfstate" }` while its siblings use generated addresses. Inheriting the same explicit key across multiple leaves is still checked for collisions, not rewritten. Shared `use.backend_config` settings work with other compatible backend types too, while address generation currently supports S3 only. See [backend address generation](blueprint.md#generating-per-leaf-s3-keys) for the full scope, field rules, and validation limits.
+
+Changing an instance name, leaf name, prefix, or file name can change generated state addresses. No state migration is performed; use explicit keys to retain existing locations when restructuring groups.
 
 ## Choosing a runtime for an instance
 
@@ -174,12 +190,4 @@ This allows create and update actions by default for the instance's nodes. A nod
 
 The root blueprint's `vendor.directory` and `vendor.manifest_file` control these copies and their manifest. Existing group-local copies remain usable when no root qualified copy exists. Refreshes publish into the root vendor directory and check local state before changing execution directories; see [vendoring](vendoring.md) for compatibility and refresh rules.
 
-## Selecting expanded nodes for execution
-
-Run selectors use fully qualified leaf names, for example
-`terragraph apply --node checkout.cluster --include-dependencies --preview`.
-Repeat `--node` to select several leaves; a `use` instance name is not a wildcard.
-Ancestor/descendant expansion follows the resolved leaf DAG across group boundaries.
-`--pool` membership and `--timeout` overrides use the same qualified leaf names.
-See [execution scope and scheduling](execution-model.md#selecting-nodes) for
-partial destroy checks, failure policy, and recorded-run recovery.
+Optional [plugin functions](plugins.md) declared by the root blueprint are available in group node and use `vars`. Group source directories cannot declare their own executable plugins.

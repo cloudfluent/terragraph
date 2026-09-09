@@ -16,39 +16,60 @@ The default graph output lists execution levels. DOT output can be rendered with
 
 ## Selecting nodes
 
-`plan`, `apply`, and `destroy` select the whole graph by default. Repeat `--node` or comma-separate names to select a union of leaves, including dotted names such as `checkout.cluster`. A group instance name does not select all its members. Duplicate targets run once; unknown targets fail before execution.
+`graph`, `plan`, `apply`, and `destroy` select the whole graph by default. Repeat `--node <name>` to select exact leaves, including qualified names such as `checkout.cluster`. Add `--downstream` to include every reachable successor across both data edges and ordering-only edges. Multiple starting nodes contribute a union; each leaf runs once.
 
 ```sh
-terragraph apply --node checkout.cluster --node checkout.nodegroup
-terragraph apply --node checkout.cluster --include-dependencies
-terragraph plan --node vpc --include-dependents
+terragraph graph --node checkout.cluster --downstream
+terragraph plan --node checkout.cluster --downstream
+terragraph apply --node checkout.cluster --node payments.cluster --downstream
+terragraph destroy --node checkout.cluster --downstream
 ```
 
-Without expansion flags, prerequisites outside the selection are assumed to be standing: data inputs are read from existing upstream state. `--include-dependencies` adds all ancestors of the explicit targets; `--include-dependents` adds all descendants. With both flags, the two closures are taken from the original targets, so including one ancestor does not select its unrelated consumers. Added descendants may still have other prerequisites outside the selection. Inspect them with `--preview`. Positional node names are not supported.
+A single `--node` without `--downstream` still selects only that leaf. Names are case-sensitive and are neither trimmed nor interpreted as patterns. Empty names, unknown names, group instance names, and `--downstream` without a starting node are errors. `--node b,x` is a literal name, not a comma-separated list; use `--node b --node x`. Positional node names such as `terragraph apply checkout.cluster` are rejected. `--downstream=false` does not expand a selection and preserves whole-graph behavior when no nodes were specified.
 
-### Previewing execution scope
+Membership is fixed before runtime calls. terragraph filters the original full-graph levels, removes empty levels, and numbers the remaining levels consecutively. It preserves alphabetical order within each level. These levels remain stable report labels, not scheduling barriers: only selected prerequisites gate dispatch. `destroy` uses the same membership with reversed levels and waits for selected consumers before their producers. An unchanged upstream never skips a selected downstream node's fresh plan.
 
-`--preview` works on all three commands and never runs Terraform/OpenTofu, acquires execution locks, or writes managed files. It shows selection reasons (`all`, `explicit`, `dependency`, `dependent`), static execution levels, selected and external prerequisites, external data inputs, and pool membership.
+Selection limits execution, not validation or coordination: errors anywhere in the blueprint can block the run, and existing local/remote locks and unresolved-execution recovery barriers still apply. Per-node data directories, approval policies, failure handling, and the requirement for `--auto-approve` with concurrent apply/destroy are unchanged. A failure can follow successful changes to other selected nodes; selection provides no atomicity or automatic rollback.
 
-```sh
-terragraph apply --node app --include-dependencies --preview
-terragraph destroy --node vpc --preview --output json
+### Dependencies outside the selection
+
+Unselected nodes never receive plan/apply/destroy calls. A selected consumer may read an unselected producer's existing output using the usual input-resolution path, including snapshot fallback only when already opted in and eligible. Runtime compatibility checks may also inspect selected nodes and their direct data producers. Missing outputs fail with the existing remedy; they do not expand selection. Saved planning and saved application retain their stricter requirement for live upstream outputs.
+
+Boundary edges preserve their original direction. Incoming data edges explain existing values a run may need; incoming ordering-only edges do not execute or verify completion of the external predecessor. Outgoing edges identify consumers that remain unselected and will not be updated by this invocation.
+
+### Selection output and compatibility
+
+An explicit `--node` or true `--downstream` adds a scope summary. Text execution commands print it to stdout before the first runtime subprocess, without introducing an approval step. Text graph output shows the summary and forward execution levels; destroy shows reverse execution levels. Early validation or selection errors may have no summary.
+
+`graph` reads configuration only: it does not invoke Terraform/OpenTofu, write execution records, or verify output existence, accessibility, or freshness. A later ordinary command recomputes its selection from the then-current blueprint. Use a [saved execution](executions.md) to retain membership across commands.
+
+JSON remains one result object, with an optional `selection` object alongside the existing `levels` or `nodes`. Plan retains its existing `schema_version` and `diagnostics`. A resolved selection is included even in preparation or execution failures; unresolved selection is omitted. Unselected leaves are never added to `nodes` as unchanged or not run. The selection contains names and relationships only, never output values, variables, or backend credentials.
+
+For `a -> b -> c`, selecting `b` with downstream expansion produces:
+
+```json
+{
+  "levels": [["b"], ["c"]],
+  "selection": {
+    "schema_version": 1,
+    "mode": "downstream",
+    "requested": ["b"],
+    "nodes": [
+      {"node": "b", "reason": "requested", "via": []},
+      {"node": "c", "reason": "downstream", "via": ["b"]}
+    ],
+    "boundary_edges": [
+      {"kind": "data", "from": {"node": "a", "output": "out"}, "to": {"node": "b", "input": "in"}}
+    ]
+  }
+}
 ```
 
-This is a scope preview, not a Terraform plan, live-state check, or apply authorization. It remains available on a fresh graph whose data outputs do not exist. Parsing, local module inspection, and graph validation still apply, so vendoring must already have produced the required directories. As it takes no lock, concurrent configuration changes can invalidate a preview; execution reloads and validates under its lock.
+`mode` is `exact` or `downstream`. Requested leaves retain `reason: "requested"` even if also reachable from another seed. Other leaves list their selected immediate predecessors in `via`, not every possible path. `requested`, `nodes`, and `via` are sorted by name. Boundary edges sort by source node/port, destination node/port, then kind. Ordering edges use `kind: "ordering"` and omit ports. All array fields are arrays, including empty arrays. Report order comes from `levels` or each result node's `level`, not selection array order; concurrent execution can overlap levels.
 
-JSON has `schema_version: 1`, `kind: "execution_scope"`, `operation`, `nodes`, `outside_dependents`, and `destroy_scope_complete`. Each node has `node`, `level`, `reason`, `prerequisites`, `external_prerequisites`, `external_inputs`, and `pools`. External inputs identify ports without values. Ignore unknown additive fields. Preview uses its own result shape rather than a plan-review envelope, and does not require `--auto-approve` even with JSON or parallelism settings.
+Selected DOT output includes selected leaves and adjacent boundary context. External leaves are gray and labeled `not selected`; edges between two external leaves are omitted. Solid/dashed lines still distinguish data/ordering, and the legend and boundary labels distinguish scope. `--output json --format dot` remains invalid.
 
-### Partial destroy
-
-Before any teardown starts, terragraph checks for direct and transitive consumers outside the selection, including ordering-only dependencies. It refuses incomplete scope with a list of those nodes. Use `--include-dependents` to select them, or explicitly acknowledge the excluded consumers with `--allow-orphan-destroy`. `--auto-approve` alone does not bypass this check.
-
-```sh
-terragraph destroy --node vpc --include-dependents --preview
-terragraph destroy --node vpc --include-dependents --auto-approve
-```
-
-The check covers only declared DAG dependencies. It cannot discover external infrastructure consumers, or prove that a named consumer still exists. A destroy preview reports incomplete scope without failing, so it can be inspected before deciding. `destroy_scope_complete` describes this graph check only; it is not proof that deletion is safe. Node approval policy still applies to every selected node.
+Without explicit selection, existing output stays unchanged. Single-node membership also stays unchanged, but it now has a text summary and optional JSON selection. Repeated `--node` flags now select a union, replacing the previous implementation's last-value-wins behavior. `output`, `status`, `vendor`, and `run` retain their existing single-node interfaces. This feature does not add group selection, wildcards, upstream expansion, exclusions, or automatic change detection.
 
 ## Validation
 
@@ -108,7 +129,7 @@ terragraph apply --approve all
 
 Resolution is `node's own approve > enclosing use > --approve > safe`. Nested groups use the nearest declaration. The CLI flag fills an unset policy: `--approve all` cannot override an explicit `approve = "safe"`, and `--approve none` cannot restrict an explicit `approve = "all"`.
 
-When a plan exceeds its policy, that node fails before apply and its selected consumers remain blocked. The error identifies the disallowed actions and the declaration or flag to change. Already-running nodes finish; see [failure and retry](#failure-and-retry).
+When a plan exceeds its policy, that node fails before apply and no new work beyond its execution level starts. The error identifies the disallowed actions and the declaration or flag to change. Other nodes in the same level and already-running nodes can still finish; see [failure and retry](#failure-and-retry).
 
 `destroy` checks the selected nodes before running any of them. An explicit `approve = "none"` or `"safe"`, including one inherited from `use`, blocks teardown. Nodes without a declared policy are allowed to reach Terraform's own confirmation prompt. `destroy` has no `--approve` flag: change the declaration if teardown is intended. `--auto-approve` does not bypass this policy.
 
@@ -122,79 +143,28 @@ Without `--auto-approve`, terragraph asks before applying each node that has cha
 Apply these changes to node eks? [y/N]:
 ```
 
-- Only `y` or `yes` approves. A refusal fails that node and follows the selected failure policy.
+- Only `y` or `yes` approves. A refusal fails that node and prevents new work in later levels from starting.
 - Unchanged nodes need no confirmation.
 - Piped input is supported, but each changed node needs an answer. If no input is available, the command fails with a remedy to use `--auto-approve`.
-- `--parallelism N` with N greater than 1, `--output json`, and positive node timeouts require `--auto-approve` for executing `apply` and `destroy`. Timed interactive approval is refused because console reads cannot be interrupted uniformly on all platforms. `plan` and `--preview` need no confirmation.
+- Both `--parallelism N` with N greater than 1 and `--output json` require `--auto-approve` for `apply` and `destroy`. `plan` needs no confirmation.
 
 For `destroy`, the confirmation comes from Terraform/OpenTofu itself. It does not use a terragraph saved plan and does not rerun `init`; it uses the backend configuration already cached in the node's `TF_DATA_DIR`.
 
 ## Execution levels and parallelism
 
-Nodes in the same static execution level have no dependency edge between them. Levels remain deterministic labels in graph output and run reports, but are no longer scheduling barriers. A node can start as soon as all its selected prerequisites have succeeded and execution slots are available. For destroy, prerequisites are selected downstream nodes.
-
-The default `--parallelism 1` runs one node at a time and streams output live. `--parallelism N` runs up to N ready nodes across levels, buffering output into a separate `=== node <name> ===` block per completed node. Among available candidates, static level and node name break ties; actual completion order can vary.
+Nodes start when all their selected prerequisites have succeeded and a concurrency slot is free. Both data and ordering edges gate execution; destroy reverses those dependencies. A ready child can start while an unrelated root is still running. The default `--parallelism 1` runs sequentially and streams output live. `--parallelism N` runs up to N ready nodes across levels concurrently, buffering output into a separate `=== node <name> ===` block per node. Ready nodes are considered in report order (level, then name); reports retain that order regardless of completion order. Successful outputs are published before dependent actions start.
 
 ```sh
 terragraph apply --parallelism 4 --auto-approve
 ```
 
-If A and B are independent and C depends only on A, C can start after A finishes while B is still running. A selected dependency that failed or was not run cannot be bypassed by a live output read or snapshot fallback. External prerequisites are not executed unless included in the selection.
-
-This limit controls concurrent **nodes**; each Terraform/OpenTofu process still manages concurrency within its own module. The whole run continues to hold one local lock and, when configured, one remote graph lock.
-
-### Shared service limits
-
-Use repeated `--pool name=limit:node,node` flags to cap concurrent users of a shared account, API, or other service without adding ordering-only edges:
-
-```sh
-terragraph apply --parallelism 4 --auto-approve \
-  --pool account=2:vpc,db,app \
-  --pool database-api=1:db,app
-```
-
-Membership uses exact expanded leaf names. A node must have a slot in every pool it belongs to before starting. Acquisition is coordinated together, so a node cannot hold one pool while waiting on another. Unrelated ready nodes can use available global slots. Pool limits are per invocation; they are not cross-process locks or Terraform provider parallelism limits. Pool definitions and timeout flags are run options and must be supplied again when resuming.
+This limit controls concurrent **nodes**; each Terraform/OpenTofu process still manages concurrency within its own module.
 
 ## Failure and retry
 
-Apply and destroy default to fail-fast: after a failure is observed, no more queued nodes start, including queued siblings. Already-running actions finish and retain their outcomes. This changes the earlier level-based behavior, which ran every sibling before stopping. A descendant may already have started after its own prerequisite succeeded, before an unrelated failure was observed.
+An ordinary node failure, policy rejection, or declined confirmation does not cancel its siblings: **the other nodes in that level continue, even with `--parallelism 1`**. After a failure is observed, no new node beyond the earliest failed execution level starts. Nodes already running, including nodes in later levels, finish normally; their outcomes remain in the report and execution journal. Interrupting the command has different behavior, described [below](#interrupting-an-execution).
 
-Use `--keep-going` to continue independent branches. Selected descendants of a failed node remain `not run` with reason `dependency_failed` and a `blocked_by` list identifying failed prerequisites. For destroy, a failed consumer blocks its selected ancestors. CLI plan review defaults to keep-going; use `plan --keep-going=false` for fail-fast. Any failed or blocked node leaves the command unsuccessful even if independent work succeeds. Cancellation stops dispatch regardless of this policy.
-
-terragraph does not roll back completed changes. A failed or timed-out apply may have changed resources before failing, or succeeded before an output read failed. Fix the cause and rerun against current state; refreshed plans decide whether changes are needed.
-
-### Recording and resuming
-
-Execution history is opt-in:
-
-```sh
-terragraph apply --auto-approve --keep-going --record-run
-terragraph apply --resume --preview --output json
-terragraph apply --resume --auto-approve --keep-going
-```
-
-`--record-run` checkpoints `.terragraph/runs/last-<command>.json` under the existing local run lock. The private directory reuses the saved-plan ownership, permission, and symlink/reparse checks. Files are replaced through a temporary file and rename. A receipt contains only schema version 1, operation, a digest of graph execution identity, and node names/statuses. It does not contain outputs, variables, environment values, error messages, plan files, or approval decisions. The digest is a comparison token, not authorization or a freshness proof.
-
-Each action is recorded as `running` before dispatch, then updated on completion. A crash can therefore leave `running` or `not run` entries that a subsequent resume will retry. There is one latest receipt per command, overwritten by the next recorded run; there is no automatic retention of older runs. Temporary `.run-*.json` files may remain after a crash. Keep `.terragraph/` gitignored; remove unwanted receipts or abandoned temporary files when no execution is active. Opting out leaves existing receipts in place. It does not make them current.
-
-`--resume` cannot be combined with explicit `--node` targets. It reads the latest receipt for the same command, rejects incompatible or corrupt receipts, and selects failed, interrupted, and unexecuted nodes. Plan/apply also include all current ancestors, even previously successful ones, so they are freshly checked before providing outputs. Unrelated successful nodes are not selected. Configuration identity changes require explicit selection instead of resume; module content or infrastructure may still change without changing that digest, and current validation and refreshed plans always remain authoritative. An entirely successful receipt has no unfinished work and cannot be resumed.
-
-Resume also records its own checkpoints. It does not reuse old outputs, Terraform plans, approvals, or resource-change verdicts. Snapshot fallback remains separately opt-in. There is no automatic rollback and no guarantee that a partially failed action changed nothing.
-
-Destroy resume still checks current scope. A consumer recorded as previously destroyed is not assumed to remain absent; excluded consumers require the same explicit `--allow-orphan-destroy` acknowledgment or scope expansion. Preview the selection and check current infrastructure before choosing either.
-
-### Time limits and read retries
-
-`--node-timeout 15m` limits each complete node action after it receives execution slots, including input resolution, initialization, plan, apply/destroy, and final output reads. Override an individual leaf with repeated `--timeout node=duration`; `0` disables a limit. Waiting for graph locks, initial graph validation/runtime compatibility preflight, and waiting in the scheduler are outside the action timeout.
-
-```sh
-terragraph apply --auto-approve --node-timeout 15m \
-  --timeout database=45m --output-retries 2
-```
-
-A deadline cancels that node and reports reason `timeout`; independent branches can continue under `--keep-going`. Slots and locks are not released until subprocess cleanup returns. Unix retains its interrupt and five-second kill grace, so wall time can exceed the configured deadline during cleanup. On Windows, timed actions start in a suspended state and are assigned to a non-breakaway [Job Object](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects) before running; a deadline terminates ordinary member processes and waits for the job to empty. Incompatible host job restrictions fail before the runtime executes. Processes created outside the ordinary child-process/job mechanism are outside this guarantee. Untimed Windows runs retain their prior console behavior.
-
-`--output-retries N` permits 0 through 10 additional attempts for a failing `output -json` subprocess, with cancellable waits of 100ms, 200ms, and so on. It applies to execution's live upstream reads and post-apply output reads. Nonzero subprocess exits are retried; startup failures, cancellation, invalid JSON, and missing individual outputs are not. Snapshots are consulted only after attempts are exhausted. Terraform init, plan, apply, and destroy are never automatically repeated. A retry cannot prove that a persistent credential or backend error is transient; use a small explicit budget and inspect the final error.
+terragraph does not roll back completed changes. A failed apply may also have changed some resources before failing, or may have succeeded before a subsequent output read failed. Inspect the reported error and current state, fix the cause, and rerun `terragraph apply`. It plans again against current state and skips unchanged nodes. Use `--node` alone to retry that leaf; add `--downstream` when its reachable consumers should also be selected.
 
 ## How values are passed
 
@@ -268,14 +238,14 @@ terragraph destroy --output json --auto-approve
 
 | Command | JSON result |
 | --- | --- |
-| `validate` | Object with `valid` and `problems`; each problem has `severity` and `message`. Warnings can coexist with `valid: true`. |
-| `graph` | Object with `levels`, an array of arrays of node names. Cannot combine JSON with `--format dot`. |
-| `vendor` | Array of results with `node`, `status` (`vendored`, `skipped`, or `error`), and an optional `error`. |
-| `plan`, `apply`, `destroy` | Object with `nodes`; each entry has `node`, `level`, `status`, and an optional `error`. |
+| `validate` | Object with `valid` and `problems`; each problem has `code`, `category`, `phase`, `subject`, `severity`, `message`, and an optional `remedy`. Warnings can coexist with `valid: true`. |
+| `graph` | Object with `schema_version: 1`, `diagnostics`, and `levels`, an array of arrays of node names. Cannot combine JSON with `--format dot`. |
+| `vendor` | Array of results with `node`, `status` (`vendored`, `skipped`, or `error`), node `diagnostics`, and an optional `error`. Global failures use the shapes in [agent usage](agent-usage.md). |
+| `plan`, `apply`, `destroy` | Object with `schema_version: 1`, `nodes`, `diagnostics`, and `execution_id` when an execution session was acquired; node entries retain `node`, `level`, `status`, and optional `error`, and add `diagnostics`. |
 
-Final run statuses are `planned`, `applied`, `unchanged`, `destroyed`, `failed`, or `not run`. Entries are ordered by static execution level, then node name; destroy numbers levels in reverse dependency order, which need not be actual start order. Additive node fields include `started_at` (UTC, only if dispatched), `duration_ms` (excluding queue time), `reason`, and `blocked_by`. Reasons distinguish `action_failed`, `dependency_failed`, `fail_fast`, `cancelled`, `timeout`, and pre-dispatch `history_failed`. Receipts may additionally contain intermediate status `running`. Unknown additive fields must be ignored.
+Run statuses are `planned`, `applied`, `unchanged`, `destroyed`, `failed`, or `not run`. Entries are ordered by execution level, then node name; destroy numbers levels in reverse dependency order.
 
-A run that fails after starting a node still emits its report and exits nonzero. A failure before execution, such as parsing, validation, or lock acquisition, may leave stdout empty. Check the exit status and allow for an absent JSON payload on failure. JSON `apply` and `destroy` require `--auto-approve` even when sequential; the `approve` policy still applies.
+Failures emit a single JSON result and exit nonzero when `--output json` can be identified and stdout is writable. Existing result shapes retain partial results; failures without a result use `{ "schema_version": 1, "diagnostics": [...] }`. Flag-parser failures use that error-only shape. Invalid or ambiguous output selection, help, native `run`, and output-write failures can still leave no JSON result. See [agent usage](agent-usage.md) for branching rules and compatibility details. JSON `apply` and `destroy` require `--auto-approve` even when sequential; the `approve` policy still applies.
 
 ## Output snapshots
 
@@ -291,7 +261,7 @@ Reads check the current module schema again. A now-sensitive output cannot come 
 
 Reapplying a producer rewrites its snapshot, removing values that became sensitive; if it has no consumed outputs, its old snapshot is removed. Opting out does not delete existing files, and old values remain on disk until rewritten or manually removed. Keep `.terragraph/` out of version control. Snapshot files use mode `0600` on Unix; Windows uses inherited filesystem permissions without an explicit owner-only ACL. Snapshots are local to each machine.
 
-New snapshots use schema version 2. Version 1 values did not verify runtime sensitivity and are treated as withheld. Restore live outputs or run `terragraph apply --node <producer>` to republish under the normal approval policy; a no-change apply also upgrades the snapshot. Reading an old file does not rewrite it. terragraph versions supporting only schema 1 cannot consume schema 2.
+New snapshots use schema version 3 and preserve runtime output types. Version 2 remains readable but cannot establish collection kind for explicit contracts. Version 1 values did not verify runtime sensitivity and are treated as withheld. Restore live outputs or run `terragraph apply --node <producer>` to republish under the normal approval policy; a no-change apply also upgrades the snapshot. Reading an old file does not rewrite it. Older terragraph versions cannot consume schema 3.
 
 Module inspection and compatibility checks follow the producer's [resolved runtime](blueprint.md#choosing-a-runtime-per-node-runtime), including upstream reads in a node-scoped run. Runtime-specific sensitivity declarations therefore apply to snapshot reads too; offline reads cannot refresh runtime output metadata.
 
@@ -356,14 +326,14 @@ There is no automatic output-snapshot fallback.
 
 The JSON observation contract has `schema_version: 1`, deterministic `nodes`,
 and `diagnostics`. Node status is `observed` or `failed`; diagnostics have
-`code`, `phase`, `subject`, `message`, and an optional `remedy`.
+`code`, `category`, `severity`, `phase`, `subject`, `message`, and an optional `remedy`.
 Unknown additive fields must be ignored; changing existing meanings requires
 a new schema version. Missing named outputs, unavailable state, credential,
 lockfile, preparation, and capability errors exit nonzero while retaining
 successful siblings. Successfully observed zero outputs is normal.
 Pre-execution load and selection failures produce the same envelope when JSON
-was selected and stdout is writable. Native flag-parser failures can occur
-before command dispatch and retain Cobra's ordinary stderr error contract.
+was selected and stdout is writable. Identifiable JSON flag-parser failures use
+the common error-only shape before command dispatch.
 
 
 ### Observing state status
@@ -392,7 +362,7 @@ derive their action summaries from the same normalized result. Existing
 a successful unchanged plan still has status `planned`. The additive JSON
 envelope now declares `schema_version: 1` and top-level `diagnostics`.
 Consumers must ignore unknown additive fields; incompatible meanings require
-a schema-version change. Apply/destroy retain their envelopes; all run nodes also carry the additive timing and scheduling fields described above.
+a schema-version change. Apply/destroy envelopes are unchanged.
 
 Each node's `review` contains:
 
@@ -411,7 +381,7 @@ Each node's `review` contains:
   opted-in `snapshot` provenance, without values. Unavailable bootstrap evidence
   can have source `unavailable`. `limitations` explain why existing upstream
   outputs cannot predict values after a later upstream apply.
-- Structured diagnostics with code, phase, subject, message, and remedy.
+- Structured diagnostics with code, category, severity, phase, subject, message, and remedy.
   Preparation failures also produce JSON before nodes start when possible.
   Source locations retained as HCL diagnostics appear in an optional `source` object
   (file, line, column); other existing parser context remains in messages.
@@ -427,9 +397,9 @@ failed selected node retain status `not run` with a dependency diagnostic;
 their counts and change verdict remain unknown. A missing output is distinct
 from credential, provider, and live-read failures. No placeholder values are
 injected. Snapshot fallback remains opt-in and is reported explicitly.
-Apply/destroy can use the same branch isolation with `--keep-going`; CLI plan
-review can opt into fail-fast with `--keep-going=false`. All operations use ready-node
-scheduling rather than waiting for complete levels.
+This independent-branch failure handling applies to CLI plan review only;
+ordinary plan/apply/destroy stop starting nodes beyond the earliest failed
+level once the failure is observed. Already-running nodes finish normally.
 
 Saved-plan inspection is unavailable for remote/cloud execution backends.
 JSON reports `inspection_unsupported` and exits nonzero; text keeps native plan
@@ -437,3 +407,19 @@ preview and clearly reports that structured evidence is unavailable. Runtime
 plan streams go to stderr in both formats; concise Terragraph summaries go to
 stdout. A policy block is a successful assessment and does not itself fail plan;
 preparation, input, provider, inspection, and cancellation errors exit nonzero.
+
+
+Execution attempts now have protected [execution records](executions.md), including unknown-outcome recovery. Ordinary apply does not retain a plan bundle unless `--retain-plan` is selected. `plan --save` and `apply --plan <run-id>` expose separate review of one ready graph frontier at a time; continuation plans downstream nodes only after real upstream outputs exist. See the execution record reference for compatibility checks, shared storage, expiry, and cleanup.
+
+### Runtime contracts and saved plans
+
+Explicit [contracts](contracts.md) check actual producer values and effective
+consumer inputs before downstream apply. Consumer checks use the selected
+variables in the exact saved plan, including external inputs and module default
+and conversion rules. Known output violations stop producer apply; computed
+outputs are checked afterward, before snapshot publication or success recording.
+A violation after mutation leaves the execution `applied` for output recovery,
+never automatic replay. Contract meaning and mode participate in retained-plan
+bindings. Review JSON exposes independent conditions through `review.contracts`.
+Known null is reconstructed only from the same successful plan, never from a
+missing live output. See the contracts reference for restart and recovery limits.

@@ -20,6 +20,7 @@ import (
 
 var topSchema = &hcl.BodySchema{
 	Blocks: []hcl.BlockHeaderSchema{
+		{Type: "plugin", LabelNames: []string{"name"}},
 		{Type: "node", LabelNames: []string{"name"}},
 		{Type: "edge"},
 		{Type: "group", LabelNames: []string{"name"}},
@@ -30,6 +31,7 @@ var topSchema = &hcl.BodySchema{
 		{Type: "runtime", LabelNames: []string{"name"}},
 		{Type: "contracts"},
 		{Type: "snapshots"},
+		{Type: "execution"},
 		{Type: "producer", LabelNames: []string{"source"}},
 		{Type: "consumer", LabelNames: []string{"source"}},
 	},
@@ -76,6 +78,7 @@ var nodeSchema = &hcl.BodySchema{
 	Attributes: []hcl.AttributeSchema{
 		{Name: "source", Required: true},
 		{Name: "backend_config", Required: false},
+		{Name: "backend_address", Required: false},
 		{Name: "vars", Required: false},
 		{Name: "runtime", Required: false},
 		{Name: "env", Required: false},
@@ -117,6 +120,7 @@ var useSchema = &hcl.BodySchema{
 		{Name: "vars", Required: false},
 		{Name: "approve", Required: false},
 		{Name: "backend_config", Required: false},
+		{Name: "backend_address", Required: false},
 	},
 }
 
@@ -136,8 +140,8 @@ var exportOutputSchema = &hcl.BodySchema{
 }
 
 // ParseFile reads and parses a blueprint HCL file at path into a Blueprint. It does not touch any Terraform module, it only extracts graph topology.
-func ParseFile(path string) (*Blueprint, error) {
-	bp := &Blueprint{}
+func ParseFile(path string, evaluation ...*hcl.EvalContext) (*Blueprint, error) {
+	bp := &Blueprint{Evaluation: evaluationContext(evaluation)}
 	seenNodes := map[string]bool{}
 	seenGroups := map[string]bool{}
 	seenUses := map[string]bool{}
@@ -153,52 +157,107 @@ func ParseFile(path string) (*Blueprint, error) {
 	if err := validateRuntimes(bp); err != nil {
 		return nil, err
 	}
+	if err := validateExecutionConfig(bp); err != nil {
+		return nil, err
+	}
 	return bp, nil
 }
 
-// ParseDir reads and parses every .hcl file directly inside dir (not recursively) and merges them into a single Blueprint, the same way loadGroupDef already treats a group source directory: node/group/use names, the vendor block, and each contract (role, source, port) must be unique across the whole directory, not just within one file, and an edge in one file may reference a node or use instance declared in another. There are no reserved filenames: every .hcl file merges, whatever it is called. Files are visited in the order os.ReadDir returns them (lexical by name), so a duplicate-name error always names the second file, deterministically.
-func ParseDir(dir string) (*Blueprint, error) {
+// IsBlueprintFilename keeps Terraform's provider lock file out of both executable configuration and editor context without excluding user-authored hidden HCL files.
+func IsBlueprintFilename(name string) bool {
+	return strings.HasSuffix(name, ".hcl") && name != ".terraform.lock.hcl"
+}
+
+// ParseDir merges eligible files directly inside dir in lexical order so cross-file references work and duplicate errors identify the same file deterministically; empty group source directories remain valid parse results.
+func ParseDir(dir string, evaluation ...*hcl.EvalContext) (*Blueprint, error) {
+	bp, _, err := parseDir(dir, evaluation...)
+	return bp, err
+}
+
+// parseDir reports the file count so command inputs can reject missing configuration without rejecting empty files or scanning a directory twice.
+func parseDir(dir string, evaluation ...*hcl.EvalContext) (*Blueprint, int, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, fmt.Errorf("reading blueprint directory: %w", err)
+		return nil, 0, fmt.Errorf("reading blueprint directory: %w", err)
 	}
 
-	bp := &Blueprint{}
+	bp := &Blueprint{Evaluation: evaluationContext(evaluation)}
 	seenNodes := map[string]bool{}
 	seenGroups := map[string]bool{}
 	seenUses := map[string]bool{}
 	seenRuntimes := map[string]bool{}
 	seenContractPorts := map[string]bool{}
+	fileCount := 0
 
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".hcl") {
+		if e.IsDir() || !IsBlueprintFilename(e.Name()) {
 			continue
 		}
 		if err := parseOneFile(filepath.Join(dir, e.Name()), bp, seenNodes, seenGroups, seenUses, seenRuntimes, seenContractPorts); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
+		fileCount++
 	}
 
 	if err := validateEdges(bp, seenNodes, seenUses); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if err := validateRuntimes(bp); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return bp, nil
+	if err := validateExecutionConfig(bp); err != nil {
+		return nil, 0, err
+	}
+	return bp, fileCount, nil
 }
 
-// LoadPath resolves path to a Blueprint and the base directory its node/group sources resolve against. If path names a directory, every .hcl file directly inside it is parsed and merged (see ParseDir) and baseDir is path itself. If path names a file, only that file is parsed (see ParseFile) and baseDir is its parent directory.
-func LoadPath(path string) (*Blueprint, string, error) {
+// BaseDirectory resolves the lock location without parsing configuration or executing plugin functions.
+func BaseDirectory(path string) (string, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", fmt.Errorf("resolving blueprint path: %w", err)
+	}
+	dir := path
+	if !info.IsDir() {
+		dir = filepath.Dir(path)
+	} else {
+		// An empty directory must fail before acquiring a lock creates managed files.
+		entries, err := os.ReadDir(path)
+		if err != nil {
+			return "", fmt.Errorf("reading blueprint directory: %w", err)
+		}
+		found := false
+		for _, entry := range entries {
+			if !entry.IsDir() && IsBlueprintFilename(entry.Name()) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return "", fmt.Errorf("blueprint directory %q: no configuration files; add a .hcl file or use --blueprint to select a file or directory", path)
+		}
+	}
+	dir, err = filepath.Abs(dir)
+	if err != nil {
+		return "", fmt.Errorf("resolving blueprint directory: %w", err)
+	}
+	return dir, nil
+}
+
+// LoadPath preserves the source base directory for either input form and rejects directories with no configuration so a command in the wrong directory cannot silently succeed.
+func LoadPath(path string, evaluation ...*hcl.EvalContext) (*Blueprint, string, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, "", fmt.Errorf("resolving blueprint path: %w", err)
 	}
 	if info.IsDir() {
-		bp, err := ParseDir(path)
+		bp, fileCount, err := parseDir(path, evaluation...)
+		if err == nil && fileCount == 0 {
+			err = fmt.Errorf("blueprint directory %q: no configuration files; add a .hcl file or use --blueprint to select a file or directory", path)
+		}
 		return bp, path, err
 	}
-	bp, err := ParseFile(path)
+	bp, err := ParseFile(path, evaluation...)
 	return bp, filepath.Dir(path), err
 }
 
@@ -227,8 +286,19 @@ func parseOneFile(path string, bp *Blueprint, seenNodes, seenGroups, seenUses, s
 
 	for _, block := range content.Blocks {
 		switch block.Type {
+		case "plugin":
+			config, err := parsePluginBlock(block)
+			if err != nil {
+				return err
+			}
+			for _, existing := range bp.Plugins {
+				if existing.Name == config.Name {
+					return fmt.Errorf("plugin.%s: duplicate declaration", config.Name)
+				}
+			}
+			bp.Plugins = append(bp.Plugins, config)
 		case "node":
-			node, err := parseNodeBlock(block)
+			node, err := parseNodeBlock(block, bp.Evaluation)
 			if err != nil {
 				return err
 			}
@@ -244,7 +314,7 @@ func parseOneFile(path string, bp *Blueprint, seenNodes, seenGroups, seenUses, s
 			}
 			bp.Edges = append(bp.Edges, edges...)
 		case "group":
-			group, err := parseGroupBlock(block, baseDir)
+			group, err := parseGroupBlock(block, baseDir, bp.Evaluation)
 			if err != nil {
 				return err
 			}
@@ -254,7 +324,7 @@ func parseOneFile(path string, bp *Blueprint, seenNodes, seenGroups, seenUses, s
 			seenGroups[group.Name] = true
 			bp.Groups = append(bp.Groups, group)
 		case "use":
-			use, err := parseUseBlock(block)
+			use, err := parseUseBlock(block, bp.Evaluation)
 			if err != nil {
 				return err
 			}
@@ -317,6 +387,15 @@ func parseOneFile(path string, bp *Blueprint, seenNodes, seenGroups, seenUses, s
 				return err
 			}
 			bp.ContractMode = mode
+		case "execution":
+			if bp.Execution != nil {
+				return fmt.Errorf("%s: duplicate execution block", block.DefRange)
+			}
+			cfg, err := parseExecutionBlock(block)
+			if err != nil {
+				return err
+			}
+			bp.Execution = cfg
 		case "snapshots":
 			// Opting in is one deliberate decision; two blocks would be the same decision made twice, and last-win could never change it anyway.
 			if bp.Snapshots != nil {
@@ -658,7 +737,7 @@ func validateName(kind, name string, rng hcl.Range) error {
 	return nil
 }
 
-func parseNodeBlock(block *hcl.Block) (Node, error) {
+func parseNodeBlock(block *hcl.Block, evaluation ...*hcl.EvalContext) (Node, error) {
 	content, diags := block.Body.Content(nodeSchema)
 	if diags.HasErrors() {
 		return Node{}, fmt.Errorf("%s: %s", block.DefRange, diags.Error())
@@ -688,7 +767,7 @@ func parseNodeBlock(block *hcl.Block) (Node, error) {
 	var vars map[string]any
 	if attr, ok := content.Attributes["vars"]; ok {
 		var err error
-		vars, err = parseVarsAttr(attr)
+		vars, err = parseVarsAttr(attr, evaluation...)
 		if err != nil {
 			return Node{}, err
 		}
@@ -713,14 +792,20 @@ func parseNodeBlock(block *hcl.Block) (Node, error) {
 		return Node{}, err
 	}
 
+	backendAddress, err := ParseBackendAddress(content.Attributes["backend_address"])
+	if err != nil {
+		return Node{}, fmt.Errorf("node.%s: %w", block.Labels[0], err)
+	}
+
 	return Node{
-		Name:          block.Labels[0],
-		Source:        val.AsString(),
-		BackendConfig: backendConfig,
-		Vars:          vars,
-		Runtime:       runtime,
-		Env:           env,
-		Approve:       approve,
+		Name:           block.Labels[0],
+		Source:         val.AsString(),
+		BackendConfig:  backendConfig,
+		BackendAddress: backendAddress,
+		Vars:           vars,
+		Runtime:        runtime,
+		Env:            env,
+		Approve:        approve,
 	}, nil
 }
 
@@ -743,12 +828,12 @@ func parseApproveAttr(attr *hcl.Attribute) (Approve, error) {
 	return a, nil
 }
 
-// parseVarsAttr evaluates the optional vars attribute: literal input values declared on a node or a use. On a node the keys are module variable names (see Node.Vars); on a use they are the group's export input names (see Use.Vars). The HCL shape is the same either way. The expression is evaluated with no variables or functions in scope, so a reference to another node's or use instance's output (e.g. node.vpc.output.vpc_id) fails to parse here exactly as intended: that kind of value must come from a real edge, not vars, since only an edge records the dependency the engine needs to sequence execution and wait for the value to actually exist.
-func parseVarsAttr(attr *hcl.Attribute) (map[string]any, error) {
-	val, diags := attr.Expr.Value(nil)
+// parseVarsAttr evaluates the optional vars attribute: literal input values declared on a node or a use. On a node the keys are module variable names (see Node.Vars); on a use they are the group's export input names (see Use.Vars). The HCL shape is the same either way. The expression is evaluated with only explicitly supplied plugin functions in scope, so a reference to another node's or use instance's output (e.g. node.vpc.output.vpc_id) fails to parse here exactly as intended: that kind of value must come from a real edge, not vars, since only an edge records the dependency the engine needs to sequence execution and wait for the value to actually exist.
+func parseVarsAttr(attr *hcl.Attribute, evaluation ...*hcl.EvalContext) (map[string]any, error) {
+	val, diags := attr.Expr.Value(evaluationContext(evaluation))
 	if diags.HasErrors() {
 		return nil, fmt.Errorf(
-			"%s: vars must be a literal object of variable name to value, with no references to node/use outputs (use an edge for those): %s",
+			"%s: vars must be an object of literal values or installed plugin function results, with no references to node/use outputs (use an edge for those): %s",
 			attr.Range, diags.Error(),
 		)
 	}
@@ -1027,7 +1112,7 @@ func traverseAttrName(step hcl.Traverser, rng hcl.Range) (string, error) {
 }
 
 // parseGroupBlock parses a group definition: its internal nodes, edges, nested use instantiations, its export interface, and its own contracts. Internal references are validated for existence here (does the referenced node/use instance exist in this group), but not against any real Terraform module schema. That happens later, once the group is actually instantiated, using the same module.Inspect + graph.Validate machinery a top-level blueprint uses. baseDir is the directory of the file declaring the group: the base the group's own contract scopes resolve against, the same base its internal node sources resolve against.
-func parseGroupBlock(block *hcl.Block, baseDir string) (Group, error) {
+func parseGroupBlock(block *hcl.Block, baseDir string, evaluation ...*hcl.EvalContext) (Group, error) {
 	content, diags := block.Body.Content(groupBodySchema)
 	if diags.HasErrors() {
 		return Group{}, fmt.Errorf("%s: %s", block.DefRange, diags.Error())
@@ -1046,7 +1131,7 @@ func parseGroupBlock(block *hcl.Block, baseDir string) (Group, error) {
 	for _, b := range content.Blocks {
 		switch b.Type {
 		case "node":
-			n, err := parseNodeBlock(b)
+			n, err := parseNodeBlock(b, evaluation...)
 			if err != nil {
 				return Group{}, err
 			}
@@ -1062,7 +1147,7 @@ func parseGroupBlock(block *hcl.Block, baseDir string) (Group, error) {
 			}
 			g.Edges = append(g.Edges, edges...)
 		case "use":
-			u, err := parseUseBlock(b)
+			u, err := parseUseBlock(b, evaluation...)
 			if err != nil {
 				return Group{}, err
 			}
@@ -1116,7 +1201,7 @@ func parseGroupBlock(block *hcl.Block, baseDir string) (Group, error) {
 }
 
 // parseUseBlock parses a group instantiation: `use "<group-name>" { as = "<instance>", source = "<dir>" }`.
-func parseUseBlock(block *hcl.Block) (Use, error) {
+func parseUseBlock(block *hcl.Block, evaluation ...*hcl.EvalContext) (Use, error) {
 	content, diags := block.Body.Content(useSchema)
 	if diags.HasErrors() {
 		return Use{}, fmt.Errorf("%s: %s", block.DefRange, diags.Error())
@@ -1154,7 +1239,7 @@ func parseUseBlock(block *hcl.Block) (Use, error) {
 	var vars map[string]any
 	if attr, ok := content.Attributes["vars"]; ok {
 		var err error
-		vars, err = parseVarsAttr(attr)
+		vars, err = parseVarsAttr(attr, evaluation...)
 		if err != nil {
 			return Use{}, err
 		}
@@ -1174,15 +1259,21 @@ func parseUseBlock(block *hcl.Block) (Use, error) {
 		}
 	}
 
+	backendAddress, err := ParseBackendAddress(content.Attributes["backend_address"])
+	if err != nil {
+		return Use{}, fmt.Errorf("use.%s: %w", asVal.AsString(), err)
+	}
+
 	return Use{
-		GroupName:     block.Labels[0],
-		As:            asVal.AsString(),
-		Source:        sourceVal.AsString(),
-		Runtime:       runtime,
-		Env:           env,
-		Vars:          vars,
-		Approve:       approve,
-		BackendConfig: backendConfig,
+		GroupName:      block.Labels[0],
+		As:             asVal.AsString(),
+		Source:         sourceVal.AsString(),
+		Runtime:        runtime,
+		Env:            env,
+		Vars:           vars,
+		Approve:        approve,
+		BackendConfig:  backendConfig,
+		BackendAddress: backendAddress,
 	}, nil
 }
 

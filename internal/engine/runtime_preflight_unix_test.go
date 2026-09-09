@@ -125,7 +125,7 @@ edge {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = e.Apply(Options{Node: "b", AutoApprove: true})
+	_, err = e.Apply(Options{Nodes: []string{"b"}, AutoApprove: true})
 	if err == nil || !strings.Contains(err.Error(), "node.a.runtime") || !strings.Contains(err.Error(), "OpenTofu 1.8.0") {
 		t.Fatalf("run error = %v, want upstream file compatibility refusal", err)
 	}
@@ -146,7 +146,7 @@ func TestApply_OldTofuTFOnlyDoesNotProbeVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.Apply(Options{Node: "a", AutoApprove: true}); err != nil {
+	if _, err := e.Apply(Options{Nodes: []string{"a"}, AutoApprove: true}); err != nil {
 		t.Fatal(err)
 	}
 	observed, err := os.ReadFile(calls)
@@ -174,7 +174,7 @@ node "b" { source = "./unselected" }`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.Apply(Options{Node: "a", AutoApprove: true}); err != nil {
+	if _, err := e.Apply(Options{Nodes: []string{"a"}, AutoApprove: true}); err != nil {
 		t.Fatal(err)
 	}
 	observed, err := os.ReadFile(calls)

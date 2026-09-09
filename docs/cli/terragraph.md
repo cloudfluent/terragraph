@@ -5,7 +5,7 @@ Graph-based orchestration for independent Terraform/OpenTofu root modules
 ### Options
 
 ```
-      --blueprint string   path to the blueprint file, or a directory whose .hcl files are merged into one blueprint (default "blueprint.hcl")
+      --blueprint string   path to a blueprint file or a directory whose .hcl files are merged, excluding .terraform.lock.hcl (default ".")
   -h, --help               help for terragraph
       --log-level string   log verbosity for internal diagnostics on stderr: debug, info, warn, or error (default "warn")
       --tofu               use the tofu binary instead of terraform
@@ -21,6 +21,8 @@ Graph-based orchestration for independent Terraform/OpenTofu root modules
 * [terragraph language-server](terragraph_language-server.md)	 - Run the Blueprint language server over standard input/output
 * [terragraph output](terragraph_output.md)	 - Observe current node output with isolated runtime context
 * [terragraph plan](terragraph_plan.md)	 - Review node plans, actions, approval policy, and evidence limitations
+* [terragraph plugin](terragraph_plugin.md)	 - Install and inspect version-locked executable plugins
+* [terragraph run](terragraph_run.md)	 - Run a supported native operation in one node's runtime and backend context
 * [terragraph status](terragraph_status.md)	 - Observe current node status with isolated runtime context
 * [terragraph validate](terragraph_validate.md)	 - Parse the blueprint and check it against the real module schemas
 * [terragraph vendor](terragraph_vendor.md)	 - Fetch remote node sources into a local, committable directory

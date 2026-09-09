@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -12,12 +13,18 @@ import (
 // runCmd executes the terragraph command tree with args and returns stdout, stderr, and any error. It targets examples/group/blueprint.hcl (relative local module sources, no terraform/tofu binary or network access required, since engine.Load only parses .tf files and never shells out).
 func runCmd(t *testing.T, args ...string) (stdout, stderr string, err error) {
 	t.Helper()
+	return runRootCmd(t, append([]string{"--blueprint", "../../examples/group/blueprint.hcl"}, args...)...)
+}
+
+// runRootCmd leaves blueprint selection to the caller so default-input tests cannot accidentally exercise an explicit file instead.
+func runRootCmd(t *testing.T, args ...string) (stdout, stderr string, err error) {
+	t.Helper()
 	root := NewRootCmd("test")
 	var outBuf, errBuf bytes.Buffer
 	root.SetOut(&outBuf)
 	root.SetErr(&errBuf)
-	root.SetArgs(append([]string{"--blueprint", "../../examples/group/blueprint.hcl"}, args...))
-	err = root.Execute()
+	root.SetArgs(args)
+	err = Execute(context.Background(), root, args)
 	return outBuf.String(), errBuf.String(), err
 }
 
@@ -32,7 +39,7 @@ func writeFixtureFile(t *testing.T, path, contents string) {
 	}
 }
 
-// TestGraph_BlueprintFlagAcceptsDirectory proves --blueprint may name a directory: every .hcl file directly inside it (nodes.hcl, edges.hcl below) is merged into one blueprint, the same way a group source directory already merges its own .hcl files.
+// TestGraph_BlueprintFlagAcceptsDirectory proves explicit directory selection merges eligible sibling files just like the default input and group sources.
 func TestGraph_BlueprintFlagAcceptsDirectory(t *testing.T) {
 	dir := t.TempDir()
 	writeFixtureFile(t, filepath.Join(dir, "nodes.hcl"), `

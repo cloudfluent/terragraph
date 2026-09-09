@@ -31,19 +31,27 @@ type inputBasisDTO struct {
 	Output string `json:"output"`
 	Source string `json:"source"`
 }
+type contractCheckDTO struct {
+	Port      string `json:"port"`
+	Condition string `json:"condition"`
+	Result    string `json:"result"`
+}
 type planReviewDTO struct {
-	Evidence    bool              `json:"evidence_available"`
-	HasChanges  *bool             `json:"has_changes"`
-	Resources   []planActionDTO   `json:"resource_changes"`
-	Counts      *planCountsDTO    `json:"counts"`
-	Outputs     []outputChangeDTO `json:"output_changes"`
-	Policy      string            `json:"approve"`
-	Decision    string            `json:"policy_decision"`
-	Inputs      []inputBasisDTO   `json:"input_basis"`
-	Limitations []string          `json:"limitations"`
-	Diagnostics []diagnosticDTO   `json:"diagnostics"`
+	Contracts   []contractCheckDTO `json:"contracts"`
+	Evidence    bool               `json:"evidence_available"`
+	HasChanges  *bool              `json:"has_changes"`
+	Resources   []planActionDTO    `json:"resource_changes"`
+	Counts      *planCountsDTO     `json:"counts"`
+	Outputs     []outputChangeDTO  `json:"output_changes"`
+	Policy      string             `json:"approve"`
+	Decision    string             `json:"policy_decision"`
+	Inputs      []inputBasisDTO    `json:"input_basis"`
+	Limitations []string           `json:"limitations"`
+	Diagnostics []diagnosticDTO    `json:"diagnostics"`
 }
 type planResultDTO struct {
+	ExecutionID   string          `json:"execution_id,omitempty"`
+	Selection     *selectionDTO   `json:"selection,omitempty"`
 	SchemaVersion int             `json:"schema_version"`
 	Nodes         []nodeRunDTO    `json:"nodes"`
 	Diagnostics   []diagnosticDTO `json:"diagnostics"`
@@ -53,7 +61,10 @@ func reviewToDTO(review *engine.PlanReview) *planReviewDTO {
 	if review == nil {
 		return nil
 	}
-	dto := &planReviewDTO{Evidence: review.Evidence, HasChanges: review.HasChanges, Resources: []planActionDTO{}, Outputs: []outputChangeDTO{}, Policy: string(review.Policy), Decision: review.PolicyDecision, Inputs: []inputBasisDTO{}, Limitations: review.Limitations, Diagnostics: []diagnosticDTO{}}
+	dto := &planReviewDTO{Contracts: []contractCheckDTO{}, Evidence: review.Evidence, HasChanges: review.HasChanges, Resources: []planActionDTO{}, Outputs: []outputChangeDTO{}, Policy: string(review.Policy), Decision: review.PolicyDecision, Inputs: []inputBasisDTO{}, Limitations: review.Limitations, Diagnostics: []diagnosticDTO{}}
+	for _, check := range review.Contracts {
+		dto.Contracts = append(dto.Contracts, contractCheckDTO{check.Port, check.Condition, string(check.Result)})
+	}
 	counts := &planCountsDTO{}
 	for _, resource := range review.Resources {
 		category := "other"
@@ -97,13 +108,17 @@ func reviewToDTO(review *engine.PlanReview) *planReviewDTO {
 }
 
 // finishPlan emits one additive, versioned result even when preparation fails before any node can start.
-func finishPlan(cmd *cobra.Command, format string, runs []engine.NodeRun, phase string, err error) error {
-	dto := planResultDTO{SchemaVersion: 1, Nodes: nodeRunsToDTO(runs), Diagnostics: []diagnosticDTO{}}
-	if err != nil && len(runs) == 0 {
-		dto.Diagnostics = append(dto.Diagnostics, diagnosticDTO{Source: errorLocation(err), Code: "plan_" + phase + "_failed", Phase: phase, Subject: "plan", Message: err.Error(), Remedy: "resolve the diagnostic and rerun plan"})
+func finishPlan(cmd *cobra.Command, format string, result engine.RunResult, phase string, err error, selection ...*selectionDTO) error {
+	dto := planResultDTO{SchemaVersion: 1, Nodes: nodeRunsToDTO(result.Nodes), ExecutionID: result.ExecutionID, Diagnostics: runDiagnostics(result, err)}
+	if len(selection) > 0 {
+		dto.Selection = selection[0]
 	}
+	if err != nil && len(result.Nodes) == 0 {
+		dto.Diagnostics = errorDiagnostics(err, engine.Diagnostic{Code: "plan_" + phase + "_failed", Category: categoryForPhase(phase), Phase: phase, Subject: "plan", Remedy: "resolve the diagnostic and rerun plan"})
+	}
+
 	if format == "json" {
-		if writeErr := writeJSON(cmd.OutOrStdout(), dto); writeErr != nil {
+		if writeErr := writeJSON(cmd, dto); writeErr != nil {
 			return writeErr
 		}
 	} else {

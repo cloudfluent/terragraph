@@ -17,7 +17,8 @@ import (
 
 // Diagnostic supplies stable branching fields without reflecting runtime output that may contain secrets.
 type Diagnostic struct {
-	Code, Phase, Subject, Message, Remedy string
+	Code, Phase, Subject, Message, Remedy  string
+	Category, Severity, RelatedExecutionID string
 }
 
 // ObservationSession owns the local source lock and private caches until all reads finish.
@@ -127,9 +128,9 @@ func (s *ObservationSession) Read(name string, status bool) Observation {
 	if env == nil {
 		env = map[string]string{}
 	}
-	workspace, ok := env["TF_WORKSPACE"]
-	if !ok {
-		workspace = os.Getenv("TF_WORKSPACE")
+	workspace, _, envErr := e.runner(name).EnvironmentValue("TF_WORKSPACE")
+	if envErr != nil {
+		return fail("invalid_environment", "prepare", "environment conflicts with the managed data directory", "remove TF_DATA_DIR from the node environment")
 	}
 	if workspace != "" && workspace != "default" {
 		return fail("unsupported_workspace", "prepare", "observation supports only the default workspace", "select an independently configured default-workspace node")

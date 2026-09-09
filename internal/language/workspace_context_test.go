@@ -100,7 +100,7 @@ func TestWorkspace_GroupAndSnapshotsCompletionContexts(t *testing.T) {
 		text string
 		want []string
 	}{
-		{"group \"g\" {\n __CURSOR__\n}", []string{"node", "edge", "use", "export"}},
+		{"group \"g\" {\n __CURSOR__\n}", []string{"node", "edge", "use", "export", "producer", "consumer"}},
 		{"group \"g\" {\n export {\n __CURSOR__\n }\n}", []string{"input", "output"}},
 		{"group \"g\" {\n export {\n input \"id\" {\n __CURSOR__\n }\n }\n}", []string{"to"}},
 		{"group \"g\" {\n export {\n output \"id\" {\n __CURSOR__\n }\n }\n}", []string{"from"}},

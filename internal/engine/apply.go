@@ -1,7 +1,7 @@
 package engine
 
 import (
-	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -14,43 +14,49 @@ import (
 // Whether a node needs applying is Terraform's decision, not terragraph's: every node is planned with -refresh=true and -detailed-exitcode, and a plan reporting no changes skips the apply. Nothing local is consulted first. An earlier version of this kept a content-addressed cache of source files, resolved inputs and execution identity as a prefilter, which was wrong in three separate ways (backend and inherited context missing from the key, drift never refreshed, files read through file()/templatefile() never invalidating) and, once every hit had to be confirmed by a plan anyway, only served to send *misses* straight to apply without one.
 //
 // When the plan does report changes, that plan is what gets applied (see Runner.PlanChanges/ApplyPlan), so a node refreshes once and the change made is the change that was planned.
-func (e *Engine) Apply(opts Options) ([]NodeRun, error) {
+func (e *Engine) Apply(opts Options) (result RunResult, resultErr error) {
+	opts, selectionErr := e.resolveSelection(opts)
+	if selectionErr != nil {
+		return result, selectionErr
+	}
+	opts.announceSelection(false)
+
 	// Concurrent nodes have their output buffered and flushed a node at a time (see runLevels), so a prompt written mid-level would be invisible until long after the answer was needed. Rather than deadlock on that, say so — before taking the run lock, so a combination that cannot run fails immediately instead of first waiting on whatever else holds it.
 	if !opts.AutoApprove && opts.parallelism() > 1 {
-		return nil, fmt.Errorf("--parallelism %d needs --auto-approve: output from concurrent nodes is buffered, so there is nowhere to ask for approval", opts.parallelism())
-	}
-
-	if err := checkTimedApproval(opts); err != nil {
-		return nil, err
+		return result, WithDiagnostic(fmt.Errorf("--parallelism %d needs --auto-approve: output from concurrent nodes is buffered, so there is nowhere to ask for approval", opts.parallelism()), Diagnostic{Code: "invalid_arguments", Category: "arguments", Phase: "arguments"})
 	}
 
 	unlock, err := e.lockRun()
 	if err != nil {
-		return nil, err
+		return result, err
 	}
 	defer unlock()
-	opts, err = e.prepareOptions(opts, "apply")
-	if err != nil {
-		return nil, err
-	}
 
 	if err := e.checkRuntimeFiles(opts); err != nil {
-		return nil, err
+		return result, err
 	}
 
 	unlockGraph, err := e.lockGraph()
 	if err != nil {
-		return nil, err
+		return result, err
 	}
 	defer unlockGraph()
 
-	if !opts.AutoApprove && e.Stdin != nil {
-		e.approvals()
+	session, err := e.startExecution("apply", opts, false)
+	if err != nil {
+		return result, err
 	}
-	e.logger().Info("apply starting", "node", opts.Node, "parallelism", opts.parallelism(), "autoApprove", opts.AutoApprove)
+	result.ExecutionID = session.record.ID
+	defer session.close()
+	defer func() {
+		if finishErr := session.finish(resultErr); finishErr != nil {
+			resultErr = errors.Join(resultErr, finishErr)
+		}
+	}()
 
-	return e.runLevels(opts, false, func(ctx context.Context, name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
-		e := e.nodeEngine(ctx, out, opts.OutputRetries)
+	e.logger().Info("apply starting", "nodes", opts.Nodes, "parallelism", opts.parallelism(), "autoApprove", opts.AutoApprove)
+
+	result.Nodes, resultErr = e.runLevels(opts, false, func(name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
 		vars, err := e.resolveInputs(name, applied)
 		if err != nil {
 			return nil, "", err
@@ -64,9 +70,16 @@ func (e *Engine) Apply(opts Options) ([]NodeRun, error) {
 		defer func() { _ = os.Remove(varsPath) }()
 		varFileArgs := exec.VarFileArgs(varsPath, vars)
 
-		r := &exec.Runner{Context: e.context(), Binary: e.runtimeFor(name), Dir: e.nodeDir(name), DataDir: e.dataDir(name), OutputRetries: opts.OutputRetries, Env: e.envFor(name), Stdout: out, Stderr: out}
-		if err := r.Init(e.Graph.Nodes[name].BackendConfig); err != nil {
-			return nil, "", fmt.Errorf("init: %w", err)
+		r := &exec.Runner{Context: e.context(), Binary: e.runtimeFor(name), Dir: e.nodeDir(name), DataDir: e.dataDir(name), Env: e.envFor(name), Stdout: out, Stderr: out}
+		if err := session.transition(name, "initializing", "", ""); err != nil {
+			return nil, "", err
+		}
+		if err := e.initNode(name, r); err != nil {
+			return nil, "", session.fail(name, "indeterminate", fmt.Errorf("init: %w", err))
+		}
+
+		if err := session.transition(name, "preparing", "", ""); err != nil {
+			return nil, "", err
 		}
 
 		// remote/cloud run the plan on HCP and cannot write a local plan file. Applying without one would skip the approve gate, so this path is refused until that backend can be inspected the same way. State-storage backends (s3, gcs, ...) are unaffected.
@@ -75,67 +88,28 @@ func (e *Engine) Apply(opts Options) ([]NodeRun, error) {
 			return nil, "", savedPlanUnsupportedError(name, r.BackendType())
 		}
 
-		savedPlan := e.planPath(name)
-		removePlan, err := prepareSavedPlan(savedPlan)
-		if err != nil {
-			return nil, "", err
-		}
-		defer removePlan()
-
-		changes, err := r.PlanChanges(savedPlan, varFileArgs...)
-		if err != nil {
-			return nil, "", fmt.Errorf("plan: %w", err)
-		}
-		if !changes {
-			e.logger().Debug("plan reports no changes, skipping apply", "node", name)
-			_, _ = fmt.Fprintf(out, "node %s: unchanged, skipping apply\n", name)
-			outputs, err := r.Outputs()
-			if err != nil {
-				return nil, "", fmt.Errorf("plan says unchanged but outputs are unreadable: %w", err)
-			}
-			if err := e.writeSnapshot(name, outputs); err != nil {
-				return nil, "", err
-			}
-			return outputs, StatusUnchanged, nil
-		}
-
-		// What the plan actually does, read back from the file before any of it happens. Local only: no state is refreshed and no provider is called.
-		changeSet, err := r.PlanChangeSet(savedPlan)
-		if err != nil {
-			return nil, "", fmt.Errorf("reading plan: %w", err)
-		}
-		_, _ = fmt.Fprintf(out, "node %s: %s\n", name, summarizeChanges(changeSet))
-
-		// A refused node never releases its selected consumers, so downstream execution cannot outrun the approval gate.
-		level := e.approveFor(name, opts.Approve)
-		if blocked := notPermitted(changeSet, level); len(blocked) > 0 {
-			return nil, "", e.gateError(name, level, blocked)
-		}
-
-		// The plan Terraform just printed is the plan about to be applied, so this asks about something the user has actually seen — which is the whole reason approval belongs here rather than inside a second `apply` that would plan again from scratch.
-		if !opts.AutoApprove {
-			approved, err := e.approve(name, out)
+		var binding string
+		if opts.RetainPlan {
+			binding, err = e.planBinding(name, r, vars)
 			if err != nil {
 				return nil, "", err
 			}
-			if !approved {
-				return nil, "", fmt.Errorf("apply cancelled: node %s was not approved", name)
-			}
 		}
-		if err := r.ApplyPlan(savedPlan); err != nil {
-			return nil, "", fmt.Errorf("apply: %w", err)
-		}
-
-		outputs, err := r.Outputs()
+		plan, err := e.prepareNodePlan(name, r, varFileArgs...)
 		if err != nil {
-			return nil, "", fmt.Errorf("reading outputs after apply: %w", err)
-		}
-		// Both exits that produce current reality publish the same snapshot (the unchanged branch does too), so nothing about the file reveals which path wrote it.
-		if err := e.writeSnapshot(name, outputs); err != nil {
 			return nil, "", err
 		}
-		return outputs, StatusApplied, nil
+		defer plan.cleanup()
+		plan.session = session
+		plan.binding = binding
+		if opts.RetainPlan {
+			if _, err := e.retainPlan(session, plan, vars); err != nil {
+				return nil, "", err
+			}
+		}
+		return e.applyPreparedPlan(plan, opts)
 	}, nil)
+	return result, resultErr
 }
 
 func savedPlanUnsupportedError(name, backend string) error {

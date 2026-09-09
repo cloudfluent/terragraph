@@ -80,8 +80,8 @@ func TestPlan_ManagedEnvErrorCannotFallBackToSnapshot(t *testing.T) {
 	e := loadFallbackEngine(t, true)
 	writeFallbackSnapshot(t, e, "a", "public-value")
 	e.Graph.Nodes["a"].Env = map[string]string{"TF_DATA_DIR": "shared"}
-	runs, err := e.Plan(Options{Node: "b"})
-	if err == nil || !strings.Contains(err.Error(), "node.a: env.TF_DATA_DIR") || len(runs) != 0 {
+	runs, err := e.Plan(Options{Nodes: []string{"b"}})
+	if err == nil || !strings.Contains(err.Error(), "node.a: env.TF_DATA_DIR") || len(runs.Nodes) != 0 {
 		t.Fatalf("runs = %v, error = %v, want managed upstream env conflict before fallback or execution", runs, err)
 	}
 }

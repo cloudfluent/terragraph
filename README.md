@@ -9,6 +9,8 @@ Split infrastructure into independent Terraform modules and you lose the one thi
 
 terragraph closes that gap without any of the three tradeoffs. Every root module stays completely standalone, with its own backend, providers, and resources, and no reference to any other module. A separate file declares the **wiring**: which output feeds which input. terragraph reads that file, works out the dependency order, and passes the real values through automatically as it applies each module, with no generated code and no shared state.
 
+That same clarity is central to terragraph's goal of making infrastructure easier and safer for AI agents to manage. Agent friendliness is part of the design from the start, as agents take on more infrastructure work.
+
 ## Install
 
 macOS via Homebrew:
@@ -31,7 +33,7 @@ Install **Terragraph Blueprint** from the VS Code Marketplace to get completion 
 
 ## Quick look
 
-A blueprint is a flat list of `node` and `edge` facts. Save this example as `blueprint.hcl`, the CLI's default path:
+A blueprint is a flat list of `node` and `edge` facts. Save this example as `blueprint.hcl` in your working directory:
 
 ```hcl
 node "vpc" { source = "./stacks/vpc" }
@@ -49,7 +51,7 @@ terragraph apply --parallelism 2 --auto-approve
 
 `terragraph` resolves the graph, runs `terraform`/`tofu` for each node in dependency order, and passes `vpc`'s real `vpc_id` output into `eks`'s input at runtime. See [`examples/basic`](examples/basic) for this exact setup running end to end.
 
-Filenames are flexible: `--blueprint topology.hcl` reads that file alone, while `--blueprint .` merges every `.hcl` file directly in the current directory. Without the flag, only `blueprint.hcl` is read. A group's `group.hcl` filename is also a convention; groups are selected by their block names. See [file loading and a split blueprint example](docs/blueprint.md#files-and-loading) and [group source directories](docs/groups.md#source-directories-and-filenames).
+By default, commands merge the `.hcl` files directly in the current directory, excluding `.terraform.lock.hcl`. Filenames are flexible: `--blueprint topology.hcl` reads that file alone, while `--blueprint path/to/config` selects another directory. To keep the previous single-file behavior, pass `--blueprint blueprint.hcl`; sibling `.hcl` files are now included unless a file is explicitly selected. A group's `group.hcl` filename is also a convention; groups are selected by their block names. See [file loading and a split blueprint example](docs/blueprint.md#files-and-loading) and [group source directories](docs/groups.md#source-directories-and-filenames).
 
 ## Documentation
 
@@ -57,13 +59,14 @@ See [docs/](docs/README.md) for the blueprint model, groups, vendoring, the exec
 
 ## Examples
 
-Self-contained and cloud-credential-free (`random`/`local` providers only). Clone and run directly, each with its own README:
+Self-contained and cloud-credential-free (built-in resources or `random`/`local` providers only). Clone and run directly, each with its own README:
 
 - [`examples/basic`](examples/basic): one node feeding two independent downstream nodes (wiring, parallel execution, skipping unchanged nodes).
 - [`examples/reuse`](examples/reuse): the same module instantiated twice, proving the local state default isolates each node.
 - [`examples/group`](examples/group): a group instantiated twice via `use`, proving expansion, export wiring, and per-instance state isolation.
 - [`examples/contracts`](examples/contracts): producer and consumer declarations checked against an edge and the modules' schemas.
 - [`examples/vendored`](examples/vendored): a node sourced from a remote git address, showing the vendor workflow.
+- [`examples/complete`](examples/complete): a 63-node AWS multi-account landscape with dev/stg/prd VPCs, EKS, data services, nested DRY groups, enforced contracts, and executable lifecycle labs; uses only built-in resources, with no provider downloads.
 
 ## Development
 

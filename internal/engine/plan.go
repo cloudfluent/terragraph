@@ -1,7 +1,7 @@
 package engine
 
 import (
-	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -11,43 +11,56 @@ import (
 )
 
 // Plan runs `terraform plan` over the selected nodes in topological order, returning each node's outcome (see NodeRun). A node downstream of one that has never been applied will fail to resolve its inputs. See the "known limitation" in the project plan: planning a value that doesn't exist yet is inherently impossible when every node is an independent root module.
-func (e *Engine) Plan(opts Options) ([]NodeRun, error) {
+func (e *Engine) Plan(opts Options) (RunResult, error) {
 	return e.plan(opts, false, false)
 }
 
 // ReviewPlan inspects ephemeral saved plans while preserving independent results after failed dependencies.
-func (e *Engine) ReviewPlan(opts Options, allowTextFallback bool) ([]NodeRun, error) {
+func (e *Engine) ReviewPlan(opts Options, allowTextFallback bool) (RunResult, error) {
 	return e.plan(opts, true, allowTextFallback)
 }
 
-func (e *Engine) plan(opts Options, inspect, allowTextFallback bool) ([]NodeRun, error) {
+func (e *Engine) plan(opts Options, inspect, allowTextFallback bool) (result RunResult, resultErr error) {
+	opts, selectionErr := e.resolveSelection(opts)
+	if selectionErr != nil {
+		return result, selectionErr
+	}
+	opts.announceSelection(false)
+
 	unlock, err := e.lockRun()
 	if err != nil {
-		return nil, err
+		return result, err
 	}
 	defer unlock()
-	opts, err = e.prepareOptions(opts, "plan")
-	if err != nil {
-		return nil, err
-	}
 
 	if !inspect {
 		if err := e.checkRuntimeFiles(opts); err != nil {
-			return nil, err
+			return result, err
 		}
 	}
 
 	unlockGraph, err := e.lockGraph()
 	if err != nil {
-		return nil, err
+		return result, err
 	}
 	defer unlockGraph()
 
-	e.logger().Info("plan starting", "node", opts.Node, "parallelism", opts.parallelism())
+	session, err := e.startExecution("plan", opts, false)
+	if err != nil {
+		return result, err
+	}
+	result.ExecutionID = session.record.ID
+	defer session.close()
+	defer func() {
+		if finishErr := session.finish(resultErr); finishErr != nil {
+			resultErr = errors.Join(resultErr, finishErr)
+		}
+	}()
+
+	e.logger().Info("plan starting", "nodes", opts.Nodes, "parallelism", opts.parallelism())
 	var reviewMu sync.Mutex
 	reviews := map[string]*PlanReview{}
-	runs, runErr := e.runLevels(opts, false, func(ctx context.Context, name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
-		e := e.nodeEngine(ctx, out, opts.OutputRetries)
+	runs, runErr := e.runLevels(opts, false, func(name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
 		review := newPlanReview(e.approveFor(name, opts.Approve))
 		if inspect {
 			reviewMu.Lock()
@@ -57,11 +70,12 @@ func (e *Engine) plan(opts Options, inspect, allowTextFallback bool) ([]NodeRun,
 		fail := func(code, phase string, err error) (exec.Outputs, string, error) {
 			if inspect {
 				review.failure(name, code, phase, err)
+				err = WithDiagnostic(err, *review.Diagnostic)
 			}
 			return nil, "", err
 		}
 		if inspect {
-			if err := e.checkRuntimeFiles(Options{Node: name}); err != nil {
+			if err := e.checkRuntimeFiles(Options{Nodes: []string{name}}); err != nil {
 				return fail("runtime_incompatible", "prepare", err)
 			}
 		}
@@ -81,17 +95,24 @@ func (e *Engine) plan(opts Options, inspect, allowTextFallback bool) ([]NodeRun,
 		// Removed however this node exits: the file holds resolved input values in cleartext, and the next run rewrites it from scratch anyway.
 		defer func() { _ = os.Remove(varsPath) }()
 
-		r := &exec.Runner{Context: e.context(), Binary: e.runtimeFor(name), Dir: nodeDir, DataDir: e.dataDir(name), OutputRetries: opts.OutputRetries, Env: e.envFor(name), Stdout: out, Stderr: out}
-		if err := r.Init(e.Graph.Nodes[name].BackendConfig); err != nil {
-			return fail("initialization_failed", "init", fmt.Errorf("init: %w", err))
+		r := &exec.Runner{Context: e.context(), Binary: e.runtimeFor(name), Dir: nodeDir, DataDir: e.dataDir(name), Env: e.envFor(name), Stdout: out, Stderr: out}
+		if err := session.transition(name, "initializing", "", ""); err != nil {
+			return fail("journal_failed", "init", err)
+		}
+		if err := e.initNode(name, r); err != nil {
+			return fail("initialization_failed", "init", session.fail(name, "indeterminate", fmt.Errorf("init: %w", err)))
 		}
 
-		if inspect {
+		if err := session.transition(name, "preparing", "", ""); err != nil {
+			return fail("journal_failed", "init", err)
+		}
+
+		if inspect || e.hasContracts(name) {
 			backend := e.Graph.Nodes[name].Schema.Backend
 			if backend == "remote" || backend == "cloud" || !r.SupportsSavedPlan() {
 				capability := fmt.Errorf("backend does not support saved-plan inspection; use text plan for native preview")
 				review.failure(name, "inspection_unsupported", "capability", capability)
-				if !allowTextFallback {
+				if inspect && !allowTextFallback {
 					return nil, "", capability
 				}
 			} else {
@@ -109,15 +130,28 @@ func (e *Engine) plan(opts Options, inspect, allowTextFallback bool) ([]NodeRun,
 				if err != nil {
 					return fail("inspection_failed", "inspect", err)
 				}
+				_, review.Contracts, err = e.inspectContractPlan(name, r, planPath, false)
+				if err != nil {
+					return fail("contract_failed", "contracts", err)
+				}
 				review.normalize(changed)
+				if err := session.transition(name, "completed", "", ""); err != nil {
+					return fail("journal_failed", "plan", err)
+				}
 				return nil, StatusPlanned, nil
 			}
+		}
+		if e.hasContracts(name) {
+			e.logger().Warn("contract.[C011] plan contracts deferred: backend cannot provide saved-plan evidence", "node", name)
 		}
 		if err := r.Plan(exec.VarFileArgs(varsPath, vars)...); err != nil {
 			return fail("plan_failed", "plan", fmt.Errorf("plan: %w", err))
 		}
+		if err := session.transition(name, "completed", "", ""); err != nil {
+			return fail("journal_failed", "plan", err)
+		}
 		return nil, StatusPlanned, nil
-	}, nil, inspect && !opts.FailFast)
+	}, nil, inspect)
 	if inspect {
 		for i := range runs {
 			review := reviews[runs[i].Node]
@@ -130,7 +164,14 @@ func (e *Engine) plan(opts Options, inspect, allowTextFallback bool) ([]NodeRun,
 				review.failure(runs[i].Node, "not_reached", "schedule", reason)
 			}
 			runs[i].Review = review
+			if review.Diagnostic != nil {
+				runs[i].Diagnostics = Diagnostics(runs[i].Err, *review.Diagnostic)
+				if len(runs[i].Diagnostics) == 0 {
+					runs[i].Diagnostics = []Diagnostic{*review.Diagnostic}
+				}
+			}
 		}
 	}
-	return runs, runErr
+	result.Nodes = runs
+	return result, runErr
 }

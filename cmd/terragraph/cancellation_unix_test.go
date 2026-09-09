@@ -311,7 +311,7 @@ func TestMain_CancellationInterruptsApprovalInput(t *testing.T) {
 
 func TestMain_CancellationInterruptsDestroyInput(t *testing.T) {
 	f := newCancellationFixture(t, "destroy")
-	cmd, done := startCancellationCLI(t, f, "destroy", "--node", "a", "--allow-orphan-destroy")
+	cmd, done := startCancellationCLI(t, f, "destroy", "--node", "a")
 	waitCancellationFile(t, filepath.Join(f.dir, "destroy-waiting"), "ready")
 	_ = cmd.Process.Signal(syscall.SIGTERM)
 	waitCancellationExit(t, done, true)
@@ -336,7 +336,7 @@ func TestMain_CancellationStopsLockWaiter(t *testing.T) {
 
 func TestMain_NormalDestroyDoesNotWaitForUnreadPipe(t *testing.T) {
 	f := newCancellationFixture(t, "destroy-no-read")
-	_, done := startCancellationCLI(t, f, "destroy", "--node", "a", "--allow-orphan-destroy")
+	_, done := startCancellationCLI(t, f, "destroy", "--node", "a")
 	waitCancellationExit(t, done, false)
 }
 
@@ -372,12 +372,7 @@ func TestMain_ApprovalInputFileAndPipe(t *testing.T) {
 						}
 					}
 					t.Cleanup(func() { _ = in.Close() })
-					args := []string{command, "--node", "a"}
-					// The test targets one node's input handling, deliberately leaving its consumer outside the destroy scope.
-					if command == "destroy" {
-						args = append(args, "--allow-orphan-destroy")
-					}
-					_, done := startCancellationCLIWithInput(t, f, in, args...)
+					_, done := startCancellationCLIWithInput(t, f, in, command, "--node", "a")
 					waitCancellationExit(t, done, answer != "yes\n")
 				})
 			}

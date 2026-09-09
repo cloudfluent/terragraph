@@ -268,11 +268,11 @@ func TestReviewPlan_RealOutputOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runs, err := e.ReviewPlan(Options{Node: "first"}, false)
+	runs, err := e.ReviewPlan(Options{Nodes: []string{"first"}}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	review := runs[0].Review
+	review := runs.Nodes[0].Review
 	if !review.Evidence || !*review.HasChanges || len(review.Resources) != 0 || len(review.Outputs) != 2 || review.PolicyDecision != "pass" {
 		t.Fatalf("got = %+v", review)
 	}

@@ -17,6 +17,7 @@ import (
 	"github.com/cloudfluent/terragraph/internal/exec"
 	"github.com/cloudfluent/terragraph/internal/graph"
 	"github.com/cloudfluent/terragraph/internal/graphlock"
+	"github.com/cloudfluent/terragraph/internal/plugins"
 	"github.com/cloudfluent/terragraph/internal/runlock"
 )
 
@@ -35,8 +36,7 @@ type Engine struct {
 	// Logger receives internal-machinery diagnostics (node dispatch, plan verdicts, load steps); it never carries a command's actual result, which always goes through Stdout/Stderr directly. Nil is valid and discards everything, so callers that don't care about logging (including every existing test that builds an Engine by hand) need no changes.
 	Logger *slog.Logger
 
-	stdin         *bufio.Reader
-	outputRetries int
+	stdin *bufio.Reader
 	// runLock is the lock LoadLocked already holds. lockRun must not Close it; the LoadLocked caller owns the lifetime.
 	runLock *runlock.Lock
 }
@@ -141,9 +141,15 @@ func (e *Engine) lockGraph() (func(), error) {
 	}, nil
 }
 
-// Load parses the blueprint at blueprintPath and builds its graph. blueprintPath may name a single file or a directory (every .hcl file directly inside it is merged, see blueprint.LoadPath); node sources are resolved relative to the resulting base directory. It does not take the process lock; use LoadLocked for plan/apply/destroy so graph.Build cannot inspect module files while vendor rewrites them.
+// Load parses the blueprint at blueprintPath and builds its graph. blueprintPath may name a single file or a directory (eligible .hcl files directly inside it are merged, see blueprint.LoadPath); node sources are resolved relative to the resulting base directory. It does not take the process lock; use LoadLocked for plan/apply/destroy so graph.Build cannot inspect module files while vendor rewrites them.
 func Load(blueprintPath string, binary exec.Binary, stdout, stderr io.Writer) (*Engine, error) {
 	e, _, err := load(context.Background(), blueprintPath, binary, stdout, stderr, false)
+	return e, err
+}
+
+// LoadContext carries cancellation and plugin diagnostics into static evaluation before an Engine exists.
+func LoadContext(ctx context.Context, blueprintPath string, binary exec.Binary, stdout, stderr io.Writer) (*Engine, error) {
+	e, _, err := load(ctx, blueprintPath, binary, stdout, stderr, false)
 	return e, err
 }
 
@@ -164,24 +170,34 @@ func LoadLockedContext(ctx context.Context, blueprintPath string, binary exec.Bi
 	}, nil
 }
 
-func load(ctx context.Context, blueprintPath string, binary exec.Binary, stdout, stderr io.Writer, takeLock bool, observation ...bool) (*Engine, *runlock.Lock, error) {
-	bp, dir, err := blueprint.LoadPath(blueprintPath)
+func load(ctx context.Context, blueprintPath string, binary exec.Binary, stdout, stderr io.Writer, takeLock bool, observation ...bool) (result *Engine, held *runlock.Lock, resultErr error) {
+	baseDir, err := blueprint.BaseDirectory(blueprintPath)
 	if err != nil {
 		return nil, nil, err
 	}
-
-	// Absolute, so paths derived from it (DataDir in particular) are unambiguous no matter what working directory a terraform/tofu subprocess runs with. A relative TF_DATA_DIR would otherwise be resolved relative to the subprocess's own cwd (the node's source dir), not this process's, producing a nested, wrong path.
-	baseDir, err := filepath.Abs(dir)
-	if err != nil {
-		return nil, nil, fmt.Errorf("resolving blueprint directory: %w", err)
-	}
-
 	var lock *runlock.Lock
 	if takeLock {
 		lock, err = runlock.AcquireContext(ctx, baseDir, stderr)
 		if err != nil {
 			return nil, nil, fmt.Errorf("locking blueprint: %w", err)
 		}
+	}
+	// Release failed loads only after plugin cleanup, which still belongs to the protected session.
+	defer func() {
+		if resultErr != nil {
+			_ = lock.Close()
+			result = nil
+			held = nil
+		}
+	}()
+	evaluation, err := plugins.Evaluate(ctx, blueprintPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, evaluation.Close()) }()
+	bp, _, err := blueprint.LoadPath(blueprintPath, evaluation.Context)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	build := graph.Build
@@ -190,9 +206,6 @@ func load(ctx context.Context, blueprintPath string, binary exec.Binary, stdout,
 	}
 	g, err := build(bp, baseDir, string(binary))
 	if err != nil {
-		if lock != nil {
-			_ = lock.Close()
-		}
 		return nil, nil, err
 	}
 
@@ -249,7 +262,7 @@ func (e *Engine) dataDir(name string) string {
 
 // runner builds a Runner for internal, non-buffered use (reading an upstream node's already-applied outputs). The per-node runners used for the actual plan/apply/destroy commands (see plan.go/apply.go/destroy.go) are built separately, against that node's own buffered output writer.
 func (e *Engine) runner(name string) *exec.Runner {
-	return &exec.Runner{Context: e.context(), Binary: e.runtimeFor(name), Dir: e.nodeDir(name), DataDir: e.dataDir(name), OutputRetries: e.outputRetries, Env: e.envFor(name), Stdout: e.Stdout, Stderr: e.Stderr}
+	return &exec.Runner{Context: e.context(), Binary: e.runtimeFor(name), Dir: e.nodeDir(name), DataDir: e.dataDir(name), Env: e.envFor(name), Stdout: e.Stdout, Stderr: e.Stderr}
 }
 
 // envFor returns name's fully resolved extra environment variables (see graph.Node.Env): whatever an enclosing Use.Env cascade contributed, already merged with the node's own Env. Unlike runtimeFor, there is no further CLI-level fallback layer to apply on top: env has no CLI equivalent, so whatever the graph already resolved is final.
@@ -428,12 +441,4 @@ func (e *Engine) stateOrphans() []graph.Problem {
 		})
 	}
 	return problems
-}
-
-// nodeEngine shares immutable graph data and the sequential approval reader while isolating a node's context and buffered diagnostics.
-func (e *Engine) nodeEngine(ctx context.Context, out io.Writer, outputRetries int) *Engine {
-	node := *e
-	node.Context, node.Stdout, node.Stderr = ctx, out, out
-	node.outputRetries = outputRetries
-	return &node
 }

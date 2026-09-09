@@ -4,257 +4,202 @@ import (
 	"context"
 	"errors"
 	"io"
-	"os"
 	"path/filepath"
-	"reflect"
-	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/cloudfluent/terragraph/internal/blueprint"
 	"github.com/cloudfluent/terragraph/internal/exec"
 )
 
-// selectionFixture uses real modules and a diamond so both dependency expansion and external readers are observable without a runtime.
-func selectionFixture(t *testing.T) *Engine {
+// dagFixture loads two independent branches so dispatch can be proved without timing assumptions about subprocesses.
+func dagFixture(t *testing.T) *Engine {
 	t.Helper()
 	dir := t.TempDir()
 	if err := osWriteFile(filepath.Join(dir, "module", "main.tf"), []byte("terraform {\n backend \"local\" {}\n}\nvariable \"value\" { default = \"\" }\noutput \"value\" { value = \"\" }")); err != nil {
 		t.Fatal(err)
 	}
 	path := writeBlueprint(t, dir, `
-node "root" { source = "./module" }
-node "left" { source = "./module" }
-node "right" { source = "./module" }
-node "leaf" { source = "./module" }
-node "other" { source = "./module" }
+node "a" { source = "./module" }
+node "b" { source = "./module" }
+node "child" { source = "./module" }
+node "slow" { source = "./module" }
 edge {
- from = node.root.output.value
- to = node.left.input.value
+ from = node.a.output.value
+ to = node.child.input.value
 }
 edge {
- from = node.root
- to = node.right
-}
-edge {
- from = node.left
- to = node.leaf
-}
-edge {
- from = node.right
- to = node.leaf
+ from = node.b
+ to = node.slow
 }
 `)
 	e, err := Load(path, exec.Binary(filepath.Join(dir, "must-not-start")), io.Discard, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	t.Cleanup(cancel)
+	e.Context = ctx
 	return e
 }
 
-func TestPreview_ExpandsOnlyExplicitRoots(t *testing.T) {
-	e := selectionFixture(t)
-	p, err := e.Preview(Options{Nodes: []string{"left", "left"}, IncludeDependencies: true, IncludeDependents: true}, "apply")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var names []string
-	for _, node := range p.Nodes {
-		names = append(names, node.Node)
-	}
-	if !reflect.DeepEqual(names, []string{"root", "left", "leaf"}) {
-		t.Fatalf("nodes = %v, want only ancestors and descendants of left", names)
-	}
-	if p.Nodes[0].Reason != "dependency" || p.Nodes[1].Reason != "explicit" || p.Nodes[2].Reason != "dependent" {
-		t.Fatalf("reasons = %+v", p.Nodes)
-	}
-	if !reflect.DeepEqual(p.Nodes[2].ExternalPrerequisites, []string{"right"}) {
-		t.Fatalf("external prerequisites = %v, want right", p.Nodes[2].ExternalPrerequisites)
-	}
-	if _, err := os.Stat(filepath.Join(e.BaseDir, ".terragraph")); !os.IsNotExist(err) {
-		t.Fatalf("preview created execution state: %v", err)
-	}
-}
-
-func TestPreview_ReportsExternalInputAndDestroyImpact(t *testing.T) {
-	e := selectionFixture(t)
-	p, err := e.Preview(Options{Node: "left"}, "destroy")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if p.DestroyScopeComplete || !reflect.DeepEqual(p.OutsideDependents, []string{"leaf"}) {
-		t.Fatalf("impact = %+v", p)
-	}
-	if len(p.Nodes[0].ExternalInputs) != 1 || p.Nodes[0].ExternalInputs[0].Node != "root" {
-		t.Fatalf("external inputs = %+v", p.Nodes[0])
-	}
-	if err := e.checkDestroyScope(Options{Node: "left"}); err == nil || !strings.Contains(err.Error(), "--include-dependents") {
-		t.Fatalf("scope error = %v", err)
-	}
-	if err := e.checkDestroyScope(Options{Node: "left", IncludeDependents: true}); err != nil {
-		t.Fatal(err)
-	}
-	if err := e.checkDestroyScope(Options{Node: "left", AllowOrphanDestroy: true}); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestPreview_MultipleTargetsAndReverseOrder(t *testing.T) {
-	e := selectionFixture(t)
-	p, err := e.Preview(Options{Nodes: []string{"root", "other"}, IncludeDependents: true}, "destroy")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(p.Nodes) != 5 || !p.DestroyScopeComplete || p.Nodes[len(p.Nodes)-1].Node != "root" {
-		t.Fatalf("preview = %+v", p)
-	}
-}
-
 func TestRunLevels_ReadyChildDoesNotWaitForUnrelatedRoot(t *testing.T) {
-	e := newTestEngine([]string{"a", "b", "child"}, []blueprint.Edge{orderEdge("a", "child")})
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	e.Context = ctx
+	e := dagFixture(t)
 	childRan := make(chan struct{})
-	action := func(ctx context.Context, name string, _ map[string]exec.Outputs, _ io.Writer) (exec.Outputs, string, error) {
-		if name == "b" {
+	runs, err := e.runLevels(Options{Parallelism: 2}, false, func(name string, applied map[string]exec.Outputs, _ io.Writer) (exec.Outputs, string, error) {
+		switch name {
+		case "a":
+			return exec.Outputs{"value": {Value: "fresh"}}, StatusApplied, nil
+		case "b":
 			select {
 			case <-childRan:
-			case <-ctx.Done():
-				return nil, "", ctx.Err()
+			case <-e.context().Done():
+				return nil, "", e.context().Err()
 			}
-		}
-		if name == "child" {
+		case "child":
+			if applied["a"]["value"].Value != "fresh" {
+				t.Errorf("outputs = %v, want fresh upstream value", applied)
+			}
 			close(childRan)
 		}
 		return nil, StatusApplied, nil
-	}
-	runs, err := e.runLevels(Options{Parallelism: 2}, false, action, nil)
+	}, nil)
 	if err != nil {
 		t.Fatalf("runs = %+v, error = %v, want child to unblock b", runs, err)
 	}
+	if len(runs) != 4 || runs[0].Node != "a" || runs[2].Node != "child" || runs[2].Level != 2 {
+		t.Fatalf("runs = %+v, want stable level/name order", runs)
+	}
 }
 
-func TestRunLevels_KeepGoingBlocksOnlyFailedDescendants(t *testing.T) {
-	e := newTestEngine([]string{"a", "b", "c", "d", "e"}, []blueprint.Edge{orderEdge("a", "c"), orderEdge("c", "e"), orderEdge("b", "d")})
+func TestRunLevels_ReadyDestroyDoesNotWaitForUnrelatedConsumer(t *testing.T) {
+	e := dagFixture(t)
+	parentRan := make(chan struct{})
+	runs, err := e.runLevels(Options{Parallelism: 2}, true, func(name string, _ map[string]exec.Outputs, _ io.Writer) (exec.Outputs, string, error) {
+		if name == "slow" {
+			select {
+			case <-parentRan:
+			case <-e.context().Done():
+				return nil, "", e.context().Err()
+			}
+		}
+		if name == "a" {
+			close(parentRan)
+		}
+		return nil, StatusDestroyed, nil
+	}, nil)
+	if err != nil {
+		t.Fatalf("runs = %+v, error = %v, want a to unblock slow", runs, err)
+	}
+	if runs[0].Node != "child" || runs[0].Level != 1 || runs[2].Node != "a" || runs[2].Level != 2 {
+		t.Fatalf("runs = %+v, want reverse level labels", runs)
+	}
+}
+
+func TestRunLevels_ExactSelectionDoesNotWaitForExternalParent(t *testing.T) {
+	e := dagFixture(t)
+	runs, err := e.runLevels(Options{Nodes: []string{"child"}, Parallelism: 2}, false, func(name string, _ map[string]exec.Outputs, _ io.Writer) (exec.Outputs, string, error) {
+		if name != "child" {
+			t.Errorf("node = %q, want child", name)
+		}
+		return nil, StatusPlanned, nil
+	}, nil)
+	if err != nil || len(runs) != 1 || runs[0].Status != StatusPlanned {
+		t.Fatalf("runs = %+v, error = %v, want only child planned", runs, err)
+	}
+}
+
+func TestRunLevels_ReviewPreservesDependencyDiagnostics(t *testing.T) {
+	e := dagFixture(t)
 	failure := errors.New("fixture failure")
-	action := func(_ context.Context, name string, _ map[string]exec.Outputs, _ io.Writer) (exec.Outputs, string, error) {
+	runs, err := e.runLevels(Options{Parallelism: 2}, false, func(name string, _ map[string]exec.Outputs, _ io.Writer) (exec.Outputs, string, error) {
 		if name == "a" {
 			return nil, "", failure
 		}
-		if name == "c" || name == "e" {
-			t.Errorf("blocked descendant %s started", name)
+		if name == "child" {
+			t.Error("failed dependency's child started")
 		}
-		return nil, StatusApplied, nil
-	}
-	runs, err := e.runLevels(Options{Parallelism: 2, KeepGoing: true}, false, action, nil)
+		return nil, StatusPlanned, nil
+	}, nil, true)
 	if !errors.Is(err, failure) {
-		t.Fatalf("error = %v, want original failure", err)
+		t.Fatalf("error = %v, want %v", err, failure)
 	}
-	for _, run := range runs {
-		if run.Node == "c" || run.Node == "e" {
-			if run.Reason != "dependency_failed" || !reflect.DeepEqual(run.BlockedBy, []string{"a"}) || run.Status != StatusNotRun {
-				t.Fatalf("blocked report = %+v", run)
-			}
-		}
-		if run.Node == "d" && run.Status != StatusApplied {
-			t.Fatalf("independent descendant = %+v", run)
-		}
+	if runs[2].Status != StatusNotRun || !errors.Is(runs[2].Err, errPlanBlocked) || len(runs[2].Diagnostics) != 1 || runs[3].Status != StatusPlanned {
+		t.Fatalf("runs = %+v, want blocked diagnostic and successful independent branch", runs)
 	}
 }
 
-func TestRunLevels_FailFastStopsQueuedNodes(t *testing.T) {
-	e := newTestEngine([]string{"a", "b", "c"}, nil)
-	action := func(_ context.Context, name string, _ map[string]exec.Outputs, _ io.Writer) (exec.Outputs, string, error) {
-		if name != "a" {
-			t.Errorf("queued node %s started", name)
-		}
-		return nil, "", errors.New("stop")
-	}
-	runs, err := e.runLevels(Options{}, false, action, nil)
-	if err == nil || runs[1].Reason != "fail_fast" || runs[2].Status != StatusNotRun {
-		t.Fatalf("runs = %+v, err = %v", runs, err)
-	}
-}
-
-func TestRunLevels_ReverseFailureProtectsAncestors(t *testing.T) {
-	e := newTestEngine([]string{"a", "b", "other"}, []blueprint.Edge{orderEdge("a", "b")})
-	action := func(_ context.Context, name string, _ map[string]exec.Outputs, _ io.Writer) (exec.Outputs, string, error) {
+func TestRunLevels_FailureLetsQueuedSiblingsFinish(t *testing.T) {
+	e := dagFixture(t)
+	failure := errors.New("fixture failure")
+	runs, err := e.runLevels(Options{}, false, func(name string, _ map[string]exec.Outputs, _ io.Writer) (exec.Outputs, string, error) {
 		if name == "a" {
-			t.Error("destroyed parent after consumer failure")
+			return nil, "", failure
 		}
-		if name == "b" {
-			return nil, "", errors.New("delete failed")
-		}
-		return nil, StatusDestroyed, nil
-	}
-	runs, err := e.runLevels(Options{KeepGoing: true}, true, action, nil)
-	if err == nil || runs[1].Reason != "dependency_failed" {
-		t.Fatalf("runs = %+v, err = %v", runs, err)
-	}
-}
-
-func TestRunLevels_NodeTimeoutKeepsIndependentBranch(t *testing.T) {
-	e := newTestEngine([]string{"a", "b", "child"}, []blueprint.Edge{orderEdge("a", "child")})
-	action := func(ctx context.Context, name string, _ map[string]exec.Outputs, _ io.Writer) (exec.Outputs, string, error) {
-		if name == "a" {
-			<-ctx.Done()
-			return nil, "", ctx.Err()
+		if name != "b" {
+			t.Errorf("node = %q, want queued sibling b only", name)
 		}
 		return nil, StatusApplied, nil
-	}
-	runs, err := e.runLevels(Options{Parallelism: 2, KeepGoing: true, Timeouts: map[string]time.Duration{"a": 20 * time.Millisecond}}, false, action, nil)
-	if !errors.Is(err, context.DeadlineExceeded) || runs[0].Reason != "timeout" || runs[0].Duration <= 0 || runs[1].Status != StatusApplied || runs[2].Reason != "dependency_failed" {
-		t.Fatalf("runs = %+v, err = %v", runs, err)
+	}, nil)
+	if !errors.Is(err, failure) || runs[1].Status != StatusApplied || runs[2].Status != StatusNotRun || runs[3].Status != StatusNotRun {
+		t.Fatalf("runs = %+v, error = %v, want existing failure boundary", runs, err)
 	}
 }
 
-func TestRunLevels_PoolsDoNotBlockUnrelatedWork(t *testing.T) {
-	e := newTestEngine([]string{"a", "b", "c"}, nil)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	e.Context = ctx
-	release := make(chan struct{})
-	var inPool atomic.Int32
-	action := func(ctx context.Context, name string, _ map[string]exec.Outputs, _ io.Writer) (exec.Outputs, string, error) {
-		if name == "c" {
-			close(release)
-			return nil, StatusApplied, nil
-		}
-		if n := inPool.Add(1); n != 1 {
-			t.Errorf("pool users = %d, want 1", n)
-		}
-		defer inPool.Add(-1)
-		if name == "a" {
-			select {
-			case <-release:
-			case <-ctx.Done():
-				return nil, "", ctx.Err()
-			}
-		}
-		return nil, StatusApplied, nil
-	}
-	runs, err := e.runLevels(Options{Parallelism: 2, Pools: []ConcurrencyPool{{Name: "account", Limit: 1, Nodes: []string{"a", "b"}}, {Name: "api", Limit: 1, Nodes: []string{"a", "b"}}}}, false, action, nil)
+func TestRunLevels_OverlappingFailurePreservesExecutionJournal(t *testing.T) {
+	e := dagFixture(t)
+	opts, err := e.resolveSelection(Options{Parallelism: 2})
 	if err != nil {
-		t.Fatalf("runs = %+v, err = %v", runs, err)
+		t.Fatal(err)
 	}
-}
-
-func TestRunLevels_CompletedActionRetainsOutputsAtDeadline(t *testing.T) {
-	e := newTestEngine([]string{"a", "child"}, []blueprint.Edge{orderEdge("a", "child")})
-	action := func(ctx context.Context, name string, applied map[string]exec.Outputs, _ io.Writer) (exec.Outputs, string, error) {
-		if name == "a" {
-			<-ctx.Done()
-			return exec.Outputs{"value": {Value: "finished"}}, StatusApplied, nil
-		}
-		if applied["a"]["value"].Value != "finished" {
-			t.Errorf("upstream outputs = %v, want completed action output", applied)
-		}
-		return nil, StatusApplied, nil
+	unlock, err := e.lockRun()
+	if err != nil {
+		t.Fatal(err)
 	}
-	runs, err := e.runLevels(Options{KeepGoing: true, Timeouts: map[string]time.Duration{"a": 20 * time.Millisecond}}, false, action, nil)
-	if err != nil || runs[0].Status != StatusApplied || runs[1].Status != StatusApplied {
-		t.Fatalf("runs = %+v, error = %v, want successful nodes despite post-completion deadline", runs, err)
+	defer unlock()
+	session, err := e.startExecution("apply", opts, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.close()
+	childStarted, failureRecorded := make(chan struct{}), make(chan struct{})
+	failure := errors.New("fixture mutation failed")
+	runs, runErr := e.runLevels(opts, false, func(name string, _ map[string]exec.Outputs, _ io.Writer) (exec.Outputs, string, error) {
+		if err := session.transition(name, "operating", "", ""); err != nil {
+			return nil, "", err
+		}
+		switch name {
+		case "b":
+			select {
+			case <-childStarted:
+			case <-e.context().Done():
+				return nil, "", e.context().Err()
+			}
+			err := session.fail(name, "indeterminate", failure)
+			close(failureRecorded)
+			return nil, "", err
+		case "child":
+			close(childStarted)
+			select {
+			case <-failureRecorded:
+			case <-e.context().Done():
+				return nil, "", e.context().Err()
+			}
+		case "slow":
+			t.Error("failed producer's consumer started")
+		}
+		return nil, StatusApplied, session.transition(name, "completed", "", "")
+	}, nil)
+	if !errors.Is(runErr, failure) || runs[2].Status != StatusApplied || runs[3].Status != StatusNotRun {
+		t.Fatalf("runs = %+v, error = %v, want running child to finish", runs, runErr)
+	}
+	if err := session.finish(runErr); err != nil {
+		t.Fatal(err)
+	}
+	record, _, err := readExecutionRecord(e.context(), session.store, session.record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Status != "needs_recovery" || record.Nodes[1].Phase != "indeterminate" || record.Nodes[2].Phase != "completed" || record.Nodes[3].Phase != "pending" {
+		t.Fatalf("record = %+v, want preserved completion and explicit recovery", record)
 	}
 }

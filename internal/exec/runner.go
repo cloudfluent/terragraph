@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 )
 
 // Binary selects which CLI terragraph shells out to.
@@ -28,10 +27,8 @@ const (
 type Runner struct {
 	// Context bounds subprocess lifetime so cancellation finishes before the engine releases its run lock.
 	Context context.Context
-	// OutputRetries only repeats failed output subprocesses; mutating operations and invalid JSON are never retried.
-	OutputRetries int
-	Binary        Binary
-	Dir           string
+	Binary  Binary
+	Dir     string
 	// DataDir, if set, becomes TF_DATA_DIR: it isolates where Terraform keeps .terraform/ (downloaded providers and, critically, its cached backend configuration) away from Dir. Without this, two nodes that reuse the same module Source but configure different backend_config would collide: Terraform stores which backend it was last configured with inside .terraform/, keyed by working directory, so the second node's init would fail with "Backend configuration changed" even though -backend-config correctly gave it its own state. DataDir sidesteps that by giving every node its own .terraform/ regardless of whether Dir is shared.
 	DataDir string
 	// Env overrides inherited variables, but an explicit TF_DATA_DIR (case-insensitive) conflicts with DataDir and fails before execution to prevent nodes sharing a backend cache.
@@ -175,18 +172,9 @@ type OutputChange struct {
 
 // PlanChangeSet reads action metadata from the saved plan; optional output extraction also verifies the JSON format before claiming evidence.
 func (r *Runner) PlanChangeSet(planPath string, outputChanges ...*[]OutputChange) ([]ResourceChange, error) {
-	env, err := r.env()
+	data, err := r.planJSON(planPath)
 	if err != nil {
 		return nil, err
-	}
-	var stdout bytes.Buffer
-	cmd := osexec.Command(string(r.Binary), "show", "-json", planPath)
-	cmd.Dir = r.Dir
-	cmd.Env = env
-	cmd.Stdout = &stdout
-	cmd.Stderr = r.Stderr
-	if err := runCommand(r.Context, cmd); err != nil {
-		return nil, fmt.Errorf("running %s show -json in %s: %w", r.Binary, r.Dir, err)
 	}
 
 	var doc struct {
@@ -201,7 +189,7 @@ func (r *Runner) PlanChangeSet(planPath string, outputChanges ...*[]OutputChange
 			} `json:"change"`
 		} `json:"resource_changes"`
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &doc); err != nil {
+	if err := json.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("parsing %s show -json in %s: %w", r.Binary, r.Dir, err)
 	}
 
@@ -223,6 +211,25 @@ func (r *Runner) PlanChangeSet(planPath string, outputChanges ...*[]OutputChange
 		changes = append(changes, ResourceChange{Address: rc.Address, Actions: rc.Change.Actions})
 	}
 	return changes, nil
+}
+
+// planJSON keeps every saved-plan read inside the subprocess wrapper.
+func (r *Runner) planJSON(planPath string) ([]byte, error) {
+	env, err := r.env()
+	if err != nil {
+		return nil, err
+	}
+	var stdout bytes.Buffer
+	cmd := osexec.Command(string(r.Binary), "show", "-json", planPath)
+	cmd.Dir = r.Dir
+	cmd.Env = env
+	cmd.Stdout = &stdout
+	cmd.Stderr = r.Stderr
+	if err := runCommand(r.Context, cmd); err != nil {
+		return nil, fmt.Errorf("running %s show -json in %s: %w", r.Binary, r.Dir, err)
+	}
+
+	return stdout.Bytes(), nil
 }
 
 // BackendType reports the backend a previous Init configured for this node, read from the metadata Terraform writes into its own data directory. An empty string means no backend was recorded, which is the ordinary case for a module that declares no backend block at all (the implicit local backend).
@@ -270,6 +277,10 @@ func (r *Runner) Destroy(autoApprove bool, extraArgs ...string) error {
 // Output retains runtime sensitivity because a static module declaration can differ from the files OpenTofu actually executes.
 type Output struct {
 	Value any `json:"value"`
+	// Type distinguishes sets and maps from their lossy JSON array/object representation.
+	Type json.RawMessage `json:"type,omitempty"`
+	// Unknown carries the plan mask in memory only; output -json values are fully known.
+	Unknown any `json:"-"`
 	// Nil means the runtime omitted sensitivity metadata; absence must never authorize snapshot persistence.
 	Sensitive *bool `json:"sensitive"`
 }
@@ -288,33 +299,6 @@ func (outputs Outputs) Values() map[string]any {
 
 // Outputs runs `terraform output -json` and preserves sensitivity and exact numbers; an empty collection does not establish deployment history.
 func (r *Runner) Outputs() (Outputs, error) {
-	if r.OutputRetries < 0 || r.OutputRetries > 10 {
-		return nil, fmt.Errorf("output retries must be between 0 and 10")
-	}
-	ctx := r.Context
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	for attempt := 0; ; attempt++ {
-		outputs, err := r.outputsOnce()
-		var exitErr *osexec.ExitError
-		if cancelled := ctx.Err(); err != nil && cancelled != nil {
-			return nil, cancelled
-		}
-		if err == nil || attempt >= r.OutputRetries || !errors.As(err, &exitErr) {
-			return outputs, err
-		}
-		timer := time.NewTimer(time.Duration(attempt+1) * 100 * time.Millisecond)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return nil, ctx.Err()
-		case <-timer.C:
-		}
-	}
-}
-
-func (r *Runner) outputsOnce() (Outputs, error) {
 	env, err := r.env()
 	if err != nil {
 		return nil, err

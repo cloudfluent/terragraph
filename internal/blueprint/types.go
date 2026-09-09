@@ -3,6 +3,7 @@ package blueprint
 
 import (
 	"fmt"
+	"github.com/hashicorp/hcl/v2"
 	"strings"
 )
 
@@ -60,7 +61,9 @@ type Node struct {
 	Name          string
 	Source        string
 	BackendConfig map[string]string
-	Vars          map[string]any
+	// BackendAddress is nil to inherit; an empty rule disables inherited generation without removing explicit backend settings.
+	BackendAddress map[string]string
+	Vars           map[string]any
 	// Runtime is the name of a `runtime` block this node explicitly selects (e.g. "tofu" for `runtime = runtime.tofu`), or "" if unset. An unset Runtime doesn't necessarily mean "the built-in terraform default": it may still inherit a runtime from an enclosing Use.Runtime override, or from the blueprint's own default-marked runtime block; see graph.Node.Runtime for the fully resolved value and engine.Engine.runtimeFor for where CLI/built-in fallback is applied on top of that.
 	Runtime string
 	// Env is optional and sets extra environment variables the node's terraform/tofu subprocess runs with (e.g. AWS_PROFILE, AWS_REGION for a per-account/per-region provider configuration), keyed by variable name. Unlike Runtime (a single, replace-on-override choice), Env cascades by merging: a node's own Env entries win key-by-key over whatever an enclosing Use.Env contributed, rather than discarding the rest of it. See graph.Node.Env for the fully merged result an enclosing chain of Use.Env overrides plus this node's own Env produces.
@@ -96,12 +99,14 @@ type Use struct {
 	Runtime string
 	// Env, if set, contributes extra environment variables to every node this instantiation expands to (e.g. which AWS account/region/role the whole group deploys into), merged under whatever ambient Env an enclosing Use.Env already contributed and merged under, key-by-key, by each internal node's own Env in turn. Like Runtime, a group definition has no equivalent of its own: which account a reusable group deploys into is a fact about where it's instantiated.
 	Env map[string]string
-	// Vars is optional and supplies literal input values for this instance, keyed by the group's export input names (not internal node.input paths). Same literal object as Node.Vars: JSON-compatible values, no references to other nodes' outputs, no functions. Graph expansion rewrites each key through the resolved export onto the leaf nodes' Vars maps (see graph.applyUseVars); a group definition has no equivalent, because instance data belongs at the use site.
+	// Vars is optional and supplies literal input values for this instance, keyed by the group's export input names (not internal node.input paths). Same literal object as Node.Vars: JSON-compatible values, no references to other nodes' outputs; explicitly installed plugin functions may compute values. Graph expansion rewrites each key through the resolved export onto the leaf nodes' Vars maps (see graph.applyUseVars); a group definition has no equivalent, because instance data belongs at the use site.
 	Vars map[string]any
 	// Approve, if set, becomes the approve level for every node this instantiation expands to, unless that node sets its own. Like Runtime, only the instantiation site can set this and a group definition has no equivalent: how much of a reusable group may be changed unattended is a fact about where it is deployed, not about the group.
 	Approve Approve
-	// BackendConfig, if set, is merged into every node this instantiation expands to, the same way Env merges: leaf keys win. Instantiation-site fact (bucket, profile, region). Do not invent a remote key from the instance name.
+	// BackendConfig merges beneath leaf keys; shared explicit addresses must remain intact even when BackendAddress selects generation.
 	BackendConfig map[string]string
+	// BackendAddress merges prefix and file-name fields beneath leaf choices; an empty object stops inherited generation.
+	BackendAddress map[string]string
 }
 
 // ExportInput is one input port a group exposes to the outside. To may list more than one internal target: a single exposed value sometimes needs to fan out to several internal nodes that each independently need it, and, unlike execution ordering (which is inferable from the internal graph's shape), there is no way to infer that fan-out from structure alone, so the group author must declare it explicitly.
@@ -191,10 +196,15 @@ type S3Lock struct {
 
 // Blueprint is the fully parsed graph topology: nodes and the edges between them, plus any group definitions and instantiations. It carries no resource configuration, only wiring.
 type Blueprint struct {
-	Nodes  []Node
-	Edges  []Edge
-	Groups []Group
-	Uses   []Use
+	// Evaluation carries only caller-approved functions into group parsing; blueprint never loads executable code.
+	Evaluation *hcl.EvalContext
+	Plugins    []PluginConfig
+	// Execution configures journals and optional retained plans without changing any node backend.
+	Execution *ExecutionConfig
+	Nodes     []Node
+	Edges     []Edge
+	Groups    []Group
+	Uses      []Use
 	// Vendor is nil when the blueprint declares no `vendor` block. Use the VendorDirectory/VendorManifestFile accessors, never this field directly, so callers never need to branch on nil.
 	Vendor *VendorConfig
 	// TFVars is nil when the blueprint declares no `tfvars` block. Use the TFVarsLocation accessor, never this field directly, so callers never need to branch on nil.

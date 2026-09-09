@@ -12,7 +12,7 @@ func TestApply_ReportAppliedThenUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first Apply: %v", err)
 	}
-	if len(runs) != 1 || runs[0].Node != "cached" || runs[0].Level != 1 || runs[0].Status != StatusApplied || runs[0].Err != nil {
+	if len(runs.Nodes) != 1 || runs.Nodes[0].Node != "cached" || runs.Nodes[0].Level != 1 || runs.Nodes[0].Status != StatusApplied || runs.Nodes[0].Err != nil {
 		t.Fatalf("got = %+v, want cached at level 1 as applied", runs)
 	}
 
@@ -20,7 +20,7 @@ func TestApply_ReportAppliedThenUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unchanged Apply: %v", err)
 	}
-	if len(runs) != 1 || runs[0].Status != StatusUnchanged {
+	if len(runs.Nodes) != 1 || runs.Nodes[0].Status != StatusUnchanged {
 		t.Fatalf("got = %+v, want cached as unchanged", runs)
 	}
 }
@@ -36,7 +36,7 @@ func TestPlan_ReportPlanned(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
-	if len(runs) != 1 || runs[0].Node != "cached" || runs[0].Status != StatusPlanned || runs[0].Err != nil {
+	if len(runs.Nodes) != 1 || runs.Nodes[0].Node != "cached" || runs.Nodes[0].Status != StatusPlanned || runs.Nodes[0].Err != nil {
 		t.Fatalf("got = %+v, want cached as planned", runs)
 	}
 }
@@ -52,7 +52,7 @@ func TestDestroy_ReportDestroyed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Destroy: %v", err)
 	}
-	if len(runs) != 1 || runs[0].Node != "cached" || runs[0].Status != StatusDestroyed || runs[0].Err != nil {
+	if len(runs.Nodes) != 1 || runs.Nodes[0].Node != "cached" || runs.Nodes[0].Status != StatusDestroyed || runs.Nodes[0].Err != nil {
 		t.Fatalf("got = %+v, want cached as destroyed", runs)
 	}
 }

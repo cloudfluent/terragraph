@@ -12,10 +12,5 @@ func runCommand(ctx context.Context, cmd *exec.Cmd) error {
 			return err
 		}
 	}
-	if ctx != nil {
-		if _, bounded := ctx.Deadline(); bounded {
-			return runWithDeadline(ctx, cmd)
-		}
-	}
 	return cmd.Run()
 }

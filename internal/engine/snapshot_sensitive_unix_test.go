@@ -63,7 +63,7 @@ func assertSnapshotWithheld(t *testing.T, e *Engine, node, output string) []byte
 // assertSnapshotRefused pins the consumer diagnostic, remedy, and original subprocess failure without exposing the withheld value.
 func assertSnapshotRefused(t *testing.T, e *Engine) {
 	t.Helper()
-	_, err := e.Apply(Options{Node: "b", AutoApprove: true})
+	_, err := e.Apply(Options{Nodes: []string{"b"}, AutoApprove: true})
 	if err == nil {
 		t.Fatal("Apply reused a sensitive snapshot value, want a withheld-output error")
 	}
@@ -124,7 +124,7 @@ func TestResolveInputs_SensitiveLegacySnapshotIsRefused(t *testing.T) {
 
 func TestResolveInputs_PublishedWithheldSnapshotExplainsFailure(t *testing.T) {
 	e := setSnapshotOutputSensitive(t, loadFallbackEngine(t, true), "consumed", true)
-	if _, err := e.Apply(Options{Node: "a", AutoApprove: true}); err != nil {
+	if _, err := e.Apply(Options{Nodes: []string{"a"}, AutoApprove: true}); err != nil {
 		t.Fatalf("publishing Apply: %v", err)
 	}
 	t.Setenv("TG_OUTPUT_FAIL_NODE", "a")
@@ -135,7 +135,7 @@ func TestResolveInputs_SensitiveLiveOutputStillWorks(t *testing.T) {
 	e := setSnapshotOutputSensitive(t, loadFallbackEngine(t, true), "consumed", true)
 	writeFallbackSnapshot(t, e, "a", "stale-snapshot-fixture")
 	t.Setenv("TG_OUTPUT_FIRST", "live-sensitive-fixture")
-	if _, err := e.Apply(Options{Node: "b", AutoApprove: true}); err != nil {
+	if _, err := e.Apply(Options{Nodes: []string{"b"}, AutoApprove: true}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !strings.Contains(varfileSeen(t, e, "b"), "live-sensitive-fixture") {
@@ -217,7 +217,7 @@ func TestResolveInputs_UnknownSensitivityLegacySnapshotIsRefused(t *testing.T) {
 
 func TestResolveInputs_WithheldSnapshotNeedsRepublishingAfterSensitivityRemoval(t *testing.T) {
 	e := setSnapshotOutputSensitive(t, loadFallbackEngine(t, true), "consumed", true)
-	if _, err := e.Apply(Options{Node: "a", AutoApprove: true}); err != nil {
+	if _, err := e.Apply(Options{Nodes: []string{"a"}, AutoApprove: true}); err != nil {
 		t.Fatalf("publishing sensitive Apply: %v", err)
 	}
 	e = setSnapshotOutputSensitive(t, e, "consumed", false)
@@ -226,11 +226,11 @@ func TestResolveInputs_WithheldSnapshotNeedsRepublishingAfterSensitivityRemoval(
 
 	t.Setenv("TG_OUTPUT_FAIL_NODE", "")
 	t.Setenv("TG_OUTPUT_LATER", "republished-public-fixture")
-	if _, err := e.Apply(Options{Node: "a", AutoApprove: true}); err != nil {
+	if _, err := e.Apply(Options{Nodes: []string{"a"}, AutoApprove: true}); err != nil {
 		t.Fatalf("republishing non-sensitive Apply: %v", err)
 	}
 	t.Setenv("TG_OUTPUT_FAIL_NODE", "a")
-	if _, err := e.Apply(Options{Node: "b", AutoApprove: true}); err != nil {
+	if _, err := e.Apply(Options{Nodes: []string{"b"}, AutoApprove: true}); err != nil {
 		t.Fatalf("Apply after republishing: %v", err)
 	}
 	if !strings.Contains(varfileSeen(t, e, "b"), "republished-public-fixture") {
@@ -259,7 +259,7 @@ func TestResolveInputs_UnusableSnapshotPreservesLiveErrorForSensitiveOutput(t *t
 				}
 			}
 			t.Setenv("TG_OUTPUT_FAIL_NODE", "a")
-			_, err := e.Apply(Options{Node: "b", AutoApprove: true})
+			_, err := e.Apply(Options{Nodes: []string{"b"}, AutoApprove: true})
 			if err == nil || !strings.Contains(err.Error(), `reading existing outputs from upstream node "a" failed`) || strings.Contains(err.Error(), "withheld") {
 				t.Fatal("unusable snapshot replaced the original live-read diagnostic")
 			}
@@ -278,7 +278,7 @@ func TestApply_SensitiveSnapshotOptOutLeavesExistingFileUntouched(t *testing.T) 
 	if err != nil {
 		t.Fatalf("reading original snapshot: %v", err)
 	}
-	if _, err := e.Apply(Options{Node: "a", AutoApprove: true}); err != nil {
+	if _, err := e.Apply(Options{Nodes: []string{"a"}, AutoApprove: true}); err != nil {
 		t.Fatalf("opted-out Apply: %v", err)
 	}
 	after, err := os.ReadFile(e.snapshotPath("a"))
@@ -286,7 +286,7 @@ func TestApply_SensitiveSnapshotOptOutLeavesExistingFileUntouched(t *testing.T) 
 		t.Fatal("opted-out Apply changed the existing snapshot")
 	}
 	t.Setenv("TG_OUTPUT_FAIL_NODE", "a")
-	_, err = e.Apply(Options{Node: "b", AutoApprove: true})
+	_, err = e.Apply(Options{Nodes: []string{"b"}, AutoApprove: true})
 	if err == nil || !strings.Contains(err.Error(), `reading existing outputs from upstream node "a" failed`) || strings.Contains(err.Error(), "withheld") {
 		t.Fatal("opted-out Apply consulted a sensitive snapshot")
 	}
@@ -307,7 +307,7 @@ func TestResolveInputs_StructurallyCorruptSnapshotPreservesLiveError(t *testing.
 				t.Fatalf("writing structurally corrupt snapshot: %v", err)
 			}
 			t.Setenv("TG_OUTPUT_FAIL_NODE", "a")
-			_, err := e.Apply(Options{Node: "b", AutoApprove: true})
+			_, err := e.Apply(Options{Nodes: []string{"b"}, AutoApprove: true})
 			var exitErr *osexec.ExitError
 			if !errors.As(err, &exitErr) {
 				t.Fatal("structurally corrupt snapshot discarded the live output error chain")

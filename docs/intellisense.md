@@ -2,7 +2,7 @@
 
 Install **Terragraph** (`cloudfluent.terragraph-vscode`) from the VS Code Marketplace and open Terragraph `.hcl` files with the **HCL** language mode. Filenames can be anything, including `nodes.hcl`, `edges.hcl`, `contracts.hcl`, and files in group source directories. The extension bundles its language server, so editor features do not require a separate CLI installation.
 
-The editor uses other `.hcl` files in the same directory as context, including unsaved changes in open files. To run a split blueprint through the CLI, use `--blueprint .`: the CLI's default still reads only `blueprint.hcl`. See [files and loading](blueprint.md#files-and-loading).
+The editor uses other `.hcl` files in the same directory as context, including unsaved changes in open files. Like the CLI's default directory loading, it excludes `.terraform.lock.hcl` from both disk files and unsaved document context. The CLI reads saved files; save your edits before running a split blueprint. See [files and loading](blueprint.md#files-and-loading).
 
 ## Completion
 

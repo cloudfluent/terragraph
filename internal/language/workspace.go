@@ -87,12 +87,18 @@ func (w *Workspace) Complete(_ context.Context, path string, offset int) []Compl
 	if literalAt(text, offset) {
 		return nil
 	}
+	if contractPortPath(blocks) && directionAt(text, offset) == "type" {
+		return contractTypeCompletions(text, offset)
+	}
 	start := traversalStart(text, offset)
 	fragment := string(text[start:offset])
 	objectAttribute, insideObject := objectAttributeAt(text, offset)
 	if objectAttribute == "vars" && !strings.Contains(fragment, ".") {
 		p, _ := varsPortsAt(model, text, offset)
 		return propertyCompletions(p, fragment, start, offset)
+	}
+	if objectAttribute == "backend_address" && !strings.Contains(fragment, ".") {
+		return contextCompletions([]string{"backend_address"}, fragment, start, offset)
 	}
 	if insideObject {
 		return nil
@@ -380,6 +386,9 @@ type attributeSpec struct {
 
 var completionSchemas = map[string][]attributeSpec{
 	"": {
+		{name: "producer", insert: "producer \"./module\" {\n}", detail: "Output contracts"},
+		{name: "consumer", insert: "consumer \"./module\" {\n}", detail: "Input contracts"},
+		{name: "contracts", insert: "contracts {\n  mode = \"warn\"\n}", detail: "Contract enforcement mode"},
 		{name: "node", insert: "node \"name\" {\n  source = \"\"\n}", detail: "Blueprint block", documentation: "Declares one Terraform or OpenTofu module in the graph."},
 		{name: "edge", insert: "edge {\n  from = node.source.output.value\n  to   = node.target.input.value\n}", detail: "Blueprint block", documentation: "Connects a source node output to a target node input."},
 		{name: "runtime", insert: "runtime \"name\" {\n  binary = \"tofu\"\n}", detail: "Blueprint block", documentation: "Declares a reusable Terraform or OpenTofu runtime."},
@@ -388,9 +397,13 @@ var completionSchemas = map[string][]attributeSpec{
 		{name: "vendor", insert: "vendor {\n}", detail: "Blueprint block", documentation: "Configures the local vendor directory."},
 		{name: "tfvars", insert: "tfvars {\n}", detail: "Blueprint block", documentation: "Configures where resolved input values are written."},
 		{name: "lock", insert: "lock {\n  s3 {\n    bucket = \"\"\n    key    = \"\"\n    region = \"\"\n  }\n}", detail: "Blueprint block", documentation: "Serializes plan/apply/destroy across machines with a remote lock object."},
+		{name: "plugin", insert: "plugin \"name\" {\n  source = \"\"\n  version = \"\"\n}", detail: "Optional executable plugin", documentation: "Declares a version-locked plugin; the editor never executes plugin code."},
+		{name: "execution", insert: "execution {\n}", detail: "Blueprint block", documentation: "Configures execution record storage and retained plan lifetime."},
 		{name: "snapshots", insert: "snapshots { }", detail: "Blueprint block", documentation: "Opts the graph into local output snapshots, consumed as the input source of last resort."},
 	},
 	"group": {
+		{name: "producer", insert: "producer \"./module\" {\n}", detail: "Output contracts"},
+		{name: "consumer", insert: "consumer \"./module\" {\n}", detail: "Input contracts"},
 		{name: "node", insert: "node \"name\" {\n  source = \"\"\n}", detail: "Group block"},
 		{name: "edge", insert: "edge {\n  from = node.\n  to = node.\n}", detail: "Group block"},
 		{name: "use", insert: "use \"group\" {\n  as = \"name\"\n  source = \"\"\n}", detail: "Group block"},
@@ -402,12 +415,34 @@ var completionSchemas = map[string][]attributeSpec{
 	},
 	"export.input":  {{name: "to", insert: "to = node.", detail: "required input reference"}},
 	"export.output": {{name: "from", insert: "from = node.", detail: "required output reference"}},
-	"snapshots":     {},
+	"plugin": {
+		{name: "source", insert: "source = \"\"", detail: "required package identity"},
+		{name: "version", insert: "version = \"\"", detail: "required version constraint"},
+		{name: "config", insert: "config = {\n}", detail: "literal plugin configuration"},
+	},
+	"execution": {
+		{name: "bucket", insert: "bucket = \"\"", detail: "optional string", documentation: "S3 bucket for execution records and retained plans; requires a shared graph lock."},
+		{name: "prefix", insert: "prefix = \"\"", detail: "optional string", documentation: "Dedicated artifact prefix, separate from state and locks."},
+		{name: "region", insert: "region = \"\"", detail: "optional string", documentation: "S3 execution storage region."},
+		{name: "plan_ttl", insert: "plan_ttl = \"24h\"", detail: "optional string", documentation: "Maximum age at which a retained plan may begin applying."},
+		{name: "record_retention", insert: "record_retention = \"720h\"", detail: "optional string", documentation: "Retention after an execution is resolved and finished."},
+	},
+	"producer":        {{name: "output", insert: "output \"name\" {\n  type = string\n}", detail: "Additional output guarantee"}},
+	"consumer":        {{name: "input", insert: "input \"name\" {\n  nullable = false\n}", detail: "Additional input requirement"}},
+	"contracts":       {{name: "mode", insert: "mode = \"warn\"", detail: "warn or enforce"}},
+	"producer.output": contractPortSchema,
+	"consumer.input":  contractPortSchema,
+	"snapshots":       {},
+	"backend_address": {
+		{name: "s3_key_prefix", insert: "s3_key_prefix = \"prod\"", detail: "optional string", documentation: "Literal prefix before the qualified leaf directory. Empty means no prefix; explicit keys win."},
+		{name: "s3_key_name", insert: "s3_key_name = \"terraform.tfstate\"", detail: "optional string", documentation: "File name within each qualified leaf directory; defaults to terraform.tfstate. Inherits independently of the prefix."},
+	},
 	"node": {
 		{name: "source", insert: "source = \"\"", detail: "required string", documentation: "Path or remote source of the Terraform or OpenTofu module."},
-		{name: "vars", insert: "vars = {\n}", detail: "object", documentation: "Literal Terraform input values. Use an edge for another node's output."},
+		{name: "vars", insert: "vars = {\n}", detail: "object", documentation: "Terraform input values, optionally computed by installed plugin functions. Use an edge for another node's output."},
 		{name: "env", insert: "env = {\n}", detail: "map(string)", documentation: "Extra environment variables for this module's Terraform or OpenTofu process."},
 		{name: "runtime", insert: "runtime = runtime.", detail: "runtime reference", documentation: "Selects a declared runtime for this node."},
+		{name: "backend_address", insert: "backend_address = {\n  s3_key_prefix = \"prod\"\n}", detail: "object", documentation: "Optional S3 key generation. Inherits when omitted; {} disables it. Explicit addresses win."},
 		{name: "backend_config", insert: "backend_config = {\n}", detail: "map(string)", documentation: "Backend configuration passed to terraform init."},
 		{name: "approve", insert: "approve = \"\"", detail: "optional string", documentation: "How much of this node's plan may be applied: \"none\", \"safe\" (create/update, the default), or \"all\" (adds replace/delete)."},
 	},
@@ -427,6 +462,7 @@ var completionSchemas = map[string][]attributeSpec{
 	"use": {
 		{name: "as", insert: "as = \"\"", detail: "required string", documentation: "Namespace used to refer to this group instance."},
 		{name: "source", insert: "source = \"\"", detail: "required string", documentation: "Local path or remote source containing the group."},
+		{name: "backend_address", insert: "backend_address = {\n  s3_key_prefix = \"prod\"\n}", detail: "object", documentation: "Optional S3 key generation. Inherits when omitted; {} disables it. Explicit addresses win."},
 		{name: "backend_config", insert: "backend_config = {\n}", detail: "map(string)", documentation: "Backend configuration merged onto every node this instance expands to. Leaf keys win."},
 		{name: "runtime", insert: "runtime = runtime.", detail: "runtime reference", documentation: "Default runtime for nodes expanded from this group."},
 		{name: "env", insert: "env = {\n}", detail: "map(string)", documentation: "Environment variables inherited by nodes expanded from this group."},
@@ -634,9 +670,7 @@ func relativeOutputCompletions(m workspaceModel, text []byte, fragment string, s
 	})
 }
 
-// Definition resolves the node or runtime segment under offset. It searches
-// every .hcl file directly in the same blueprint directory, matching the
-// parser's multi-file blueprint layout.
+// Definition follows directory loading's filename filter so excluded files cannot supply destinations that execution never reads.
 func (w *Workspace) Definition(_ context.Context, path string, offset int) (Location, bool) {
 	path = absolute(path)
 	text := w.document(path)
@@ -685,7 +719,8 @@ func (w *Workspace) Diagnose(_ context.Context, path string) []Diagnostic {
 	if !ok {
 		return nil
 	}
-	diagnostics := []Diagnostic{}
+	diagnostics := contractDiagnostics(body)
+	diagnostics = append(diagnostics, backendAddressDiagnostics(body)...)
 	walkAttributes(body, func(attr *hclsyntax.Attribute) {
 		scope := model.at(text, attr.Range().Start.Byte)
 		for _, traversal := range attr.Expr.Variables() {
@@ -886,7 +921,12 @@ func referenceAt(text []byte, offset int) (string, string, bool) {
 }
 
 func (w *Workspace) blueprintFiles(path string) []string {
-	return uniqueSorted(append(w.hclFiles(filepath.Dir(path)), path))
+	files := w.hclFiles(filepath.Dir(path))
+	// Explicitly opened non-HCL filenames retain editor support, just as explicit CLI file selection bypasses directory discovery.
+	if filepath.Ext(path) != ".hcl" || blueprint.IsBlueprintFilename(filepath.Base(path)) {
+		files = append(files, path)
+	}
+	return uniqueSorted(files)
 }
 
 // Open file overlays remain part of their directory even before the first save or after a disk deletion.
@@ -894,13 +934,13 @@ func (w *Workspace) hclFiles(dir string) []string {
 	entries, _ := os.ReadDir(dir)
 	files := []string{}
 	for _, entry := range entries {
-		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".hcl" {
+		if !entry.IsDir() && blueprint.IsBlueprintFilename(entry.Name()) {
 			files = append(files, filepath.Join(dir, entry.Name()))
 		}
 	}
 	w.mu.RLock()
 	for path := range w.documents {
-		if filepath.Dir(path) == dir && filepath.Ext(path) == ".hcl" {
+		if filepath.Dir(path) == dir && blueprint.IsBlueprintFilename(filepath.Base(path)) {
 			files = append(files, path)
 		}
 	}
@@ -939,4 +979,10 @@ func absolute(path string) string {
 		return path
 	}
 	return result
+}
+
+var contractPortSchema = []attributeSpec{
+	{name: "type", insert: "type = string", detail: "optional type constraint", documentation: "Accepts native type expressions or legacy strings. Omit to keep only the module input type check."},
+	{name: "nullable", insert: "nullable = false", detail: "optional bool", documentation: "Checks the top-level effective value; nested nulls are not prohibited."},
+	{name: "sensitive", insert: "sensitive = true", detail: "optional bool", documentation: "Cannot downgrade module or runtime sensitivity."},
 }
