@@ -2,7 +2,6 @@
 
 This example models six AWS member accounts, seven VPCs, three EKS platforms,
 and six applications using **63 independent roots in 12 execution levels**.
-The directory is named `compelete` intentionally to match the requested example path.
 
 Every root is a checked-in local fixture using the built-in `terraform_data`
 resource. Terraform/OpenTofu really initializes isolated backends, plans,
@@ -88,10 +87,10 @@ From the repository root:
 
 ```sh
 make build
-cd examples/compelete
+cd examples/complete
 ../../terragraph validate
 ../../terragraph graph
-../../terragraph graph --format dot > /tmp/compelete.dot
+../../terragraph graph --format dot > /tmp/complete.dot
 ../../terragraph apply --auto-approve --parallelism 4
 ../../terragraph output --node landscape
 ../../terragraph output summary --node landscape --raw
@@ -107,7 +106,7 @@ example, `https://checkout.prd.commerce.example.invalid`.
 Commands load **the directory**, merging `blueprint.hcl`, `environments.hcl`,
 `settings.hcl`, and `contracts.hcl`. Do not select `blueprint.hcl` alone:
 that would omit the environment instances, strict contract mode, and other
-settings. From elsewhere, pass `--blueprint /path/to/examples/compelete`.
+settings. From elsewhere, pass `--blueprint /path/to/examples/complete`.
 
 Add `--tofu` consistently to use OpenTofu in a fresh copy. Keep a given
 checkout's states and retained plans on the same runtime; the verification
@@ -290,9 +289,9 @@ See [execution recovery](../../docs/executions.md#recovery).
 From the repository root, with Python 3 and the chosen runtime installed:
 
 ```sh
-python3 examples/compelete/verify.py --terragraph ./terragraph
-python3 examples/compelete/verify.py --terragraph ./terragraph --mode all
-python3 examples/compelete/verify.py --terragraph ./terragraph --tofu --mode all
+python3 examples/complete/verify.py --terragraph ./terragraph
+python3 examples/complete/verify.py --terragraph ./terragraph --mode all
+python3 examples/complete/verify.py --terragraph ./terragraph --tofu --mode all
 ```
 
 Each mode copies the example into a private temporary directory. It strips

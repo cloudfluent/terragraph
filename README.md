@@ -64,7 +64,7 @@ Self-contained and cloud-credential-free (built-in resources or `random`/`local`
 - [`examples/group`](examples/group): a group instantiated twice via `use`, proving expansion, export wiring, and per-instance state isolation.
 - [`examples/contracts`](examples/contracts): producer and consumer declarations checked against an edge and the modules' schemas.
 - [`examples/vendored`](examples/vendored): a node sourced from a remote git address, showing the vendor workflow.
-- [`examples/compelete`](examples/compelete): a 63-node AWS multi-account landscape with dev/stg/prd VPCs, EKS, data services, nested DRY groups, enforced contracts, and executable lifecycle labs; uses only built-in resources, with no provider downloads.
+- [`examples/complete`](examples/complete): a 63-node AWS multi-account landscape with dev/stg/prd VPCs, EKS, data services, nested DRY groups, enforced contracts, and executable lifecycle labs; uses only built-in resources, with no provider downloads.
 
 ## Development
 
