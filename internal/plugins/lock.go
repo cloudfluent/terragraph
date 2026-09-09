@@ -138,8 +138,14 @@ func Install(dir string, config blueprint.PluginConfig, sourceDir string, locked
 	destination := filepath.Join(parent, Platform())
 	if existing, err := Inspect(destination); err == nil && existing.Digest == p.Digest {
 		// Existing verified bytes can be reused without replacing an executable in use on Windows.
-	} else if err := os.Rename(tmp, destination); err != nil {
-		return fmt.Errorf("publishing plugin package: %w; remove the damaged package directory and reinstall", err)
+	} else {
+		// Only verified replacement bytes may displace damaged cache contents under the install lock.
+		if err := os.RemoveAll(destination); err != nil {
+			return fmt.Errorf("removing damaged plugin package: %w; close processes using the package and retry plugin install", err)
+		}
+		if err := os.Rename(tmp, destination); err != nil {
+			return fmt.Errorf("publishing plugin package: %w; retry plugin install", err)
+		}
 	}
 	if locked {
 		return nil

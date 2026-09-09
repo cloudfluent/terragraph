@@ -19,12 +19,14 @@ Go version is pinned to the `go.mod` value and matched in CI. Don't bump it as a
 
 # Layout
 
-`cmd/terragraph` is the entrypoint; everything real lives under `internal/`, one domain per package:
+`cmd/terragraph` is the entrypoint; implementation lives under `internal/`, one domain per package, with the public SDK under `plugin/`:
 
 | Package | Owns |
 |---|---|
 | `blueprint` | Parsing `blueprint.hcl` / `group.hcl` into typed values |
 | `graph` | Building and validating the node graph, cycle detection, group expansion |
+| `plugins` | Executable plugin host: package installation, locks, sessions, and diagnostics |
+| `plugin` (public) | SDK descriptors, typed values, logging, and RPC protocol; no engine orchestration |
 | `engine` | Execution: levels, plan/apply/destroy, input resolution, approval |
 | `exec` | The terraform/tofu subprocess wrapper and the ephemeral tfvars file |
 | `vendor` | Fetching and rewriting module sources |
@@ -34,7 +36,7 @@ Go version is pinned to the `go.mod` value and matched in CI. Don't bump it as a
 | `module` | Terraform module introspection |
 | `pathidentity` | Read-only filesystem path equality, including known directory case rules |
 
-Dependencies flow one way: `cli` → `engine` → `graph` → `blueprint`, and `lsp` → `language` → `blueprint`. `blueprint`, `exec`, `module`, `runlock`, and `pathidentity` are leaves: they import nothing else under `internal/`, and keeping them that way is what makes them testable in isolation. Don't add an import that reverses the direction or gives a leaf a dependency, and don't reach into another package to do work it should expose.
+Dependencies flow one way: `cli` → `engine` → `graph` → `blueprint`, `cli` → `plugins` and `engine` → `plugins` → `blueprint`, and `lsp` → `language` → `blueprint`. The host imports the public `plugin` SDK; the SDK never imports `internal/` packages. `blueprint`, `exec`, `module`, `runlock`, and `pathidentity` are leaves: they import nothing else under `internal/`, and keeping them that way is what makes them testable in isolation. Don't add an import that reverses the direction or gives a leaf a dependency, and don't reach into another package to do work it should expose.
 
 Before adding a package, function, or type, check whether an existing one already covers it. Extend the existing implementation rather than building a parallel one.
 

@@ -211,6 +211,39 @@ func parseDir(dir string, evaluation ...*hcl.EvalContext) (*Blueprint, int, erro
 	return bp, fileCount, nil
 }
 
+// BaseDirectory resolves the lock location without parsing configuration or executing plugin functions.
+func BaseDirectory(path string) (string, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", fmt.Errorf("resolving blueprint path: %w", err)
+	}
+	dir := path
+	if !info.IsDir() {
+		dir = filepath.Dir(path)
+	} else {
+		// An empty directory must fail before acquiring a lock creates managed files.
+		entries, err := os.ReadDir(path)
+		if err != nil {
+			return "", fmt.Errorf("reading blueprint directory: %w", err)
+		}
+		found := false
+		for _, entry := range entries {
+			if !entry.IsDir() && IsBlueprintFilename(entry.Name()) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return "", fmt.Errorf("blueprint directory %q: no configuration files; add a .hcl file or use --blueprint to select a file or directory", path)
+		}
+	}
+	dir, err = filepath.Abs(dir)
+	if err != nil {
+		return "", fmt.Errorf("resolving blueprint directory: %w", err)
+	}
+	return dir, nil
+}
+
 // LoadPath preserves the source base directory for either input form and rejects directories with no configuration so a command in the wrong directory cannot silently succeed.
 func LoadPath(path string, evaluation ...*hcl.EvalContext) (*Blueprint, string, error) {
 	info, err := os.Stat(path)

@@ -31,9 +31,9 @@ terragraph plugin install example PACKAGE_DIRECTORY
 terragraph plugin list
 ```
 
-Installation is explicit and serialized under the blueprint lock. It copies and verifies the package, then writes the selected version, source identity, platform, and SHA-256 digest to `terragraph.plugins.lock.json`. Commit that file. The package digest binds both descriptor and executable; RPC startup checks that the running descriptor agrees with the installed descriptor. A checksum verifies reviewed bytes, not publisher identity or safety.
+Installation is explicit and serialized under the blueprint lock. Commands that take this lock, including `plan`, `apply`, `destroy`, and `vendor`, acquire it before static plugin evaluation and retain it through session cleanup. It copies and verifies the package, then writes the selected version, source identity, platform, and SHA-256 digest to `terragraph.plugins.lock.json`. Commit that file. The package digest binds both descriptor and executable; RPC startup checks that the running descriptor agrees with the installed descriptor. A checksum verifies reviewed bytes, not publisher identity or safety.
 
-`plugin install example PACKAGE_DIRECTORY --locked` restores an existing platform entry without changing the lock. Install a new compatible package without `--locked` to update that entry, and review the lock diff. Each OS/architecture has a separate entry; no automatic cross-platform download is performed. At present `source` is an identity recorded in the lock, not a registry or URL resolver.
+`plugin install example PACKAGE_DIRECTORY --locked` restores an existing platform entry without changing the lock. Reinstallation replaces damaged cached package bytes only after verifying the supplied replacement. Install a new compatible package without `--locked` to update that entry, and review the lock diff. Each OS/architecture has a separate entry; no automatic cross-platform download is performed. At present `source` is an identity recorded in the lock, not a registry or URL resolver.
 
 Ordinary graph commands never install, fetch, or update plugins. Missing packages, changed constraints, changed source identities, and checksum mismatches stop loading with a remedy.
 

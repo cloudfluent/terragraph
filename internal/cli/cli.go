@@ -528,6 +528,15 @@ func newVendorCmd(blueprintPath *string, loggerOf func() *slog.Logger) *cobra.Co
 
 			// Parsed directly, not via engine.Load: building the full graph would fail for any not-yet-vendored remote node, but vendoring has to work *before* the graph is buildable.
 			diagnosticPhase(cmd, "load")
+			baseDir, err := blueprint.BaseDirectory(*blueprintPath)
+			if err != nil {
+				return err
+			}
+			lock, err := runlock.AcquireContext(cmd.Context(), baseDir, cmd.ErrOrStderr())
+			if err != nil {
+				return fmt.Errorf("locking blueprint: %w", err)
+			}
+			defer func() { _ = lock.Close() }()
 			evaluation, err := plugins.Evaluate(plugins.WithLogger(cmd.Context(), logger), *blueprintPath)
 			if err != nil {
 				return err
@@ -537,20 +546,10 @@ func newVendorCmd(blueprintPath *string, loggerOf func() *slog.Logger) *cobra.Co
 					logger.Error("plugin cleanup failed", "error", err)
 				}
 			}()
-			bp, dir, err := blueprint.LoadPath(*blueprintPath, evaluation.Context)
+			bp, _, err := blueprint.LoadPath(*blueprintPath, evaluation.Context)
 			if err != nil {
 				return err
 			}
-			baseDir, err := filepath.Abs(dir)
-			if err != nil {
-				return fmt.Errorf("resolving blueprint directory: %w", err)
-			}
-
-			lock, err := runlock.Acquire(baseDir, cmd.ErrOrStderr())
-			if err != nil {
-				return fmt.Errorf("locking blueprint: %w", err)
-			}
-			defer func() { _ = lock.Close() }()
 
 			sources, err := graph.SourceNodes(bp, baseDir)
 			if err != nil {
