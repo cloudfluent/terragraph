@@ -31,7 +31,7 @@ group "account" {
 
   producer "../../modules/guardrails" {
     output "context" {
-      type      = "object({account_id = string, account_name = string, tenant = string, namespace = string, stage = string, region = string, region_code = string, tags = map(string)})"
+      type      = object({account_id = string, account_name = string, tenant = string, namespace = string, stage = string, region = string, region_code = string, tags = map(string)})
       nullable  = false
       sensitive = false
     }
@@ -39,7 +39,7 @@ group "account" {
 
   consumer "../../modules/guardrails" {
     input "context" {
-      type      = "object({account_id = string, account_name = string, tenant = string, namespace = string, stage = string, region = string, region_code = string, tags = map(string)})"
+      type      = object({account_id = string, account_name = string, tenant = string, namespace = string, stage = string, region = string, region_code = string, tags = map(string)})
       nullable  = false
       sensitive = false
     }

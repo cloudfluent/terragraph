@@ -161,6 +161,9 @@ decision, not a cosmetic edit.
 
 ## Contracts and actual values
 
+Contract types use native expressions such as `string`, `list(string)`, and
+`object({...})`, including the account group contracts.
+
 Every data edge has both a producer and consumer contract with type,
 nullability, and sensitivity claims. Contracts are keyed by source, so a
 single VPC declaration covers the hub and all six environment VPCs. All
