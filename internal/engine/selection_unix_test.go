@@ -263,11 +263,11 @@ func TestSavedExecution_SelectionStaysFixedAcrossFrontiers(t *testing.T) {
 
 func TestSavedExecution_SelectionOverridesNeverCallRuntime(t *testing.T) {
 	e := selectionEngine(t)
-	for _, opts := range []Options{{Nodes: []string{"b"}}, {Nodes: []string{""}}, {Downstream: true}, {SelectionSpecified: true}} {
-		if _, err := e.SavePlans(opts, "run-missing"); err == nil || !strings.Contains(err.Error(), "omit --node and --downstream") {
+	for _, opts := range []Options{{Nodes: []string{"b"}}, {Nodes: []string{""}}, {Downstream: true}, {Upstream: true}, {SelectionSpecified: true}} {
+		if _, err := e.SavePlans(opts, "run-missing"); err == nil || !strings.Contains(err.Error(), "omit --node, --downstream, and --upstream") {
 			t.Fatalf("got = %v", err)
 		}
-		if _, err := e.ApplySavedPlans("run-missing", opts); err == nil || !strings.Contains(err.Error(), "omit --node and --downstream") {
+		if _, err := e.ApplySavedPlans("run-missing", opts); err == nil || !strings.Contains(err.Error(), "omit --node, --downstream, and --upstream") {
 			t.Fatalf("got = %v", err)
 		}
 	}

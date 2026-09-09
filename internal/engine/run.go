@@ -22,6 +22,8 @@ type Options struct {
 	Nodes []string
 	// Downstream follows both data and ordering dependencies so consumers cannot be omitted by edge kind.
 	Downstream bool
+	// Upstream includes producers so their fresh execution precedes selected consumers.
+	Upstream bool
 	// SelectionSpecified preserves explicit false flags so stored executions reject every scope override.
 	SelectionSpecified bool
 	// OnSelection publishes resolved scope before runtime subprocesses, keeping presentation out of the engine.
@@ -228,7 +230,7 @@ func markNotRun(runs []NodeRun, levels [][]string, from int) []NodeRun {
 
 // resolveSelection freezes membership before runtime checks and keeps every scheduler on the same filtered levels.
 func (e *Engine) resolveSelection(opts Options) (Options, error) {
-	selection, err := graph.Select(e.Graph, opts.Nodes, opts.Downstream)
+	selection, err := graph.Select(e.Graph, opts.Nodes, opts.Downstream, opts.Upstream)
 	if err != nil {
 		return opts, WithDiagnostic(err, Diagnostic{Code: "invalid_arguments", Category: "arguments", Phase: "selection", Subject: "selection", Remedy: "select expanded node names from graph output"})
 	}
@@ -245,7 +247,7 @@ func (e *Engine) resolveSelection(opts Options) (Options, error) {
 }
 
 func (o Options) hasSelectionFlags() bool {
-	return o.SelectionSpecified || o.Nodes != nil || o.Downstream
+	return o.SelectionSpecified || o.Nodes != nil || o.Downstream || o.Upstream
 }
 
 func (o Options) announceSelection(reverse bool) {
