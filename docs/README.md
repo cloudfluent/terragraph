@@ -15,6 +15,8 @@ terragraph apply
 
 `validate` checks the blueprint against its modules, `graph` shows execution order, and `apply` plans and asks for confirmation as it reaches each changed node. Add `--tofu` to use OpenTofu. The example may download providers during initialization.
 
+For a larger walkthrough, the [complete AWS landscape](../examples/compelete) models six accounts, seven VPCs, three EKS platforms, and six applications using only built-in local fixtures. It combines nested groups and enforced contracts with runnable saved-plan, native-operation, and offline-vendoring labs.
+
 For a new graph, `apply` can create upstream resources and pass their outputs to downstream nodes in the same run. `plan` reads existing upstream outputs, so it cannot preview a consumer whose required output is unavailable, or propagate upstream's newly planned values. Read the [planning limitation](execution-model.md#known-limitation) before using a whole-graph plan as a change preview.
 
 For your own modules, start with [nodes, edges, and literal inputs](blueprint.md). If a node uses a remote source, run [vendoring](vendoring.md) before validation or execution. For a blueprint split across files, run commands in its directory or select another directory with `--blueprint <directory>`; see [files and loading](blueprint.md#files-and-loading).
