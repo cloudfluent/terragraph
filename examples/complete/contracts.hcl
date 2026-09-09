@@ -2,12 +2,12 @@
 
 producer "./modules/organization" {
   output "dns_zone" {
-    type      = "string"
+    type      = string
     nullable  = false
     sensitive = false
   }
   output "organization" {
-    type      = "object({tenant = string, namespace = string, region = string, region_code = string, domain = string, tags = map(string)})"
+    type      = object({tenant = string, namespace = string, region = string, region_code = string, domain = string, tags = map(string)})
     nullable  = false
     sensitive = false
   }
@@ -15,7 +15,7 @@ producer "./modules/organization" {
 
 consumer "./modules/organization" {
   input "organization" {
-    type      = "object({tenant = string, namespace = string, region = string, region_code = string, domain = string, tags = map(string)})"
+    type      = object({tenant = string, namespace = string, region = string, region_code = string, domain = string, tags = map(string)})
     nullable  = false
     sensitive = false
   }
@@ -23,7 +23,7 @@ consumer "./modules/organization" {
 
 producer "./modules/account" {
   output "context" {
-    type      = "object({account_id = string, account_name = string, tenant = string, namespace = string, stage = string, region = string, region_code = string, tags = map(string)})"
+    type      = object({account_id = string, account_name = string, tenant = string, namespace = string, stage = string, region = string, region_code = string, tags = map(string)})
     nullable  = false
     sensitive = false
   }
@@ -31,12 +31,12 @@ producer "./modules/account" {
 
 consumer "./modules/account" {
   input "organization" {
-    type      = "object({tenant = string, namespace = string, region = string, region_code = string, domain = string, tags = map(string)})"
+    type      = object({tenant = string, namespace = string, region = string, region_code = string, domain = string, tags = map(string)})
     nullable  = false
     sensitive = false
   }
   input "account" {
-    type      = "object({account_id = string, name = string, stage = string})"
+    type      = object({account_id = string, name = string, stage = string})
     nullable  = false
     sensitive = false
   }
@@ -46,7 +46,7 @@ consumer "./modules/account" {
 
 producer "./modules/audit" {
   output "telemetry" {
-    type      = "object({archive_bucket_arn = string, kms_key_arn = string, endpoint = string})"
+    type      = object({archive_bucket_arn = string, kms_key_arn = string, endpoint = string})
     nullable  = false
     sensitive = false
   }
@@ -54,7 +54,7 @@ producer "./modules/audit" {
 
 consumer "./modules/audit" {
   input "context" {
-    type      = "object({account_id = string, account_name = string, tenant = string, namespace = string, stage = string, region = string, region_code = string, tags = map(string)})"
+    type      = object({account_id = string, account_name = string, tenant = string, namespace = string, stage = string, region = string, region_code = string, tags = map(string)})
     nullable  = false
     sensitive = false
   }
@@ -62,7 +62,7 @@ consumer "./modules/audit" {
 
 producer "./modules/vpc" {
   output "network" {
-    type      = "object({id = string, account_id = string, region = string, cidr = string, private_subnet_ids = list(string), private_subnet_cidrs = list(string)})"
+    type      = object({id = string, account_id = string, region = string, cidr = string, private_subnet_ids = list(string), private_subnet_cidrs = list(string)})
     nullable  = false
     sensitive = false
   }
@@ -70,12 +70,12 @@ producer "./modules/vpc" {
 
 consumer "./modules/vpc" {
   input "context" {
-    type      = "object({account_id = string, account_name = string, tenant = string, namespace = string, stage = string, region = string, region_code = string, tags = map(string)})"
+    type      = object({account_id = string, account_name = string, tenant = string, namespace = string, stage = string, region = string, region_code = string, tags = map(string)})
     nullable  = false
     sensitive = false
   }
   input "network_config" {
-    type      = "object({purpose = string, cidr = string, availability_zones = optional(list(string)), nat_gateways = optional(number)})"
+    type      = object({purpose = string, cidr = string, availability_zones = optional(list(string)), nat_gateways = optional(number)})
     nullable  = false
     sensitive = false
   }
@@ -83,7 +83,7 @@ consumer "./modules/vpc" {
 
 producer "./modules/transit" {
   output "transit" {
-    type      = "object({id = string, owner_account_id = string, region = string})"
+    type      = object({id = string, owner_account_id = string, region = string})
     nullable  = false
     sensitive = false
   }
@@ -91,12 +91,12 @@ producer "./modules/transit" {
 
 consumer "./modules/transit" {
   input "context" {
-    type      = "object({account_id = string, account_name = string, tenant = string, namespace = string, stage = string, region = string, region_code = string, tags = map(string)})"
+    type      = object({account_id = string, account_name = string, tenant = string, namespace = string, stage = string, region = string, region_code = string, tags = map(string)})
     nullable  = false
     sensitive = false
   }
   input "network" {
-    type      = "object({id = string, account_id = string, region = string, cidr = string, private_subnet_ids = list(string), private_subnet_cidrs = list(string)})"
+    type      = object({id = string, account_id = string, region = string, cidr = string, private_subnet_ids = list(string), private_subnet_cidrs = list(string)})
     nullable  = false
     sensitive = false
   }
@@ -104,12 +104,12 @@ consumer "./modules/transit" {
 
 producer "./modules/shared-services" {
   output "registry" {
-    type      = "object({repository_url = string, owner_account_id = string})"
+    type      = object({repository_url = string, owner_account_id = string})
     nullable  = false
     sensitive = false
   }
   output "dns_zone" {
-    type      = "string"
+    type      = string
     nullable  = false
     sensitive = false
   }
@@ -117,17 +117,17 @@ producer "./modules/shared-services" {
 
 consumer "./modules/shared-services" {
   input "context" {
-    type      = "object({account_id = string, account_name = string, tenant = string, namespace = string, stage = string, region = string, region_code = string, tags = map(string)})"
+    type      = object({account_id = string, account_name = string, tenant = string, namespace = string, stage = string, region = string, region_code = string, tags = map(string)})
     nullable  = false
     sensitive = false
   }
   input "telemetry" {
-    type      = "object({archive_bucket_arn = string, kms_key_arn = string, endpoint = string})"
+    type      = object({archive_bucket_arn = string, kms_key_arn = string, endpoint = string})
     nullable  = false
     sensitive = false
   }
   input "domain" {
-    type      = "string"
+    type      = string
     nullable  = false
     sensitive = false
   }
@@ -135,7 +135,7 @@ consumer "./modules/shared-services" {
 
 producer "./modules/connectivity" {
   output "connectivity" {
-    type      = "object({apps_vpc_id = string, data_vpc_id = string, account_id = string, route_domain = string, transit_gateway_id = string})"
+    type      = object({apps_vpc_id = string, data_vpc_id = string, account_id = string, route_domain = string, transit_gateway_id = string})
     nullable  = false
     sensitive = false
   }
@@ -143,22 +143,22 @@ producer "./modules/connectivity" {
 
 consumer "./modules/connectivity" {
   input "context" {
-    type      = "object({account_id = string, account_name = string, tenant = string, namespace = string, stage = string, region = string, region_code = string, tags = map(string)})"
+    type      = object({account_id = string, account_name = string, tenant = string, namespace = string, stage = string, region = string, region_code = string, tags = map(string)})
     nullable  = false
     sensitive = false
   }
   input "apps_network" {
-    type      = "object({id = string, account_id = string, region = string, cidr = string, private_subnet_ids = list(string), private_subnet_cidrs = list(string)})"
+    type      = object({id = string, account_id = string, region = string, cidr = string, private_subnet_ids = list(string), private_subnet_cidrs = list(string)})
     nullable  = false
     sensitive = false
   }
   input "data_network" {
-    type      = "object({id = string, account_id = string, region = string, cidr = string, private_subnet_ids = list(string), private_subnet_cidrs = list(string)})"
+    type      = object({id = string, account_id = string, region = string, cidr = string, private_subnet_ids = list(string), private_subnet_cidrs = list(string)})
     nullable  = false
     sensitive = false
   }
   input "transit" {
-    type      = "object({id = string, owner_account_id = string, region = string})"
+    type      = object({id = string, owner_account_id = string, region = string})
     nullable  = false
     sensitive = false
   }
@@ -166,7 +166,7 @@ consumer "./modules/connectivity" {
 
 producer "./modules/eks" {
   output "cluster" {
-    type      = "object({name = string, arn = string, endpoint = string, oidc_provider_arn = string, account_id = string, vpc_id = string, version = string})"
+    type      = object({name = string, arn = string, endpoint = string, oidc_provider_arn = string, account_id = string, vpc_id = string, version = string})
     nullable  = false
     sensitive = false
   }
@@ -174,22 +174,22 @@ producer "./modules/eks" {
 
 consumer "./modules/eks" {
   input "context" {
-    type      = "object({account_id = string, account_name = string, tenant = string, namespace = string, stage = string, region = string, region_code = string, tags = map(string)})"
+    type      = object({account_id = string, account_name = string, tenant = string, namespace = string, stage = string, region = string, region_code = string, tags = map(string)})
     nullable  = false
     sensitive = false
   }
   input "network" {
-    type      = "object({id = string, account_id = string, region = string, cidr = string, private_subnet_ids = list(string), private_subnet_cidrs = list(string)})"
+    type      = object({id = string, account_id = string, region = string, cidr = string, private_subnet_ids = list(string), private_subnet_cidrs = list(string)})
     nullable  = false
     sensitive = false
   }
   input "telemetry" {
-    type      = "object({archive_bucket_arn = string, kms_key_arn = string, endpoint = string})"
+    type      = object({archive_bucket_arn = string, kms_key_arn = string, endpoint = string})
     nullable  = false
     sensitive = false
   }
   input "cluster_config" {
-    type      = "object({version = string, private_endpoint = optional(bool)})"
+    type      = object({version = string, private_endpoint = optional(bool)})
     nullable  = false
     sensitive = false
   }
@@ -197,7 +197,7 @@ consumer "./modules/eks" {
 
 producer "./modules/node-pool" {
   output "pool" {
-    type      = "object({name = string, cluster_name = string, desired_size = number, capacity_type = string})"
+    type      = object({name = string, cluster_name = string, desired_size = number, capacity_type = string})
     nullable  = false
     sensitive = false
   }
@@ -205,17 +205,17 @@ producer "./modules/node-pool" {
 
 consumer "./modules/node-pool" {
   input "context" {
-    type      = "object({account_id = string, account_name = string, tenant = string, namespace = string, stage = string, region = string, region_code = string, tags = map(string)})"
+    type      = object({account_id = string, account_name = string, tenant = string, namespace = string, stage = string, region = string, region_code = string, tags = map(string)})
     nullable  = false
     sensitive = false
   }
   input "cluster" {
-    type      = "object({name = string, arn = string, endpoint = string, oidc_provider_arn = string, account_id = string, vpc_id = string, version = string})"
+    type      = object({name = string, arn = string, endpoint = string, oidc_provider_arn = string, account_id = string, vpc_id = string, version = string})
     nullable  = false
     sensitive = false
   }
   input "pool_config" {
-    type      = "object({name = string, capacity_type = string, min_size = number, desired_size = number, max_size = number})"
+    type      = object({name = string, capacity_type = string, min_size = number, desired_size = number, max_size = number})
     nullable  = false
     sensitive = false
   }
@@ -223,7 +223,7 @@ consumer "./modules/node-pool" {
 
 producer "./modules/addons" {
   output "addons" {
-    type      = "object({cluster_name = string, controllers = list(string)})"
+    type      = object({cluster_name = string, controllers = list(string)})
     nullable  = false
     sensitive = false
   }
@@ -231,17 +231,17 @@ producer "./modules/addons" {
 
 consumer "./modules/addons" {
   input "context" {
-    type      = "object({account_id = string, account_name = string, tenant = string, namespace = string, stage = string, region = string, region_code = string, tags = map(string)})"
+    type      = object({account_id = string, account_name = string, tenant = string, namespace = string, stage = string, region = string, region_code = string, tags = map(string)})
     nullable  = false
     sensitive = false
   }
   input "cluster" {
-    type      = "object({name = string, arn = string, endpoint = string, oidc_provider_arn = string, account_id = string, vpc_id = string, version = string})"
+    type      = object({name = string, arn = string, endpoint = string, oidc_provider_arn = string, account_id = string, vpc_id = string, version = string})
     nullable  = false
     sensitive = false
   }
   input "telemetry" {
-    type      = "object({archive_bucket_arn = string, kms_key_arn = string, endpoint = string})"
+    type      = object({archive_bucket_arn = string, kms_key_arn = string, endpoint = string})
     nullable  = false
     sensitive = false
   }
@@ -249,12 +249,12 @@ consumer "./modules/addons" {
 
 producer "./modules/database" {
   output "database" {
-    type      = "object({endpoint = string, port = number, name = string, account_id = string, vpc_id = string})"
+    type      = object({endpoint = string, port = number, name = string, account_id = string, vpc_id = string})
     nullable  = false
     sensitive = false
   }
   output "credentials" {
-    type      = "object({username = string, password = string})"
+    type      = object({username = string, password = string})
     nullable  = false
     sensitive = true
   }
@@ -262,17 +262,17 @@ producer "./modules/database" {
 
 consumer "./modules/database" {
   input "context" {
-    type      = "object({account_id = string, account_name = string, tenant = string, namespace = string, stage = string, region = string, region_code = string, tags = map(string)})"
+    type      = object({account_id = string, account_name = string, tenant = string, namespace = string, stage = string, region = string, region_code = string, tags = map(string)})
     nullable  = false
     sensitive = false
   }
   input "network" {
-    type      = "object({id = string, account_id = string, region = string, cidr = string, private_subnet_ids = list(string), private_subnet_cidrs = list(string)})"
+    type      = object({id = string, account_id = string, region = string, cidr = string, private_subnet_ids = list(string), private_subnet_cidrs = list(string)})
     nullable  = false
     sensitive = false
   }
   input "data_config" {
-    type      = "object({multi_az = bool, backup_retention_days = number, cache_nodes = number})"
+    type      = object({multi_az = bool, backup_retention_days = number, cache_nodes = number})
     nullable  = false
     sensitive = false
   }
@@ -280,7 +280,7 @@ consumer "./modules/database" {
 
 producer "./modules/cache" {
   output "cache" {
-    type      = "object({endpoint = string, port = number, account_id = string, vpc_id = string})"
+    type      = object({endpoint = string, port = number, account_id = string, vpc_id = string})
     nullable  = false
     sensitive = false
   }
@@ -288,17 +288,17 @@ producer "./modules/cache" {
 
 consumer "./modules/cache" {
   input "context" {
-    type      = "object({account_id = string, account_name = string, tenant = string, namespace = string, stage = string, region = string, region_code = string, tags = map(string)})"
+    type      = object({account_id = string, account_name = string, tenant = string, namespace = string, stage = string, region = string, region_code = string, tags = map(string)})
     nullable  = false
     sensitive = false
   }
   input "network" {
-    type      = "object({id = string, account_id = string, region = string, cidr = string, private_subnet_ids = list(string), private_subnet_cidrs = list(string)})"
+    type      = object({id = string, account_id = string, region = string, cidr = string, private_subnet_ids = list(string), private_subnet_cidrs = list(string)})
     nullable  = false
     sensitive = false
   }
   input "data_config" {
-    type      = "object({multi_az = bool, backup_retention_days = number, cache_nodes = number})"
+    type      = object({multi_az = bool, backup_retention_days = number, cache_nodes = number})
     nullable  = false
     sensitive = false
   }
@@ -306,7 +306,7 @@ consumer "./modules/cache" {
 
 producer "./modules/queue" {
   output "queue" {
-    type      = "object({arn = string, url = string, account_id = string})"
+    type      = object({arn = string, url = string, account_id = string})
     nullable  = false
     sensitive = false
   }
@@ -314,7 +314,7 @@ producer "./modules/queue" {
 
 consumer "./modules/queue" {
   input "context" {
-    type      = "object({account_id = string, account_name = string, tenant = string, namespace = string, stage = string, region = string, region_code = string, tags = map(string)})"
+    type      = object({account_id = string, account_name = string, tenant = string, namespace = string, stage = string, region = string, region_code = string, tags = map(string)})
     nullable  = false
     sensitive = false
   }
@@ -322,7 +322,7 @@ consumer "./modules/queue" {
 
 producer "./modules/pod-identity" {
   output "identity" {
-    type      = "object({role_arn = string, namespace = string, service_account = string, account_id = string, cluster_name = string})"
+    type      = object({role_arn = string, namespace = string, service_account = string, account_id = string, cluster_name = string})
     nullable  = false
     sensitive = false
   }
@@ -330,22 +330,22 @@ producer "./modules/pod-identity" {
 
 consumer "./modules/pod-identity" {
   input "context" {
-    type      = "object({account_id = string, account_name = string, tenant = string, namespace = string, stage = string, region = string, region_code = string, tags = map(string)})"
+    type      = object({account_id = string, account_name = string, tenant = string, namespace = string, stage = string, region = string, region_code = string, tags = map(string)})
     nullable  = false
     sensitive = false
   }
   input "cluster" {
-    type      = "object({name = string, arn = string, endpoint = string, oidc_provider_arn = string, account_id = string, vpc_id = string, version = string})"
+    type      = object({name = string, arn = string, endpoint = string, oidc_provider_arn = string, account_id = string, vpc_id = string, version = string})
     nullable  = false
     sensitive = false
   }
   input "queue" {
-    type      = "object({arn = string, url = string, account_id = string})"
+    type      = object({arn = string, url = string, account_id = string})
     nullable  = false
     sensitive = false
   }
   input "service_config" {
-    type      = "object({name = string, image_tag = string, replicas = number})"
+    type      = object({name = string, image_tag = string, replicas = number})
     nullable  = false
     sensitive = false
   }
@@ -353,7 +353,7 @@ consumer "./modules/pod-identity" {
 
 producer "./modules/workload" {
   output "service" {
-    type      = "object({name = string, url = string, image = string, replicas = number, account_id = string, cluster_name = string})"
+    type      = object({name = string, url = string, image = string, replicas = number, account_id = string, cluster_name = string})
     nullable  = false
     sensitive = false
   }
@@ -361,62 +361,62 @@ producer "./modules/workload" {
 
 consumer "./modules/workload" {
   input "context" {
-    type      = "object({account_id = string, account_name = string, tenant = string, namespace = string, stage = string, region = string, region_code = string, tags = map(string)})"
+    type      = object({account_id = string, account_name = string, tenant = string, namespace = string, stage = string, region = string, region_code = string, tags = map(string)})
     nullable  = false
     sensitive = false
   }
   input "cluster" {
-    type      = "object({name = string, arn = string, endpoint = string, oidc_provider_arn = string, account_id = string, vpc_id = string, version = string})"
+    type      = object({name = string, arn = string, endpoint = string, oidc_provider_arn = string, account_id = string, vpc_id = string, version = string})
     nullable  = false
     sensitive = false
   }
   input "addons" {
-    type      = "object({cluster_name = string, controllers = list(string)})"
+    type      = object({cluster_name = string, controllers = list(string)})
     nullable  = false
     sensitive = false
   }
   input "connectivity" {
-    type      = "object({apps_vpc_id = string, data_vpc_id = string, account_id = string, route_domain = string, transit_gateway_id = string})"
+    type      = object({apps_vpc_id = string, data_vpc_id = string, account_id = string, route_domain = string, transit_gateway_id = string})
     nullable  = false
     sensitive = false
   }
   input "database" {
-    type      = "object({endpoint = string, port = number, name = string, account_id = string, vpc_id = string})"
+    type      = object({endpoint = string, port = number, name = string, account_id = string, vpc_id = string})
     nullable  = false
     sensitive = false
   }
   input "credentials" {
-    type      = "object({username = string, password = string})"
+    type      = object({username = string, password = string})
     nullable  = false
     sensitive = true
   }
   input "cache" {
-    type      = "object({endpoint = string, port = number, account_id = string, vpc_id = string})"
+    type      = object({endpoint = string, port = number, account_id = string, vpc_id = string})
     nullable  = false
     sensitive = false
   }
   input "queue" {
-    type      = "object({arn = string, url = string, account_id = string})"
+    type      = object({arn = string, url = string, account_id = string})
     nullable  = false
     sensitive = false
   }
   input "identity" {
-    type      = "object({role_arn = string, namespace = string, service_account = string, account_id = string, cluster_name = string})"
+    type      = object({role_arn = string, namespace = string, service_account = string, account_id = string, cluster_name = string})
     nullable  = false
     sensitive = false
   }
   input "registry" {
-    type      = "object({repository_url = string, owner_account_id = string})"
+    type      = object({repository_url = string, owner_account_id = string})
     nullable  = false
     sensitive = false
   }
   input "dns_zone" {
-    type      = "string"
+    type      = string
     nullable  = false
     sensitive = false
   }
   input "service_config" {
-    type      = "object({name = string, image_tag = string, replicas = number})"
+    type      = object({name = string, image_tag = string, replicas = number})
     nullable  = false
     sensitive = false
   }
@@ -424,7 +424,7 @@ consumer "./modules/workload" {
 
 producer "./modules/release" {
   output "release" {
-    type      = "object({stage = string, account_id = string, cluster_name = string, apps_vpc_id = string, data_vpc_id = string, services = list(string)})"
+    type      = object({stage = string, account_id = string, cluster_name = string, apps_vpc_id = string, data_vpc_id = string, services = list(string)})
     nullable  = false
     sensitive = false
   }
@@ -432,27 +432,27 @@ producer "./modules/release" {
 
 consumer "./modules/release" {
   input "context" {
-    type      = "object({account_id = string, account_name = string, tenant = string, namespace = string, stage = string, region = string, region_code = string, tags = map(string)})"
+    type      = object({account_id = string, account_name = string, tenant = string, namespace = string, stage = string, region = string, region_code = string, tags = map(string)})
     nullable  = false
     sensitive = false
   }
   input "cluster" {
-    type      = "object({name = string, arn = string, endpoint = string, oidc_provider_arn = string, account_id = string, vpc_id = string, version = string})"
+    type      = object({name = string, arn = string, endpoint = string, oidc_provider_arn = string, account_id = string, vpc_id = string, version = string})
     nullable  = false
     sensitive = false
   }
   input "connectivity" {
-    type      = "object({apps_vpc_id = string, data_vpc_id = string, account_id = string, route_domain = string, transit_gateway_id = string})"
+    type      = object({apps_vpc_id = string, data_vpc_id = string, account_id = string, route_domain = string, transit_gateway_id = string})
     nullable  = false
     sensitive = false
   }
   input "checkout" {
-    type      = "object({name = string, url = string, image = string, replicas = number, account_id = string, cluster_name = string})"
+    type      = object({name = string, url = string, image = string, replicas = number, account_id = string, cluster_name = string})
     nullable  = false
     sensitive = false
   }
   input "payments" {
-    type      = "object({name = string, url = string, image = string, replicas = number, account_id = string, cluster_name = string})"
+    type      = object({name = string, url = string, image = string, replicas = number, account_id = string, cluster_name = string})
     nullable  = false
     sensitive = false
   }
@@ -460,12 +460,12 @@ consumer "./modules/release" {
 
 producer "./modules/landscape" {
   output "environments" {
-    type      = "map(object({stage = string, account_id = string, cluster_name = string, apps_vpc_id = string, data_vpc_id = string, services = list(string)}))"
+    type      = map(object({stage = string, account_id = string, cluster_name = string, apps_vpc_id = string, data_vpc_id = string, services = list(string)}))
     nullable  = false
     sensitive = false
   }
   output "summary" {
-    type      = "string"
+    type      = string
     nullable  = false
     sensitive = false
   }
@@ -473,17 +473,17 @@ producer "./modules/landscape" {
 
 consumer "./modules/landscape" {
   input "dev" {
-    type      = "object({stage = string, account_id = string, cluster_name = string, apps_vpc_id = string, data_vpc_id = string, services = list(string)})"
+    type      = object({stage = string, account_id = string, cluster_name = string, apps_vpc_id = string, data_vpc_id = string, services = list(string)})
     nullable  = false
     sensitive = false
   }
   input "stg" {
-    type      = "object({stage = string, account_id = string, cluster_name = string, apps_vpc_id = string, data_vpc_id = string, services = list(string)})"
+    type      = object({stage = string, account_id = string, cluster_name = string, apps_vpc_id = string, data_vpc_id = string, services = list(string)})
     nullable  = false
     sensitive = false
   }
   input "prd" {
-    type      = "object({stage = string, account_id = string, cluster_name = string, apps_vpc_id = string, data_vpc_id = string, services = list(string)})"
+    type      = object({stage = string, account_id = string, cluster_name = string, apps_vpc_id = string, data_vpc_id = string, services = list(string)})
     nullable  = false
     sensitive = false
   }
