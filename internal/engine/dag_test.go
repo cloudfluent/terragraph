@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -201,5 +202,46 @@ func TestRunLevels_OverlappingFailurePreservesExecutionJournal(t *testing.T) {
 	}
 	if record.Status != "needs_recovery" || record.Nodes[1].Phase != "indeterminate" || record.Nodes[2].Phase != "completed" || record.Nodes[3].Phase != "pending" {
 		t.Fatalf("record = %+v, want preserved completion and explicit recovery", record)
+	}
+}
+
+func TestRunLevels_ExplicitStopSkipsQueuedSiblings(t *testing.T) {
+	e := dagFixture(t)
+	failure := errors.New("stop")
+	runs, err := e.runLevels(Options{FailurePolicy: "stop"}, false, func(name string, _ map[string]exec.Outputs, _ io.Writer) (exec.Outputs, string, error) {
+		if name != "a" {
+			t.Errorf("got node = %q, want a only", name)
+		}
+		return nil, "", failure
+	}, nil)
+	if !errors.Is(err, failure) || runs[1].Status != StatusNotRun {
+		t.Fatalf("got = %+v, %v", runs, err)
+	}
+}
+
+func TestRunLevels_ExplicitContinueProtectsDestroyProducers(t *testing.T) {
+	e := dagFixture(t)
+	failure := errors.New("delete failed")
+	runs, err := e.runLevels(Options{FailurePolicy: "continue"}, true, func(name string, _ map[string]exec.Outputs, _ io.Writer) (exec.Outputs, string, error) {
+		if name == "child" {
+			return nil, "", failure
+		}
+		if name == "a" {
+			t.Error("producer destroyed after consumer failed")
+		}
+		return nil, StatusDestroyed, nil
+	}, nil)
+	if !errors.Is(err, failure) || runs[2].Status != StatusNotRun || runs[3].Status != StatusDestroyed {
+		t.Fatalf("got = %+v, %v", runs, err)
+	}
+}
+
+func TestSavedExecution_FailurePolicyCannotOverrideRecovery(t *testing.T) {
+	e := dagFixture(t)
+	if _, err := e.SavePlans(Options{FailurePolicy: "continue"}, ""); err == nil || !strings.Contains(err.Error(), "saved frontiers") {
+		t.Fatalf("got = %v, want unsupported saved policy rejected", err)
+	}
+	if _, err := e.ApplySavedPlans("run-missing", Options{FailurePolicy: "stop"}); err == nil || !strings.Contains(err.Error(), "saved frontiers") {
+		t.Fatalf("got = %v, want unsupported saved policy rejected before storage", err)
 	}
 }

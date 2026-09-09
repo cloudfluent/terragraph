@@ -423,3 +423,9 @@ never automatic replay. Contract meaning and mode participate in retained-plan
 bindings. Review JSON exposes independent conditions through `review.contracts`.
 Known null is reconstructed only from the same successful plan, never from a
 missing live output. See the contracts reference for restart and recovery limits.
+
+### Failure handling
+
+`plan`, `apply`, and `destroy` accept `--on-failure stop` or `--on-failure continue`. Omission preserves the existing command default: review planning continues independent branches, while ordinary plan/apply/destroy finish queued siblings in the failed level and start no new work beyond that level once the failure is observed. `stop` stops all new dispatch after an observed failure; already-running actions finish normally. `continue` runs independent branches and blocks transitive dependents of failures (producers in destroy's reverse direction). Every failure still returns a nonzero exit status. Reports retain existing statuses and diagnostics, and the execution journal retains observed mutation outcomes.
+
+This is invocation scheduling policy, not a retry or recovery mechanism. Saved frontier commands (`plan --save`, `--continue`, and `apply --plan`) reject the flag and retain their explicit continuation/recovery rules. Cancellation always stops new dispatch regardless of this setting.

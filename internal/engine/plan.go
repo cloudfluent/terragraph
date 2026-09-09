@@ -21,6 +21,9 @@ func (e *Engine) ReviewPlan(opts Options, allowTextFallback bool) (RunResult, er
 }
 
 func (e *Engine) plan(opts Options, inspect, allowTextFallback bool) (result RunResult, resultErr error) {
+	if err := opts.validateFailurePolicy(false); err != nil {
+		return result, err
+	}
 	opts, selectionErr := e.resolveSelection(opts)
 	if selectionErr != nil {
 		return result, selectionErr

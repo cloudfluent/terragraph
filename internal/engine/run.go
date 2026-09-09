@@ -16,6 +16,8 @@ import (
 type Options struct {
 	// RetainPlan persists optional plan artifacts without pausing ordinary apply.
 	RetainPlan bool
+	// FailurePolicy is opt-in so existing commands retain their distinct failure boundaries.
+	FailurePolicy string
 	// Nodes is nil for the whole graph; a non-nil empty list must never silently broaden execution.
 	Nodes []string
 	// Downstream follows both data and ordering dependencies so consumers cannot be omitted by edge kind.
@@ -88,11 +90,17 @@ type nodeAction func(name string, applied map[string]exec.Outputs, out io.Writer
 
 // runLevels dispatches selected nodes as their prerequisites succeed, retaining level labels and the existing failure boundary so queued siblings still run after an ordinary failure.
 func (e *Engine) runLevels(opts Options, reverse bool, action nodeAction, afterLevel func() error, preserveIndependent ...bool) (runs []NodeRun, err error) {
+	if err := opts.validateFailurePolicy(false); err != nil {
+		return nil, err
+	}
 	levels, err := e.executionLevels(opts, reverse)
 	if err != nil {
 		return nil, err
 	}
 	keepGoing := len(preserveIndependent) > 0 && preserveIndependent[0]
+	if opts.FailurePolicy != "" {
+		keepGoing = opts.FailurePolicy == "continue"
+	}
 	runs = make([]NodeRun, 0)
 	indices := map[string]int{}
 	for li, level := range levels {
@@ -121,6 +129,9 @@ func (e *Engine) runLevels(opts Options, reverse bool, action nodeAction, afterL
 			runs[i].Diagnostics = Diagnostics(nodeErr, Diagnostic{Code: "runtime_failed", Category: "runtime", Phase: "execute", Subject: "node." + runs[i].Node})
 			if !keepGoing && runs[i].Level < failureLevel {
 				failureLevel = runs[i].Level
+				if opts.FailurePolicy == "stop" {
+					failureLevel = 0
+				}
 			}
 		}
 	}
@@ -260,4 +271,15 @@ func (o Options) announceSelection(reverse bool) {
 		slices.Reverse(levels)
 	}
 	o.OnSelection(o.selection, levels)
+}
+
+// validateFailurePolicy rejects controls the stored-frontier flow cannot honor instead of silently changing recovery semantics.
+func (opts Options) validateFailurePolicy(saved bool) error {
+	if opts.FailurePolicy != "" && opts.FailurePolicy != "stop" && opts.FailurePolicy != "continue" {
+		return WithDiagnostic(fmt.Errorf("--on-failure %q: use stop or continue, or omit the flag for the command default", opts.FailurePolicy), Diagnostic{Code: "invalid_arguments", Category: "arguments", Phase: "arguments"})
+	}
+	if saved && opts.FailurePolicy != "" {
+		return WithDiagnostic(fmt.Errorf("--on-failure does not apply to saved frontiers; omit it and follow the execution's explicit continuation and recovery rules"), Diagnostic{Code: "invalid_arguments", Category: "arguments", Phase: "arguments"})
+	}
+	return nil
 }

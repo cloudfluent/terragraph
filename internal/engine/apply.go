@@ -15,6 +15,9 @@ import (
 //
 // When the plan does report changes, that plan is what gets applied (see Runner.PlanChanges/ApplyPlan), so a node refreshes once and the change made is the change that was planned.
 func (e *Engine) Apply(opts Options) (result RunResult, resultErr error) {
+	if err := opts.validateFailurePolicy(false); err != nil {
+		return result, err
+	}
 	opts, selectionErr := e.resolveSelection(opts)
 	if selectionErr != nil {
 		return result, selectionErr
