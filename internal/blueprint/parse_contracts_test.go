@@ -296,3 +296,58 @@ producer "`+strings.ReplaceAll(scope, `\`, `\\`)+`" {
 		}
 	}
 }
+
+func TestParseContracts_NativeAndStringHaveSameOptionalIdentity(t *testing.T) {
+	base := t.TempDir()
+	path := filepath.Join(base, "blueprint.hcl")
+	writeContractsFile(t, path, `producer "./m" {
+ output "value" { type = object({ z = optional(string), a = number }) }
+}`)
+	native, err := ParseFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeContractsFile(t, path, `producer "./m" {
+ output "value" { type = "object({a=number,z=optional(string)})" }
+}`)
+	legacy, err := ParseFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := native.Contracts.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := legacy.Contracts.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != second {
+		t.Fatalf("got = %s, want %s", second, first)
+	}
+	writeContractsFile(t, path, `producer "./m" {
+ output "value" { type = object({a=number,z=string}) }
+}`)
+	required, err := ParseFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	third, err := required.Contracts.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == third {
+		t.Fatal("optional and required attributes have the same identity")
+	}
+}
+
+func TestParseContracts_NullFlagsReturnErrors(t *testing.T) {
+	base := t.TempDir()
+	path := filepath.Join(base, "blueprint.hcl")
+	writeContractsFile(t, path, `consumer "./m" {
+ input "value" { nullable = null }
+}`)
+	if _, err := ParseFile(path); err == nil {
+		t.Fatal("null nullable flag accepted")
+	}
+}

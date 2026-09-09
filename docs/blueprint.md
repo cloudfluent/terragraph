@@ -256,4 +256,4 @@ A blueprint may contain one `snapshots` block; it accepts no settings. During `a
 
 Snapshots are a last resort after this run's applied outputs and live `terraform output`. They may be stale and do not replace a refreshed plan or automatically apply upstream nodes. Without the block, snapshots are neither written nor used. See [output snapshots](execution-model.md#output-snapshots) for fallback conditions and refreshing existing snapshots.
 
-For additional checks on values exchanged between modules, see [producer and consumer contracts](contracts.md).
+For additional checks on values exchanged between modules, see [producer and consumer contracts](contracts.md). Contract types accept native expressions such as `type = list(string)` and legacy strings. Consumer type omission retains the module variable's type check. Explicit contracts add actual-value checks during plan/apply, with `warn` as the default and `enforce` to block violations.

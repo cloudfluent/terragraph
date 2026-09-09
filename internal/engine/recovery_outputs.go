@@ -77,5 +77,8 @@ func (e *Engine) recoverNodeOutputs(session *executionSession, name string, allo
 	if err != nil {
 		return fmt.Errorf("node.%s: reading outputs without reapplying: %w", name, err)
 	}
+	if err := e.validateOutputContracts(name, outputs); err != nil {
+		return err
+	}
 	return e.writeSnapshot(name, outputs)
 }

@@ -26,6 +26,12 @@ type Variable struct {
 	Deprecated  string
 	// Required is true when the variable has no default value.
 	Required bool
+	// Nullable preserves the runtime default (true) for declarations and legacy in-memory schemas.
+	Nullable *bool
+	// Default retains the chosen literal after override selection; NilVal means no usable evidence.
+	Default   cty.Value
+	Ephemeral bool
+	Const     bool
 }
 
 type Output struct {
@@ -36,7 +42,7 @@ type Output struct {
 	Deprecated  string
 }
 
-// Schema is the subset of a root module's shape that terragraph cares about: its declared input variables (with type/required metadata), the names of its output values, and the backend type if any. Standard root module outputs don't declare a type (that's an HCP Terraform Stacks-only feature), so Outputs only tracks presence.
+// Schema is the subset of a root module's shape that terragraph cares about: its declared input variables (with type/required metadata), the names of its output values, and the backend type if any. OutputDetails retains optional output type declarations for runtimes that support them.
 type Schema struct {
 	// RequiresTofuFiles marks selected OpenTofu-only files so execution can verify the installed runtime understands the statically inspected declarations.
 	RequiresTofuFiles bool
@@ -203,7 +209,7 @@ func inspectDeclarations(schema *Schema, files []moduleFile) {
 	}
 }
 
-var portMetadataSchema = &hcl.BodySchema{Attributes: []hcl.AttributeSchema{{Name: "type"}, {Name: "description"}, {Name: "sensitive"}, {Name: "deprecated"}, {Name: "default"}}}
+var portMetadataSchema = &hcl.BodySchema{Attributes: []hcl.AttributeSchema{{Name: "type"}, {Name: "description"}, {Name: "sensitive"}, {Name: "deprecated"}, {Name: "default"}, {Name: "nullable"}, {Name: "ephemeral"}, {Name: "const"}}}
 
 // applyPortMetadata retains omitted attributes in sparse override files, which tfconfig otherwise replaces with zero values, including sensitive=false.
 func applyPortMetadata(schema *Schema, ports map[string]hcl.Attributes, sources map[string][]byte) {
@@ -226,7 +232,25 @@ func applyPortMetadata(schema *Schema, ports map[string]hcl.Attributes, sources 
 		}
 		kind, name, _ := strings.Cut(key, ".")
 		if kind == "variable" {
-			schema.Variables[name] = Variable{Name: name, Type: text("type"), Description: text("description"), Sensitive: sensitive, Deprecated: text("deprecated"), Required: attrs["default"] == nil}
+			v := Variable{Name: name, Type: text("type"), Description: text("description"), Sensitive: sensitive, Deprecated: text("deprecated"), Required: attrs["default"] == nil}
+			nullable := true
+			if attr := attrs["nullable"]; attr != nil {
+				_ = gohcl.DecodeExpression(attr.Expr, nil, &nullable)
+			}
+			v.Nullable = &nullable
+			if attr := attrs["ephemeral"]; attr != nil {
+				_ = gohcl.DecodeExpression(attr.Expr, nil, &v.Ephemeral)
+			}
+			if attr := attrs["const"]; attr != nil {
+				_ = gohcl.DecodeExpression(attr.Expr, nil, &v.Const)
+			}
+			if attr := attrs["default"]; attr != nil {
+				value, diags := attr.Expr.Value(nil)
+				if !diags.HasErrors() {
+					v.Default = value
+				}
+			}
+			schema.Variables[name] = v
 			if attr := attrs["default"]; attr != nil {
 				schema.comparison[key] = map[string]string{"default": expressionIdentity(attr.Expr, sources[attr.Expr.Range().Filename])}
 			}

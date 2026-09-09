@@ -31,17 +31,23 @@ type inputBasisDTO struct {
 	Output string `json:"output"`
 	Source string `json:"source"`
 }
+type contractCheckDTO struct {
+	Port      string `json:"port"`
+	Condition string `json:"condition"`
+	Result    string `json:"result"`
+}
 type planReviewDTO struct {
-	Evidence    bool              `json:"evidence_available"`
-	HasChanges  *bool             `json:"has_changes"`
-	Resources   []planActionDTO   `json:"resource_changes"`
-	Counts      *planCountsDTO    `json:"counts"`
-	Outputs     []outputChangeDTO `json:"output_changes"`
-	Policy      string            `json:"approve"`
-	Decision    string            `json:"policy_decision"`
-	Inputs      []inputBasisDTO   `json:"input_basis"`
-	Limitations []string          `json:"limitations"`
-	Diagnostics []diagnosticDTO   `json:"diagnostics"`
+	Contracts   []contractCheckDTO `json:"contracts"`
+	Evidence    bool               `json:"evidence_available"`
+	HasChanges  *bool              `json:"has_changes"`
+	Resources   []planActionDTO    `json:"resource_changes"`
+	Counts      *planCountsDTO     `json:"counts"`
+	Outputs     []outputChangeDTO  `json:"output_changes"`
+	Policy      string             `json:"approve"`
+	Decision    string             `json:"policy_decision"`
+	Inputs      []inputBasisDTO    `json:"input_basis"`
+	Limitations []string           `json:"limitations"`
+	Diagnostics []diagnosticDTO    `json:"diagnostics"`
 }
 type planResultDTO struct {
 	ExecutionID   string          `json:"execution_id,omitempty"`
@@ -55,7 +61,10 @@ func reviewToDTO(review *engine.PlanReview) *planReviewDTO {
 	if review == nil {
 		return nil
 	}
-	dto := &planReviewDTO{Evidence: review.Evidence, HasChanges: review.HasChanges, Resources: []planActionDTO{}, Outputs: []outputChangeDTO{}, Policy: string(review.Policy), Decision: review.PolicyDecision, Inputs: []inputBasisDTO{}, Limitations: review.Limitations, Diagnostics: []diagnosticDTO{}}
+	dto := &planReviewDTO{Contracts: []contractCheckDTO{}, Evidence: review.Evidence, HasChanges: review.HasChanges, Resources: []planActionDTO{}, Outputs: []outputChangeDTO{}, Policy: string(review.Policy), Decision: review.PolicyDecision, Inputs: []inputBasisDTO{}, Limitations: review.Limitations, Diagnostics: []diagnosticDTO{}}
+	for _, check := range review.Contracts {
+		dto.Contracts = append(dto.Contracts, contractCheckDTO{check.Port, check.Condition, string(check.Result)})
+	}
 	counts := &planCountsDTO{}
 	for _, resource := range review.Resources {
 		category := "other"

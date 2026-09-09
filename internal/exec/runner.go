@@ -172,18 +172,9 @@ type OutputChange struct {
 
 // PlanChangeSet reads action metadata from the saved plan; optional output extraction also verifies the JSON format before claiming evidence.
 func (r *Runner) PlanChangeSet(planPath string, outputChanges ...*[]OutputChange) ([]ResourceChange, error) {
-	env, err := r.env()
+	data, err := r.planJSON(planPath)
 	if err != nil {
 		return nil, err
-	}
-	var stdout bytes.Buffer
-	cmd := osexec.Command(string(r.Binary), "show", "-json", planPath)
-	cmd.Dir = r.Dir
-	cmd.Env = env
-	cmd.Stdout = &stdout
-	cmd.Stderr = r.Stderr
-	if err := runCommand(r.Context, cmd); err != nil {
-		return nil, fmt.Errorf("running %s show -json in %s: %w", r.Binary, r.Dir, err)
 	}
 
 	var doc struct {
@@ -198,7 +189,7 @@ func (r *Runner) PlanChangeSet(planPath string, outputChanges ...*[]OutputChange
 			} `json:"change"`
 		} `json:"resource_changes"`
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &doc); err != nil {
+	if err := json.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("parsing %s show -json in %s: %w", r.Binary, r.Dir, err)
 	}
 
@@ -220,6 +211,25 @@ func (r *Runner) PlanChangeSet(planPath string, outputChanges ...*[]OutputChange
 		changes = append(changes, ResourceChange{Address: rc.Address, Actions: rc.Change.Actions})
 	}
 	return changes, nil
+}
+
+// planJSON keeps every saved-plan read inside the subprocess wrapper.
+func (r *Runner) planJSON(planPath string) ([]byte, error) {
+	env, err := r.env()
+	if err != nil {
+		return nil, err
+	}
+	var stdout bytes.Buffer
+	cmd := osexec.Command(string(r.Binary), "show", "-json", planPath)
+	cmd.Dir = r.Dir
+	cmd.Env = env
+	cmd.Stdout = &stdout
+	cmd.Stderr = r.Stderr
+	if err := runCommand(r.Context, cmd); err != nil {
+		return nil, fmt.Errorf("running %s show -json in %s: %w", r.Binary, r.Dir, err)
+	}
+
+	return stdout.Bytes(), nil
 }
 
 // BackendType reports the backend a previous Init configured for this node, read from the metadata Terraform writes into its own data directory. An empty string means no backend was recorded, which is the ordinary case for a module that declares no backend block at all (the implicit local backend).
@@ -267,6 +277,10 @@ func (r *Runner) Destroy(autoApprove bool, extraArgs ...string) error {
 // Output retains runtime sensitivity because a static module declaration can differ from the files OpenTofu actually executes.
 type Output struct {
 	Value any `json:"value"`
+	// Type distinguishes sets and maps from their lossy JSON array/object representation.
+	Type json.RawMessage `json:"type,omitempty"`
+	// Unknown carries the plan mask in memory only; output -json values are fully known.
+	Unknown any `json:"-"`
 	// Nil means the runtime omitted sensitivity metadata; absence must never authorize snapshot persistence.
 	Sensitive *bool `json:"sensitive"`
 }

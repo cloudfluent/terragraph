@@ -7,10 +7,6 @@ import (
 	"os"
 	"slices"
 
-	"github.com/hashicorp/hcl/v2"
-	"github.com/hashicorp/hcl/v2/ext/typeexpr"
-	"github.com/hashicorp/hcl/v2/hclsyntax"
-	"github.com/zclconf/go-cty/cty/convert"
 	ctyjson "github.com/zclconf/go-cty/cty/json"
 
 	"github.com/cloudfluent/terragraph/internal/blueprint"
@@ -80,7 +76,7 @@ func (e *Engine) resolveInputsWithBasis(name string, applied map[string]exec.Out
 						// Snapshot loading has already withheld values without verified public metadata.
 						public := false
 						for key, value := range snapshot.Outputs {
-							outputs[key] = exec.Output{Value: value, Sensitive: &public}
+							outputs[key] = exec.Output{Value: value, Sensitive: &public, Type: snapshot.Types[key]}
 						}
 						source = "snapshot"
 					}
@@ -105,6 +101,10 @@ func (e *Engine) resolveInputsWithBasis(name string, applied map[string]exec.Out
 			)
 		}
 
+		// Snapshots intentionally omit unconsumed and sensitive ports, so absence outside the consumed edge is not a new violation.
+		if err := e.contractPolicy(e.outputContractChecks(edge.From.Node, outputs, source != "snapshot"), true); err != nil {
+			return nil, err
+		}
 		if err := e.checkType(edge, val); err != nil {
 			return nil, err
 		}
@@ -131,6 +131,11 @@ func (e *Engine) checkType(edge blueprint.Edge, output exec.Output) error {
 	sourceSensitive := e.Graph.Nodes[edge.From.Node].Schema.OutputDetails[edge.From.Name].Sensitive
 	// Runtime metadata survives live reads and level boundaries so conversion failures cannot expose protected payloads.
 	sourceSensitive = sourceSensitive || output.Sensitive == nil || *output.Sensitive
+	if dc := e.nodeContracts(edge.From.Node); dc != nil {
+		if p := dc.Producer[edge.From.Name]; p.Sensitive != nil && *p.Sensitive {
+			sourceSensitive = true
+		}
+	}
 	if err := e.checkVarType(edge.To.Node, edge.To.Name, output.Value, sourceSensitive); err != nil {
 		return fmt.Errorf("value from %s: %w", edge.From, err)
 	}
@@ -140,24 +145,24 @@ func (e *Engine) checkType(edge blueprint.Edge, output exec.Output) error {
 // checkVarType checks concrete input convertibility with cty and optional attribute defaults; the original value is still passed to Terraform so its variable handling owns the final conversion.
 func (e *Engine) checkVarType(nodeName, varName string, val any, sourceSensitive bool) (err error) {
 	v, ok := e.Graph.Nodes[nodeName].Schema.Variables[varName]
-	if !ok || v.Type == "" {
+	if !ok {
 		return nil
 	}
-
-	typeExpr, diags := hclsyntax.ParseExpression([]byte(v.Type), "<type constraint>", hcl.InitialPos)
-	if diags.HasErrors() {
-		return fmt.Errorf("node.%s.input.%s: internal error parsing declared type %q: %s", nodeName, varName, v.Type, diags.Error())
-	}
-	ctyType, defaults, diags := typeexpr.TypeConstraintWithDefaults(typeExpr)
-	if diags.HasErrors() {
-		return fmt.Errorf("node.%s.input.%s: internal error resolving declared type %q: %s", nodeName, varName, v.Type, diags.Error())
+	if v.Const {
+		return fmt.Errorf("node.%s.input.%s: const inputs cannot be supplied by dynamic edges or vars; configure the module initialization input directly", nodeName, varName)
 	}
 
+	// Contract classification also protects diagnostics in warn mode while module declarations are being corrected.
+	if dc := e.nodeContracts(nodeName); dc != nil {
+		if p := dc.Consumer[varName]; p.Sensitive != nil && *p.Sensitive {
+			sourceSensitive = true
+		}
+	}
 	// Encoding and conversion errors can contain payload keys; replace the error rather than wrapping it so callers cannot recover sensitive details from the chain.
 	if v.Sensitive || sourceSensitive {
 		defer func() {
 			if err != nil {
-				err = fmt.Errorf("node.%s.input.%s: cannot validate sensitive value against declared type %s; value details withheld; check the input value against the module variable declaration", nodeName, varName, v.Type)
+				err = fmt.Errorf("node.%s.input.%s: cannot validate sensitive value; value details withheld; check the input value against the module variable declaration", nodeName, varName)
 			}
 		}()
 	}
@@ -171,12 +176,8 @@ func (e *Engine) checkVarType(nodeName, varName string, val any, sourceSensitive
 	if err := json.Unmarshal(data, &concrete); err != nil {
 		return fmt.Errorf("node.%s.input.%s: decoding value for type check: %w", nodeName, varName, err)
 	}
-	value := concrete.Value
-	if defaults != nil {
-		value = defaults.Apply(value)
-	}
-	if _, err := convert.Convert(value, ctyType); err != nil {
-		return fmt.Errorf("node.%s.input.%s: does not match declared type %s: %w", nodeName, varName, v.Type, err)
+	if _, err := v.EffectiveValue(concrete.Value); err != nil {
+		return fmt.Errorf("node.%s.input.%s: %w", nodeName, varName, err)
 	}
 	return nil
 }

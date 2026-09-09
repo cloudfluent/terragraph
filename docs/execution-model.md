@@ -261,7 +261,7 @@ Reads check the current module schema again. A now-sensitive output cannot come 
 
 Reapplying a producer rewrites its snapshot, removing values that became sensitive; if it has no consumed outputs, its old snapshot is removed. Opting out does not delete existing files, and old values remain on disk until rewritten or manually removed. Keep `.terragraph/` out of version control. Snapshot files use mode `0600` on Unix; Windows uses inherited filesystem permissions without an explicit owner-only ACL. Snapshots are local to each machine.
 
-New snapshots use schema version 2. Version 1 values did not verify runtime sensitivity and are treated as withheld. Restore live outputs or run `terragraph apply --node <producer>` to republish under the normal approval policy; a no-change apply also upgrades the snapshot. Reading an old file does not rewrite it. terragraph versions supporting only schema 1 cannot consume schema 2.
+New snapshots use schema version 3 and preserve runtime output types. Version 2 remains readable but cannot establish collection kind for explicit contracts. Version 1 values did not verify runtime sensitivity and are treated as withheld. Restore live outputs or run `terragraph apply --node <producer>` to republish under the normal approval policy; a no-change apply also upgrades the snapshot. Reading an old file does not rewrite it. Older terragraph versions cannot consume schema 3.
 
 Module inspection and compatibility checks follow the producer's [resolved runtime](blueprint.md#choosing-a-runtime-per-node-runtime), including upstream reads in a node-scoped run. Runtime-specific sensitivity declarations therefore apply to snapshot reads too; offline reads cannot refresh runtime output metadata.
 
@@ -409,3 +409,16 @@ preparation, input, provider, inspection, and cancellation errors exit nonzero.
 
 
 Execution attempts now have protected [execution records](executions.md), including unknown-outcome recovery. Ordinary apply does not retain a plan bundle unless `--retain-plan` is selected. `plan --save` and `apply --plan <run-id>` expose separate review of one ready graph frontier at a time; continuation plans downstream nodes only after real upstream outputs exist. See the execution record reference for compatibility checks, shared storage, expiry, and cleanup.
+
+### Runtime contracts and saved plans
+
+Explicit [contracts](contracts.md) check actual producer values and effective
+consumer inputs before downstream apply. Consumer checks use the selected
+variables in the exact saved plan, including external inputs and module default
+and conversion rules. Known output violations stop producer apply; computed
+outputs are checked afterward, before snapshot publication or success recording.
+A violation after mutation leaves the execution `applied` for output recovery,
+never automatic replay. Contract meaning and mode participate in retained-plan
+bindings. Review JSON exposes independent conditions through `review.contracts`.
+Known null is reconstructed only from the same successful plan, never from a
+missing live output. See the contracts reference for restart and recovery limits.

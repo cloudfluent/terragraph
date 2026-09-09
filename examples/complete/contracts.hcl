@@ -1,4 +1,4 @@
-# Every data-edge port has a declaration; actual value invariants live in fixture preconditions.
+# Every data-edge port has a declaration; business invariants live in fixture preconditions.
 
 producer "./modules/organization" {
   output "dns_zone" {

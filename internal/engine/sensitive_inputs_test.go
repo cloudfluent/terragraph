@@ -13,7 +13,7 @@ import (
 func TestPlan_SensitiveInputErrorDoesNotRetainPayload(t *testing.T) {
 	dir := t.TempDir()
 	if err := osWriteFile(filepath.Join(dir, "module", "main.tf"), []byte(`variable "credentials" {
-  type = object({ count = number })
+  type = object({ count = number, token = optional(string, "PRIVATE_PAYLOAD_DEFAULT") })
   sensitive = true
 }`)); err != nil {
 		t.Fatal(err)

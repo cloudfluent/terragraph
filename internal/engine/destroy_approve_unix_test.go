@@ -88,3 +88,40 @@ node "guarded" { source = "./module" }
 		t.Fatalf("expected teardown of an undeclared node to proceed: %v", err)
 	}
 }
+
+func TestDestroy_ConsumerContractRefusesEnhancedBackendBeforePlan(t *testing.T) {
+	for _, backend := range []string{"remote", "cloud"} {
+		t.Run(backend, func(t *testing.T) {
+			e, commandLog := loadDestroyApproveEngine(t, `
+node "guarded" { source = "./module" }
+consumer "./module" {
+ input "value" { type = string }
+}
+`)
+			if err := osWriteFile(filepath.Join(e.BaseDir, "module", "variables.tf"), []byte(`variable "value" { default = "ok" }`)); err != nil {
+				t.Fatal(err)
+			}
+			e, err := Load(filepath.Join(e.BaseDir, "blueprint.hcl"), e.Binary, &bytes.Buffer{}, &bytes.Buffer{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("TG_BACKEND_TYPE", backend)
+			_, err = e.Destroy(Options{AutoApprove: true})
+			if err == nil {
+				t.Fatal("expected enhanced backend refusal")
+			}
+			for _, want := range []string{backend, "destroy", "local plan", "s3"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("got = %v, want %q", err, want)
+				}
+			}
+			data, err := os.ReadFile(commandLog)
+			if err != nil && !os.IsNotExist(err) {
+				t.Fatal(err)
+			}
+			if len(data) != 0 {
+				t.Fatalf("got = %q, want no plan, apply, or destroy command", data)
+			}
+		})
+	}
+}
