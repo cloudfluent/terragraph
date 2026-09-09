@@ -14,6 +14,9 @@ import (
 //
 // Nothing has to be invalidated afterwards. Destroy once had to drop the incremental-apply cache entry for everything it tore down, because a stale "unchanged" hit against infrastructure that no longer exists would have been a correctness bug rather than a missed optimization; a later apply now asks Terraform, which plans against real state and sees the resources are gone.
 func (e *Engine) Destroy(opts Options) (result RunResult, resultErr error) {
+	if err := opts.validateTimeout(true); err != nil {
+		return result, err
+	}
 	opts, selectionErr := e.resolveSelection(opts)
 	if selectionErr != nil {
 		return result, selectionErr
@@ -69,6 +72,8 @@ func (e *Engine) Destroy(opts Options) (result RunResult, resultErr error) {
 	e.logger().Info("destroy starting", "nodes", opts.Nodes, "parallelism", opts.parallelism(), "autoApprove", opts.AutoApprove)
 
 	result.Nodes, resultErr = e.runLevels(opts, true, func(name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
+		e, cancel := e.nodeEngine(opts)
+		defer cancel()
 		// A destroy plan needs the same resolved input values an apply would have used (e.g. a variable feeding a resource's count or for_each), so it's evaluated identically here: every upstream dependency is still standing at this point, since destroy walks the graph in reverse topological order (downstream first).
 		vars, err := e.resolveInputs(name, applied)
 		if err != nil {

@@ -9,12 +9,13 @@ terragraph destroy [flags]
 ### Options
 
 ```
-      --auto-approve       skip interactive approval
-      --downstream         include all successors of --node across data and ordering edges
-  -h, --help               help for destroy
-      --node stringArray   select an exact leaf name (repeat for multiple nodes; commas are literal)
-      --output string      output format: text or json (default "text")
-      --parallelism int    max nodes to run concurrently within one execution level (default 1)
+      --auto-approve            skip interactive approval
+      --downstream              include all successors of --node across data and ordering edges
+  -h, --help                    help for destroy
+      --node stringArray        select an exact leaf name (repeat for multiple nodes; commas are literal)
+      --node-timeout duration   deadline per node action, excluding queue time (0 disables; apply/destroy require --auto-approve)
+      --output string           output format: text or json (default "text")
+      --parallelism int         max nodes to run concurrently within one execution level (default 1)
 ```
 
 ### Options inherited from parent commands
