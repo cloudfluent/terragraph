@@ -134,13 +134,22 @@ This gives the default workspace a different state file for each node. A module 
 
 An explicit relative local-backend `backend_config.path` is passed through unchanged. For example, with `source = "./modules/vpc"`, `path = ".terragraph/state/vpc.tfstate"` places default-workspace state under `modules/vpc/.terragraph/state/`. `terragraph validate` warns about this relative path. Omit `backend_config.path` to use the automatic absolute path above, or supply an absolute path outside the module directory when choosing a custom location.
 
-Use `backend_config` for remote backend fields such as `bucket`, `key`, `region`, and `profile`, or for an explicit local path. Entries are passed to `terraform init` as `-backend-config` options. A non-empty map requires a `backend` block in the module; it is invalid with no backend block or with a `cloud` block. A group's [`use.backend_config`](groups.md#isolating-state-for-an-instance) can supply shared defaults.
+## Keeping backend configuration DRY
 
-An optional `backend_address` object on a `node` or `use` generates a missing S3 `key` from literal prefix and file-name fields:
+Declare shared backend settings once per group instance instead of repeating them on every leaf. `use.backend_config` supplies common settings such as bucket, region, and profile; `use.backend_address` can also generate a distinct S3 key for each leaf. Adding a leaf to the group then inherits the settings and receives its own generated key without another backend configuration map.
+
+Each module still declares its backend type inside its own `terraform` block, for example `backend "s3" {}`. Terragraph injects the resolved settings through `terraform init -backend-config=key=value`; it never generates or edits a `.tf` backend block. The bucket and other backend infrastructure must already exist.
+
+Use `backend_config` for explicit backend fields, including an existing remote key or local path. A non-empty map requires a `backend` block in the module; it is invalid with no backend block or with a `cloud` block. Shared settings inherit through nested `use` blocks, and node settings take precedence. See [group inheritance](groups.md#keeping-backend-configuration-dry) and the [before/after example](../examples/group#keeping-backend-configuration-dry).
+
+### Generating per-leaf S3 keys
+
+For a group of modules declaring `backend "s3"`, combine shared configuration and optional address generation at the instance:
 
 ```hcl
-node "database" {
-  source = "./modules/database"
+use "eks-service" {
+  as     = "checkout"
+  source = "./groups/eks-service"
   backend_config = {
     bucket = "example-state"
     region = "ap-northeast-2"
@@ -152,7 +161,7 @@ node "database" {
 }
 ```
 
-For a module declaring `backend "s3"`, this produces `prod/database/terraform.tfstate`. Only `s3_key_prefix` and `s3_key_name` are supported; both are optional, but at least one must be present to enable generation. The construction is `[prefix/]<qualified-leaf>/<file-name>`, where the qualified leaf directory is always included automatically. Values are literal strings, with no placeholder substitution, functions, or references to other nodes.
+Leaves named `cluster` and `nodegroup` receive `prod/checkout.cluster/terraform.tfstate` and `prod/checkout.nodegroup/terraform.tfstate` from this one declaration. The same `backend_address` object can be set on an individual `node` when it needs its own rule. Only `s3_key_prefix` and `s3_key_name` are supported; both are optional, but at least one must be present to enable generation. The construction is `[prefix/]<qualified-leaf>/<file-name>`, where the qualified leaf directory is always included automatically. Values are literal strings, with no placeholder substitution, functions, or references to other nodes.
 
 | Field | Default when generation is enabled | Meaning |
 |---|---|---|

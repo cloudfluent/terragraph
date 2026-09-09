@@ -140,7 +140,7 @@ once inside the EKS group. Account context flows from applied outputs,
 so it does not need to be copied into every leaf's `vars`.
 
 Blueprint `vars` supports literal data, without functions, locals, variable
-references, loops, or interpolation of node names into backend keys. The
+references, or loops. The
 three `use "environment"` declarations and their external edges remain
 explicit. Naming, AZ defaults, and subnet calculations belong in the local
 fixtures. Adding `qa` means adding an instance, unique CIDRs/account data,
@@ -158,6 +158,12 @@ same VPC source. Modules declare `backend "local" {}` so Terragraph can
 supply an absolute path. Module sources remain unchanged by execution.
 Group and leaf names are state addresses: renaming a leaf is a migration
 decision, not a cosmetic edit.
+
+For a production S3 adaptation, backend configuration can be DRY too:
+declare bucket and region once per environment `use`, then generate a
+distinct key for every nested leaf with `backend_address`. The local
+fixtures do not exercise this S3 path; see [Keeping production backend
+configuration DRY](#keeping-production-backend-configuration-dry) below.
 
 ## Contracts and actual values
 
@@ -341,7 +347,7 @@ running any consumers. The native lab verifies that reconciliation step.
 | Native init, console, import, state operations, backup export | Disposable native lab |
 | Git vendoring, subdirectory packages, exclusions, custom paths, forced refresh | Disposable vendor lab |
 | Recovery, interruption, stale locks, editor intelligence | Linked operational documentation; not simulated failure claims |
-| Remote backends, `use.backend_config`, S3 graph lock, S3 execution storage, `force-unlock` | Require a separate real-backend adaptation; intentionally absent from the credential-free run |
+| Remote backends, DRY backend settings and S3 key generation, S3 graph lock, S3 execution storage, `force-unlock` | Require a separate real-backend adaptation; backend configuration recipe below, intentionally absent from the credential-free run |
 
 For a named-runtime experiment in a **fresh disposable copy**, add a
 `runtimes.hcl` with a root default:
@@ -361,17 +367,51 @@ root default, then CLI fallback. A root default takes precedence over
 one source across different runtimes produces a provider-lockfile warning.
 Do not change runtimes underneath retained plans.
 
-A production adaptation must author real provider/backend configuration
+### Keeping production backend configuration DRY
+
+A production adaptation must declare real providers and backend types
 in its roots and independently implement and review every simulated AWS
-control. Terragraph does not generate that configuration. AWS credentials
+control. Terragraph does not generate those declarations. AWS credentials
 would come from each executor's role/environment, rather than fictional
 account IDs passed as module values.
 
-For shared state, give every leaf and environment a distinct backend
-address. `use.backend_config` can supply common bucket/region defaults, but
-one inherited `key` would be shared by every leaf: Terragraph does not
-interpolate qualified names into it. Repeated groups also need separate
-instance namespaces. Migrating current local state is a separate operation.
+Once the adapted roots declare `backend "s3" {}` inside their `terraform`
+blocks, keep backend settings at the environment boundary instead of
+copying a bucket, region, and individual key into every leaf. Add these
+attributes to the selected `use "environment"` in `environments.hcl`,
+retaining its existing `as`, `source`, `env`, and `vars`:
+
+```hcl
+backend_config = {
+  bucket = "example-state"
+  region = "ap-northeast-2"
+}
+backend_address = {
+  s3_key_prefix = "landscape"
+  s3_key_name   = "terraform.tfstate"
+}
+```
+
+For `as = "prd"`, this single declaration reaches all S3 leaves inside
+that environment's nested groups. For example, the generated keys include
+`landscape/prd.network.apps/terraform.tfstate` and
+`landscape/prd.data.database/terraform.tfstate`. The `dev` and `stg`
+instances can use the same bucket and prefix because their qualified leaf
+names differ. Nodes outside those environment instances have their own
+configuration scopes.
+
+`use.backend_config` injects the shared values as `terraform init
+-backend-config` options, and `backend_address` supplies only missing S3
+keys. Adding another leaf inside an environment therefore needs no new
+backend map. A node can override shared settings or preserve an existing
+location with an explicit `backend_config.key`; it takes precedence over
+generation. Do not use a single inherited explicit `key` to isolate
+several leaves, because it gives them the same address. See [the group
+before/after example](../group#keeping-backend-configuration-dry).
+
+This recipe does not migrate the example's existing local state. Plan
+that migration separately, and retain explicit keys when changing names
+or namespaces should not change an existing state location.
 
 An S3 graph lock requires every node to use a supported remote backend,
 so simply adding `lock` to this local example is invalid. S3 execution
