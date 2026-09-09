@@ -13,7 +13,7 @@ import (
 // SavePlans freezes only the current frontier; later inputs must come from real upstream outputs after the reviewed frontier has been applied.
 func (e *Engine) SavePlans(opts Options, continueID string) (record ExecutionRecord, resultErr error) {
 	if continueID != "" && opts.hasSelectionFlags() {
-		return record, WithDiagnostic(fmt.Errorf("--continue already fixes node selection; omit --node and --downstream"), Diagnostic{Code: "invalid_arguments", Category: "arguments", Phase: "arguments"})
+		return record, WithDiagnostic(fmt.Errorf("--continue already fixes node selection; omit --node, --downstream, and --upstream"), Diagnostic{Code: "invalid_arguments", Category: "arguments", Phase: "arguments"})
 	}
 	if continueID == "" {
 		var err error
@@ -178,7 +178,7 @@ func (e *Engine) saveFrontierNode(s *executionSession, name string, opts Options
 // ApplySavedPlans applies exactly the stored frontier and never plans or applies downstream nodes in the same invocation.
 func (e *Engine) ApplySavedPlans(id string, opts Options) (result RunResult, resultErr error) {
 	if opts.hasSelectionFlags() {
-		return result, WithDiagnostic(fmt.Errorf("--plan already fixes node selection; omit --node and --downstream"), Diagnostic{Code: "invalid_arguments", Category: "arguments", Phase: "arguments"})
+		return result, WithDiagnostic(fmt.Errorf("--plan already fixes node selection; omit --node, --downstream, and --upstream"), Diagnostic{Code: "invalid_arguments", Category: "arguments", Phase: "arguments"})
 	}
 	if opts.parallelism() > 1 && !opts.AutoApprove {
 		return result, WithDiagnostic(fmt.Errorf("--parallelism needs --auto-approve"), Diagnostic{Code: "invalid_arguments", Category: "arguments", Phase: "arguments"})

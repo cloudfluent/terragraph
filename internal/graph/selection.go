@@ -26,12 +26,16 @@ type SelectionNode struct {
 }
 
 // Select resolves exact leaf names; nil requests mean the default whole graph, while an empty non-nil request is invalid.
-func Select(g *Graph, requested []string, downstream bool) (*Selection, error) {
-	if requested == nil && !downstream {
+func Select(g *Graph, requested []string, downstream bool, upstream ...bool) (*Selection, error) {
+	up := len(upstream) > 0 && upstream[0]
+	if up && downstream {
+		return nil, fmt.Errorf("selection: --upstream and --downstream cannot be combined; choose one expansion direction")
+	}
+	if requested == nil && !downstream && !up {
 		return nil, nil
 	}
 	if len(requested) == 0 {
-		return nil, fmt.Errorf("selection: specify at least one --node <leaf> with --downstream")
+		return nil, fmt.Errorf("selection: specify at least one --node <leaf> with --downstream or --upstream")
 	}
 	seeds := append([]string{}, requested...)
 	sort.Strings(seeds)
@@ -58,10 +62,14 @@ func Select(g *Graph, requested []string, downstream bool) (*Selection, error) {
 		selected[name] = true
 		requestedSet[name] = true
 	}
-	if downstream {
+	adjacent := g.Out
+	if up {
+		adjacent = g.In
+	}
+	if downstream || up {
 		queue := append([]string{}, seeds...)
 		for i := 0; i < len(queue); i++ {
-			for _, name := range g.Out[queue[i]] {
+			for _, name := range adjacent[queue[i]] {
 				if !selected[name] {
 					selected[name] = true
 					queue = append(queue, name)
@@ -73,6 +81,9 @@ func Select(g *Graph, requested []string, downstream bool) (*Selection, error) {
 	if downstream {
 		s.Mode = "downstream"
 	}
+	if up {
+		s.Mode = "upstream"
+	}
 	names := make([]string, 0, len(selected))
 	for name := range selected {
 		names = append(names, name)
@@ -81,8 +92,12 @@ func Select(g *Graph, requested []string, downstream bool) (*Selection, error) {
 	for _, name := range names {
 		n := SelectionNode{Node: name, Reason: "requested", Via: []string{}}
 		if !requestedSet[name] {
-			n.Reason = "downstream"
-			for _, parent := range g.In[name] {
+			n.Reason = s.Mode
+			via := g.In[name]
+			if up {
+				via = g.Out[name]
+			}
+			for _, parent := range via {
 				if selected[parent] {
 					n.Via = append(n.Via, parent)
 				}
@@ -165,7 +180,7 @@ func (s *Selection) ValidateMembership(names []string) error {
 	invalid := func() error {
 		return fmt.Errorf("execution selection is incompatible or inconsistent with recorded nodes; restore a valid record")
 	}
-	if s.SchemaVersion != 1 || (s.Mode != "exact" && s.Mode != "downstream") || len(s.Requested) == 0 || s.Nodes == nil || s.BoundaryEdges == nil {
+	if s.SchemaVersion != 1 || (s.Mode != "exact" && s.Mode != "downstream" && s.Mode != "upstream") || len(s.Requested) == 0 || s.Nodes == nil || s.BoundaryEdges == nil {
 		return invalid()
 	}
 	members := map[string]bool{}
@@ -196,7 +211,7 @@ func (s *Selection) ValidateMembership(names []string) error {
 				return invalid()
 			}
 		} else {
-			if s.Mode != "downstream" || n.Reason != "downstream" || len(n.Via) == 0 || !slices.IsSorted(n.Via) {
+			if (s.Mode != "downstream" && s.Mode != "upstream") || n.Reason != s.Mode || len(n.Via) == 0 || !slices.IsSorted(n.Via) {
 				return invalid()
 			}
 			for j, p := range n.Via {

@@ -422,3 +422,9 @@ never automatic replay. Contract meaning and mode participate in retained-plan
 bindings. Review JSON exposes independent conditions through `review.contracts`.
 Known null is reconstructed only from the same successful plan, never from a
 missing live output. See the contracts reference for restart and recovery limits.
+
+### Upstream selection
+
+`--node <leaf> --upstream` includes all transitive producers over both data and ordering edges. It is available on `graph`, `plan`, `apply`, and `destroy`; destroy retains reverse execution order. Scope inspection uses the existing graph output and selection object. `mode` and expanded-node `reason` are `upstream`; `via` lists selected immediate successors toward the requested leaves. Requested nodes retain `reason: "requested"`.
+
+Choose either `--upstream` or `--downstream`; combining them is rejected before execution. Both require at least one explicit leaf. Saved execution membership remains authoritative: `--continue` and `apply --plan` reject scope overrides, including an explicitly false `--upstream=false`. Upstream metadata is persisted in the existing execution journal; it never authorizes replay or replaces explicit recovery. Older binaries that do not recognize this selection mode reject these records rather than widen their scope.

@@ -175,3 +175,45 @@ func TestSelection_RejectsCorruptMembership(t *testing.T) {
 		}
 	}
 }
+
+func TestSelect_UpstreamIncludesDataAndOrderingAncestors(t *testing.T) {
+	g := selectionFixture(t)
+	s, err := Select(g, []string{"d"}, false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(s.Names(), []string{"a", "b", "c", "d", "x"}) || s.Mode != "upstream" {
+		t.Fatalf("got = %+v, want ancestors of d", s)
+	}
+	if !reflect.DeepEqual(s.Nodes[0].Via, []string{"b"}) || s.Nodes[0].Reason != "upstream" {
+		t.Fatalf("got = %+v, want upstream via b", s.Nodes[0])
+	}
+	if err := s.ValidateMembership(s.Names()); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored Selection
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatal(err)
+	}
+	if err := restored.ValidateMembership(s.Names()); err != nil {
+		t.Fatal(err)
+	}
+	restored.Nodes[0].Reason = "downstream"
+	if err := restored.ValidateMembership(s.Names()); err == nil {
+		t.Fatal("want corrupted upstream metadata rejected")
+	}
+}
+
+func TestSelect_UpstreamRequiresOneDirectionAndSeed(t *testing.T) {
+	g := selectionFixture(t)
+	if _, err := Select(g, nil, false, true); err == nil {
+		t.Fatal("want missing seed rejected")
+	}
+	if _, err := Select(g, []string{"c"}, true, true); err == nil {
+		t.Fatal("want ambiguous directions rejected")
+	}
+}
