@@ -97,6 +97,9 @@ func (w *Workspace) Complete(_ context.Context, path string, offset int) []Compl
 		p, _ := varsPortsAt(model, text, offset)
 		return propertyCompletions(p, fragment, start, offset)
 	}
+	if objectAttribute == "backend_address" && !strings.Contains(fragment, ".") {
+		return contextCompletions([]string{"backend_address"}, fragment, start, offset)
+	}
 	if insideObject {
 		return nil
 	}
@@ -424,11 +427,16 @@ var completionSchemas = map[string][]attributeSpec{
 	"producer.output": contractPortSchema,
 	"consumer.input":  contractPortSchema,
 	"snapshots":       {},
+	"backend_address": {
+		{name: "s3_key_prefix", insert: "s3_key_prefix = \"prod\"", detail: "optional string", documentation: "Literal prefix before the qualified leaf directory. Empty means no prefix; explicit keys win."},
+		{name: "s3_key_name", insert: "s3_key_name = \"terraform.tfstate\"", detail: "optional string", documentation: "File name within each qualified leaf directory; defaults to terraform.tfstate. Inherits independently of the prefix."},
+	},
 	"node": {
 		{name: "source", insert: "source = \"\"", detail: "required string", documentation: "Path or remote source of the Terraform or OpenTofu module."},
 		{name: "vars", insert: "vars = {\n}", detail: "object", documentation: "Literal Terraform input values. Use an edge for another node's output."},
 		{name: "env", insert: "env = {\n}", detail: "map(string)", documentation: "Extra environment variables for this module's Terraform or OpenTofu process."},
 		{name: "runtime", insert: "runtime = runtime.", detail: "runtime reference", documentation: "Selects a declared runtime for this node."},
+		{name: "backend_address", insert: "backend_address = {\n  s3_key_prefix = \"prod\"\n}", detail: "object", documentation: "Optional S3 key generation. Inherits when omitted; {} disables it. Explicit addresses win."},
 		{name: "backend_config", insert: "backend_config = {\n}", detail: "map(string)", documentation: "Backend configuration passed to terraform init."},
 		{name: "approve", insert: "approve = \"\"", detail: "optional string", documentation: "How much of this node's plan may be applied: \"none\", \"safe\" (create/update, the default), or \"all\" (adds replace/delete)."},
 	},
@@ -448,6 +456,7 @@ var completionSchemas = map[string][]attributeSpec{
 	"use": {
 		{name: "as", insert: "as = \"\"", detail: "required string", documentation: "Namespace used to refer to this group instance."},
 		{name: "source", insert: "source = \"\"", detail: "required string", documentation: "Local path or remote source containing the group."},
+		{name: "backend_address", insert: "backend_address = {\n  s3_key_prefix = \"prod\"\n}", detail: "object", documentation: "Optional S3 key generation. Inherits when omitted; {} disables it. Explicit addresses win."},
 		{name: "backend_config", insert: "backend_config = {\n}", detail: "map(string)", documentation: "Backend configuration merged onto every node this instance expands to. Leaf keys win."},
 		{name: "runtime", insert: "runtime = runtime.", detail: "runtime reference", documentation: "Default runtime for nodes expanded from this group."},
 		{name: "env", insert: "env = {\n}", detail: "map(string)", documentation: "Environment variables inherited by nodes expanded from this group."},
@@ -705,6 +714,7 @@ func (w *Workspace) Diagnose(_ context.Context, path string) []Diagnostic {
 		return nil
 	}
 	diagnostics := contractDiagnostics(body)
+	diagnostics = append(diagnostics, backendAddressDiagnostics(body)...)
 	walkAttributes(body, func(attr *hclsyntax.Attribute) {
 		scope := model.at(text, attr.Range().Start.Byte)
 		for _, traversal := range attr.Expr.Variables() {

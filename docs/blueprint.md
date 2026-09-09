@@ -136,6 +136,37 @@ An explicit relative local-backend `backend_config.path` is passed through uncha
 
 Use `backend_config` for remote backend fields such as `bucket`, `key`, `region`, and `profile`, or for an explicit local path. Entries are passed to `terraform init` as `-backend-config` options. A non-empty map requires a `backend` block in the module; it is invalid with no backend block or with a `cloud` block. A group's [`use.backend_config`](groups.md#isolating-state-for-an-instance) can supply shared defaults.
 
+An optional `backend_address` object on a `node` or `use` generates a missing S3 `key` from literal prefix and file-name fields:
+
+```hcl
+node "database" {
+  source = "./modules/database"
+  backend_config = {
+    bucket = "example-state"
+    region = "ap-northeast-2"
+  }
+  backend_address = {
+    s3_key_prefix = "prod"
+    s3_key_name   = "terraform.tfstate"
+  }
+}
+```
+
+For a module declaring `backend "s3"`, this produces `prod/database/terraform.tfstate`. Only `s3_key_prefix` and `s3_key_name` are supported; both are optional, but at least one must be present to enable generation. The construction is `[prefix/]<qualified-leaf>/<file-name>`, where the qualified leaf directory is always included automatically. Values are literal strings, with no placeholder substitution, functions, or references to other nodes.
+
+| Field | Default when generation is enabled | Meaning |
+|---|---|---|
+| `s3_key_prefix` | Empty | Literal object-key prefix, such as `prod` or `prod/team`. A trailing `/` can supply the separator before the leaf directory. |
+| `s3_key_name` | `terraform.tfstate` | Non-empty file name inside each leaf directory. `/`, `\`, `.` and `..` are not accepted as path separators or directory names. |
+
+Omitting `backend_address` inherits the enclosing `use` rule. Fields merge independently: an inner `use` overrides an outer one, and a node's fields win. Setting `s3_key_prefix = ""` clears an inherited prefix while retaining an inherited file name. Setting `backend_address = {}` disables inherited generation for that scope; a descendant may enable it again with either field.
+
+Generation runs only after existing `backend_config` inheritance is resolved, and only if `key` is absent both from that configuration and from the module's backend block. An explicit key always wins, including an inherited key or a module key whose value cannot be evaluated statically. Empty explicit keys are passed through rather than repaired. If the module cannot be inspected enough to establish key absence, terragraph requires an explicit key or disabling generation. Changing only `s3_key_name` never replaces an explicit `backend_config.key`.
+
+This convenience currently generates only the S3 `key` field. Other backend types ignore these generation fields and keep their existing configuration, including local default paths. The rule does not select a backend type or configure a bucket, credentials, workspaces, or locking. Existing static collision checks apply to generated and explicit addresses alike; inheriting one explicit key across several leaves can still be a collision. These checks retain their existing limitations for unknown backend settings and namespaces.
+
+Renaming a node or group instance, moving a leaf into a different group, or changing the selected prefix or file name can change its generated state address. Terragraph does not migrate state automatically. Preserve an existing location by setting its exact `backend_config.key` before adopting or changing a generation rule. Merely renaming a group's declaration without changing instance names or its leaf structure does not change the qualified leaf names.
+
 Validation rejects identical backend configuration maps on a shared source, known shared local state paths, and known shared S3 state addresses. It also rejects node names that collide on the filesystem, including case differences on a case-insensitive volume. These checks use statically known settings, including explicit `TF_WORKSPACE` values; they cannot resolve all backend expressions, external configuration, or credential-dependent namespaces. Warnings about unverified separation require checking the paths or backend namespaces yourself. Set distinct addresses and explicit region/endpoint settings where needed; a different profile alone does not establish a different state address.
 
 Every node receives a separate `TF_DATA_DIR` for Terraform's backend metadata, even when sources are not shared. The module's `.terraform.lock.hcl` is still shared by nodes using the same directory. Validation warns when those nodes select different runtime binaries; use separate source copies or the same runtime to avoid provider lock file conflicts.

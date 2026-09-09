@@ -53,6 +53,8 @@ type Schema struct {
 	Backend string
 	// BackendConfig contains known scalar backend attributes; explicit blueprint backend_config entries override them.
 	BackendConfig map[string]string
+	// BackendAttributes retains declaration presence even for unevaluable values; nil means absence cannot be established safely.
+	BackendAttributes map[string]bool
 	// BackendConfigKnown prevents an unevaluable address from being mistaken for an omitted default.
 	BackendConfigKnown bool
 	// comparison retains exact defaults and complete backend declarations only to reject ambiguous runtime selection.
@@ -169,6 +171,7 @@ func inspectDeclarations(schema *Schema, files []moduleFile) {
 				if selected.override {
 					schema.Backend = ""
 					schema.BackendConfig = nil
+					schema.BackendAttributes = nil
 					schema.BackendConfigKnown = true
 					cloud = false
 					delete(schema.comparison, "backend")
@@ -183,6 +186,13 @@ func inspectDeclarations(schema *Schema, files []moduleFile) {
 				schema.BackendConfig = make(map[string]string)
 				schema.BackendConfigKnown = true
 				attrs, attrDiags := b.Body.JustAttributes()
+				schema.BackendAttributes = nil
+				if !attrDiags.HasErrors() {
+					schema.BackendAttributes = make(map[string]bool, len(attrs))
+					for name := range attrs {
+						schema.BackendAttributes[name] = true
+					}
+				}
 				schema.comparison["backend"] = bodyIdentity(b.Body, src)
 				if attrDiags.HasErrors() {
 					schema.BackendConfigKnown = false

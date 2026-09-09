@@ -118,7 +118,32 @@ use "eks-service" {
 }
 ```
 
-Each module must declare a compatible backend. An inner `use` overrides inherited keys, and a node's own keys win. Use shared fields such as `bucket`, `profile`, and `region` here, and give each leaf a distinct state address. A single `key` on `use` is inherited by every leaf; terragraph does not interpolate the instance or leaf name into it. When reusing the group, also separate the instances' backend namespaces, for example with different buckets.
+Each module must declare a compatible backend. An inner `use` overrides inherited keys, and a node's own keys win. Use shared fields such as `bucket`, `profile`, and `region` here, and give each leaf a distinct state address. A single `key` on `use` is inherited by every leaf; terragraph does not interpolate the instance or leaf name into it. When reusing the group, separate the instances' addresses, for example with different buckets or the optional S3 generation rule below.
+
+For modules declaring `backend "s3"`, add `backend_address` to a `use` to generate keys only for leaves without explicit keys:
+
+```hcl
+use "eks-service" {
+  as     = "checkout"
+  source = "./groups/eks-service"
+  backend_config = {
+    bucket = "tfstate"
+    region = "ap-northeast-2"
+  }
+  backend_address = {
+    s3_key_prefix = "prod"
+    s3_key_name   = "terraform.tfstate"
+  }
+}
+```
+
+This generates `prod/checkout.cluster/terraform.tfstate` and `prod/checkout.nodegroup/terraform.tfstate`. Another instance named `payments` can use the same bucket and rule; its keys contain `payments.cluster` and `payments.nodegroup`. Nested instances include their full leaf name, such as `prod/checkout.inner.database/terraform.tfstate`. Select `dev` as the prefix to use a different environment namespace.
+
+The prefix and file name inherit independently through nested `use` blocks. For example, a leaf can declare `backend_address = { s3_key_name = "state.json" }` to keep the instance's `prod` prefix while changing its file name. An empty prefix clears an inherited prefix; `backend_address = {}` stops generation for that scope, while descendants can opt in again. Without an inherited or explicit file name, generation uses `terraform.tfstate`.
+
+Explicit `backend_config.key` values, including inherited keys, and keys declared in module backend blocks always take precedence. A leaf can retain `backend_config = { key = "legacy/database.tfstate" }` while its siblings use generated addresses. Inheriting the same explicit key across multiple leaves is still checked for collisions, not rewritten. Other backend types keep their existing behavior. See [backend address generation](blueprint.md#reusing-the-same-module-across-instances) for the full scope, field rules, and validation limits.
+
+Changing an instance name, leaf name, prefix, or file name can change generated state addresses. No state migration is performed; use explicit keys to retain existing locations when restructuring groups.
 
 ## Choosing a runtime for an instance
 
