@@ -72,6 +72,8 @@ func cloneNode(n blueprint.Node) blueprint.Node {
 		}
 		n.Env = clone
 	}
+	n.Inputs = clonePluginBindings(n.Inputs)
+	n.Credentials = clonePluginBindings(n.Credentials)
 	return n
 }
 
@@ -416,4 +418,39 @@ func eqBoolPtr(a, b *bool) bool {
 		return a == b
 	}
 	return *a == *b
+}
+
+// clonePluginBindings keeps references and credential allowlists private to each expanded group instance.
+func clonePluginBindings(bindings map[string]blueprint.PluginBinding) map[string]blueprint.PluginBinding {
+	if bindings == nil {
+		return nil
+	}
+	result := make(map[string]blueprint.PluginBinding, len(bindings))
+	for name, binding := range bindings {
+		if binding.Reference != nil {
+			binding.Reference = cloneBindingValue(binding.Reference).(map[string]any)
+		}
+		binding.Environment = append([]string(nil), binding.Environment...)
+		result[name] = binding
+	}
+	return result
+}
+
+func cloneBindingValue(value any) any {
+	switch v := value.(type) {
+	case map[string]any:
+		result := make(map[string]any, len(v))
+		for key, entry := range v {
+			result[key] = cloneBindingValue(entry)
+		}
+		return result
+	case []any:
+		result := make([]any, len(v))
+		for i, entry := range v {
+			result[i] = cloneBindingValue(entry)
+		}
+		return result
+	default:
+		return value
+	}
 }

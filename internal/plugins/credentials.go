@@ -102,7 +102,7 @@ func (m *Lifecycle) Credentials(ctx context.Context, node string, bindings map[s
 		if response.Lease != nil {
 			lease := &credentialLease{identity: response.Identity, feature: f, reference: b.Reference, lease: *response.Lease, env: maps.Clone(response.Credentials), done: make(chan struct{})}
 			scope.leases = append(scope.leases, lease)
-			if response.Lease.ID == "" || !response.Lease.ExpiresAt.After(time.Now()) || (!response.Lease.RenewAt.IsZero() && (!response.Lease.RenewAt.After(time.Now()) || !response.Lease.RenewAt.Before(response.Lease.ExpiresAt))) {
+			if response.Lease.ID == "" || !response.Lease.ExpiresAt.After(time.Now()) || (!response.Lease.RenewAt.IsZero() && !response.Lease.RenewAt.Before(response.Lease.ExpiresAt)) {
 				close(lease.done)
 				scope.err = fmt.Errorf("plugin.%s.%s: invalid credential lease", b.Alias, b.Feature)
 				return ctx, nil, scope.err
@@ -154,7 +154,7 @@ func (m *Lifecycle) renew(ctx context.Context, node string, scope *credentialSco
 			cancel()
 			err = callErr
 			if err == nil {
-				if (response.Identity != "" && response.Identity != lease.identity) || response.Lease == nil || response.Lease.ID != lease.lease.ID || !response.Lease.ExpiresAt.After(time.Now()) || (!response.Lease.RenewAt.IsZero() && (!response.Lease.RenewAt.After(time.Now()) || !response.Lease.RenewAt.Before(response.Lease.ExpiresAt))) {
+				if (response.Identity != "" && response.Identity != lease.identity) || response.Lease == nil || response.Lease.ID != lease.lease.ID || !response.Lease.ExpiresAt.After(time.Now()) || (!response.Lease.RenewAt.IsZero() && !response.Lease.RenewAt.Before(response.Lease.ExpiresAt)) {
 					err = fmt.Errorf("node.%s: plugin returned an invalid renewed lease", node)
 				} else if len(response.Credentials) > 0 && !maps.Equal(response.Credentials, lease.env) {
 					err = fmt.Errorf("node.%s: credential rotation cannot update an already running subprocess; retry with stable renewable credentials", node)

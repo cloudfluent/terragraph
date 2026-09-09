@@ -49,8 +49,11 @@ func (e *Engine) SavePlans(opts Options, continueID string) (record ExecutionRec
 	if err != nil {
 		return record, err
 	}
-	defer s.close()
-	defer func() { resultErr = errors.Join(resultErr, e.finishPlugins(resultErr)) }()
+	finalize := false
+	defer func() {
+		resultErr = s.finishSavedSession(resultErr, finalize)
+		record = s.record
+	}()
 	record = s.record
 	if continueID != "" {
 		opts, err = e.storedSelection(opts, s.record)
@@ -65,13 +68,7 @@ func (e *Engine) SavePlans(opts Options, continueID string) (record ExecutionRec
 	if s.record.Status != "preparing" && s.record.Status != "ready_for_next_plan" {
 		return record, fmt.Errorf("execution %s is %s; apply its pending plans or start a fresh execution", s.record.ID, s.record.Status)
 	}
-	defer func() {
-		resultErr = errors.Join(resultErr, e.finishPlugins(resultErr))
-		if resultErr != nil {
-			resultErr = errors.Join(resultErr, s.finishSaved(resultErr))
-		}
-		record = s.record
-	}()
+	finalize = true
 	binding, err := e.savedGraphBinding(s.record)
 	if err != nil {
 		return record, err
@@ -220,8 +217,8 @@ func (e *Engine) ApplySavedPlans(id string, opts Options) (result RunResult, res
 		return result, err
 	}
 	result.ExecutionID = s.record.ID
-	defer s.close()
-	defer func() { resultErr = errors.Join(resultErr, e.finishPlugins(resultErr)) }()
+	finalize := false
+	defer func() { resultErr = s.finishSavedSession(resultErr, finalize) }()
 	opts, err = e.storedSelection(opts, s.record)
 	opts.announceSelection(false)
 	if err != nil {
@@ -240,12 +237,7 @@ func (e *Engine) ApplySavedPlans(id string, opts Options) (result RunResult, res
 	if binding != s.record.Binding {
 		return result, WithDiagnostic(fmt.Errorf("graph configuration changed; cancel this execution and create a fresh plan"), Diagnostic{Code: "saved_plan_incompatible", Category: "artifact", Phase: "artifact"})
 	}
-	defer func() {
-		resultErr = errors.Join(resultErr, e.finishPlugins(resultErr))
-		if resultErr != nil {
-			resultErr = errors.Join(resultErr, s.finishSaved(resultErr))
-		}
-	}()
+	finalize = true
 	names := []string{}
 	for _, n := range s.record.Nodes {
 		names = append(names, n.Name)
@@ -289,9 +281,6 @@ func (e *Engine) ApplySavedPlans(id string, opts Options) (result RunResult, res
 	}
 	if err := s.publish(next); err != nil {
 		return result, err
-	}
-	if err := e.cleanupExecution(s.store, next); err != nil {
-		e.logger().Warn("execution artifact cleanup deferred", "execution", next.ID, "error", err)
 	}
 	return result, nil
 }
@@ -508,4 +497,22 @@ func (e *Engine) storedSelection(opts Options, record ExecutionRecord) (Options,
 	}
 	opts.selection, opts.levels = record.Selection, levels
 	return opts, nil
+}
+
+// finishSavedSession closes plugin effects before reassessing recovery or deleting evidence so a successful mutation cannot hide failed teardown.
+func (s *executionSession) finishSavedSession(runErr error, finalize bool) error {
+	defer s.close()
+	result := errors.Join(runErr, s.engine.finishPlugins(runErr))
+	if !finalize {
+		return result
+	}
+	if result != nil || executionNeedsRecovery(s.record) {
+		if err := s.finishSaved(result); err != nil {
+			return errors.Join(result, err)
+		}
+	}
+	if err := s.engine.cleanupExecution(s.store, s.record); err != nil {
+		s.engine.logger().Warn("execution artifact cleanup deferred", "execution", s.record.ID, "error", err)
+	}
+	return result
 }

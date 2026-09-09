@@ -32,7 +32,7 @@ func lifecycleDescriptor() sdk.Descriptor {
 		{Name: "guard", Kind: "gate", Effect: "read_only", Events: []string{"node.plan.ready", "node.mutation.admit"}},
 		{Name: "secret", Kind: "input_resolver", Effect: "read_only"},
 		{Name: "auth", Kind: "credential_provider", Effect: "read_only"},
-		{Name: "delivery", Kind: "observer", Effect: "idempotent_external", Events: []string{"node.mutation.finished"}},
+		{Name: "delivery", Kind: "observer", Effect: "idempotent_external", Events: []string{"node.mutation.finished", "run.finished", "session.close"}},
 		{Name: "expand_nodes", Kind: "expansion", Effect: "pure"},
 	}}
 }
@@ -57,7 +57,7 @@ func serveLifecycleFixture() {
 					panic("private plugin error")
 				}
 			}
-			if r.Feature == "delivery" && config["fail_delivery"] == true {
+			if r.Feature == "delivery" && ((config["fail_delivery"] == true && r.Event.Phase == "node.mutation.finished") || (config["fail_terminal"] == r.Event.Phase && config["fail_operation"] == r.Event.Operation)) {
 				return sdk.Response{}, errors.New("private delivery error")
 			}
 			return sdk.Response{}, nil
@@ -82,7 +82,10 @@ func serveLifecycleFixture() {
 		case "acquire":
 			response := sdk.Response{Identity: "test-account", Credentials: map[string]string{"PLUGIN_TOKEN": "lease-token"}}
 			if config["lease"] == true {
-				response.Lease = &sdk.Lease{ID: "lease-1", ExpiresAt: time.Now().Add(time.Second), RenewAt: time.Now().Add(30 * time.Millisecond)}
+				response.Lease = &sdk.Lease{ID: "lease-1", ExpiresAt: time.Now().Add(time.Minute), RenewAt: time.Now().Add(30 * time.Millisecond)}
+			}
+			if config["renew_due"] == true {
+				response.Lease.RenewAt = time.Now().Add(-time.Second)
 			}
 			if config["missing_identity"] == true {
 				response.Identity = ""
@@ -312,7 +315,7 @@ func TestLifecycle_SavedPlanRejectsRemovedPlugin(t *testing.T) {
 }
 
 func TestLifecycle_LeaseRenewalFailureCancelsDependentWork(t *testing.T) {
-	dir, _ := lifecycleFixture(t, `config = { lease = true, renew_fail = true }`, "")
+	dir, _ := lifecycleFixture(t, `config = { lease = true, renew_due = true, renew_fail = true }`, "")
 	configs, _, _ := blueprint.LoadPlugins(dir)
 	m, err := plugins.NewLifecycle(context.Background(), dir, configs, "apply", "test", func(sdk.CallRecord) error { return nil })
 	if err != nil {
@@ -583,5 +586,53 @@ func TestLifecycle_InvalidCredentialIdentityStillReleasesLease(t *testing.T) {
 	}
 	if again != released {
 		t.Fatal("repeated close released lease twice")
+	}
+}
+
+func TestLifecycle_SavePlanTerminalFailureRetainsBarrier(t *testing.T) {
+	dir, binary := lifecycleFixture(t, `config = { fail_terminal = "session.close", fail_operation = "plan" }
+ feature "delivery" { mode = "enforce" }`, `node "a" { source = "./module" }`)
+	e, _ := loadLifecycleEngine(t, dir, binary)
+	record, err := e.SavePlans(engine.Options{}, "")
+	if err == nil {
+		t.Fatal("required teardown failure accepted")
+	}
+	stored, err := e.GetExecution(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Status != "needs_recovery" || stored.Status != "needs_recovery" || stored.Nodes[0].Phase != "planned" {
+		t.Fatalf("got = %s / %+v, want planned node with recovery barrier", record.Status, stored)
+	}
+	if _, err := e.ApplySavedPlans(record.ID, engine.Options{AutoApprove: true}); err == nil {
+		t.Fatal("unresolved teardown allowed saved apply")
+	}
+}
+
+func TestLifecycle_SavedApplyTerminalFailureRetainsPlanEvidence(t *testing.T) {
+	dir, binary := lifecycleFixture(t, `config = { fail_terminal = "run.finished", fail_operation = "apply" }
+ feature "delivery" { mode = "enforce" }`, `node "a" { source = "./module" }`)
+	e, _ := loadLifecycleEngine(t, dir, binary)
+	record, err := e.SavePlans(engine.Options{}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	planPath := filepath.Join(dir, ".terragraph", "executions", record.Nodes[0].PlanID+".bin")
+	if _, err := os.Stat(planPath); err != nil {
+		t.Fatal(err)
+	}
+	result, err := e.ApplySavedPlans(record.ID, engine.Options{AutoApprove: true})
+	if err == nil {
+		t.Fatal("required teardown failure accepted")
+	}
+	stored, err := e.GetExecution(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != "needs_recovery" || stored.Nodes[0].Phase != "completed" || result.Nodes[0].Status != engine.StatusApplied {
+		t.Fatalf("got = %+v / %+v, want completed infrastructure with recovery barrier", stored, result)
+	}
+	if _, err := os.Stat(planPath); err != nil {
+		t.Fatalf("recovery evidence removed before teardown: %v", err)
 	}
 }

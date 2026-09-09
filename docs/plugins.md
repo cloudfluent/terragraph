@@ -121,7 +121,7 @@ node "database" {
 
 Credentials are supplied only to the named node's subprocesses. Return a stable, non-secret `identity` describing the authenticated target; saved-plan verification compares that identity without recording token bytes. Returned environment names must appear in the binding's allowlist. Runtime argument overrides, data-directory controls, workspaces, and other routing controls are refused. Credential tokens are never installed in the host process's environment.
 
-An optional lease contains an ID, expiry, and renewal time. Renewal maintains the same credentials and identity; replacing an environment map cannot update an already-running subprocess. Renewal failure cancels the dependent node context and prevents new dependent work. Credential-dependent Windows subprocesses use kill-on-close Job Objects; ordinary native console behavior remains unchanged. The host releases execution leases only after subprocesses have returned, under the still-held locks. Module-input secrets are not revoked at command exit.
+An optional lease contains an ID, expiry, and renewal time. A renewal time that has already passed triggers immediate renewal while the lease is still valid; an expired lease remains an error. Renewal maintains the same credentials and identity; replacing an environment map cannot update an already-running subprocess. Renewal failure cancels the dependent node context and prevents new dependent work. Credential-dependent Windows subprocesses use kill-on-close Job Objects; ordinary native console behavior remains unchanged. The host releases execution leases only after subprocesses have returned, under the still-held locks. Module-input secrets are not revoked at command exit.
 
 ## Reports and recovery
 

@@ -167,3 +167,47 @@ func TestBuild_SameGroupDirectoryUsedTwice_InstancesDontShareState(t *testing.T)
 		t.Fatalf("expected a valid graph after fill, got problems: %v", problems)
 	}
 }
+
+func TestBuild_GroupPluginBindingsAreIndependent(t *testing.T) {
+	root, bpPath := setupSameGroupTwiceFixture(t)
+	writeFixtureFile(t, filepath.Join(root, "modules/a/variables.tf"), `
+variable "greeting" {
+ type = string
+ sensitive = true
+}`)
+	writeFixtureFile(t, filepath.Join(root, "groups/g/group.hcl"), `
+group "g" {
+ node "a" {
+  source = "../../modules/a"
+  input "greeting" {
+   from = plugin.secrets.read
+   ref = { nested = { items = ["original"] } }
+  }
+  credential "provider" {
+   from = plugin.secrets.auth
+   ref = { account = { name = "original" } }
+   environment = ["TOKEN"]
+  }
+ }
+}`)
+	bp, err := blueprint.ParseFile(bpPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, err := Build(bp, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, second := g.Nodes["first.a"], g.Nodes["second.a"]
+	first.Inputs["greeting"].Reference["nested"].(map[string]any)["items"].([]any)[0] = "changed"
+	first.Credentials["provider"].Reference["account"].(map[string]any)["name"] = "changed"
+	first.Credentials["provider"].Environment[0] = "OTHER"
+	delete(first.Inputs, "greeting")
+	delete(first.Credentials, "provider")
+	if second.Inputs["greeting"].Reference["nested"].(map[string]any)["items"].([]any)[0] != "original" {
+		t.Fatal("input reference shared between group instances")
+	}
+	if second.Credentials["provider"].Reference["account"].(map[string]any)["name"] != "original" || second.Credentials["provider"].Environment[0] != "TOKEN" {
+		t.Fatal("credential binding shared between group instances")
+	}
+}

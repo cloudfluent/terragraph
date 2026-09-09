@@ -131,7 +131,7 @@ func Validate(g *Graph) []Problem {
 			v := node.Schema.Variables[varName]
 			if v.Required && !wired[name+"."+varName] {
 				problems = append(problems, Problem{
-					Code: "required_input_unwired", Subject: "node." + name + ".input." + varName, Remedy: "supply the variable through an edge, vars, or runtime input",
+					Code: "required_input_unwired", Subject: "node." + name + ".input." + varName, Remedy: "supply the variable through an edge, vars, a plugin input binding, or runtime input",
 					Severity: SeverityWarning,
 					Message:  fmt.Sprintf("node.%s.input.%s: required variable %q has no edge feeding it (must be supplied some other way, e.g. terraform.tfvars)", name, varName, varName),
 				})
