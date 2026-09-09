@@ -57,13 +57,14 @@ See [docs/](docs/README.md) for the blueprint model, groups, vendoring, the exec
 
 ## Examples
 
-Self-contained and cloud-credential-free (`random`/`local` providers only). Clone and run directly, each with its own README:
+Self-contained and cloud-credential-free (built-in resources or `random`/`local` providers only). Clone and run directly, each with its own README:
 
 - [`examples/basic`](examples/basic): one node feeding two independent downstream nodes (wiring, parallel execution, skipping unchanged nodes).
 - [`examples/reuse`](examples/reuse): the same module instantiated twice, proving the local state default isolates each node.
 - [`examples/group`](examples/group): a group instantiated twice via `use`, proving expansion, export wiring, and per-instance state isolation.
 - [`examples/contracts`](examples/contracts): producer and consumer declarations checked against an edge and the modules' schemas.
 - [`examples/vendored`](examples/vendored): a node sourced from a remote git address, showing the vendor workflow.
+- [`examples/compelete`](examples/compelete): a 63-node AWS multi-account landscape with dev/stg/prd VPCs, EKS, data services, nested DRY groups, enforced contracts, and executable lifecycle labs; uses only built-in resources, with no provider downloads.
 
 ## Development
 
