@@ -17,6 +17,7 @@ import (
 	"github.com/cloudfluent/terragraph/internal/exec"
 	"github.com/cloudfluent/terragraph/internal/graph"
 	"github.com/cloudfluent/terragraph/internal/graphlock"
+	"github.com/cloudfluent/terragraph/internal/plugins"
 	"github.com/cloudfluent/terragraph/internal/runlock"
 )
 
@@ -146,6 +147,12 @@ func Load(blueprintPath string, binary exec.Binary, stdout, stderr io.Writer) (*
 	return e, err
 }
 
+// LoadContext carries cancellation and plugin diagnostics into static evaluation before an Engine exists.
+func LoadContext(ctx context.Context, blueprintPath string, binary exec.Binary, stdout, stderr io.Writer) (*Engine, error) {
+	e, _, err := load(ctx, blueprintPath, binary, stdout, stderr, false)
+	return e, err
+}
+
 // LoadLocked is Load after taking the blueprint process lock, and holds it across graph.Build so a concurrent vendor cannot rewrite module sources underneath Inspect. The caller must invoke the returned func when the run ends.
 func LoadLocked(blueprintPath string, binary exec.Binary, stdout, stderr io.Writer) (*Engine, func(), error) {
 	return LoadLockedContext(context.Background(), blueprintPath, binary, stdout, stderr)
@@ -163,8 +170,22 @@ func LoadLockedContext(ctx context.Context, blueprintPath string, binary exec.Bi
 	}, nil
 }
 
-func load(ctx context.Context, blueprintPath string, binary exec.Binary, stdout, stderr io.Writer, takeLock bool, observation ...bool) (*Engine, *runlock.Lock, error) {
-	bp, dir, err := blueprint.LoadPath(blueprintPath)
+func load(ctx context.Context, blueprintPath string, binary exec.Binary, stdout, stderr io.Writer, takeLock bool, observation ...bool) (result *Engine, held *runlock.Lock, resultErr error) {
+	evaluation, err := plugins.Evaluate(ctx, blueprintPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer func() {
+		if err := evaluation.Close(); err != nil {
+			resultErr = errors.Join(resultErr, err)
+			if held != nil {
+				_ = held.Close()
+			}
+			result = nil
+			held = nil
+		}
+	}()
+	bp, dir, err := blueprint.LoadPath(blueprintPath, evaluation.Context)
 	if err != nil {
 		return nil, nil, err
 	}

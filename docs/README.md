@@ -26,6 +26,7 @@ For your own modules, start with [nodes, edges, and literal inputs](blueprint.md
 | You want to | Read |
 |---|---|
 | Connect modules, supply inputs, or choose runtimes and environments | [Blueprint](blueprint.md) |
+| Install optional executable functions and inspect package locks | [Plugins](plugins.md) |
 | Reuse a set of connected modules | [Groups](groups.md) and the [group example](../examples/group) |
 | Keep backend configuration DRY and give each leaf its own state address | [Shared backend settings](blueprint.md#keeping-backend-configuration-dry) and the [group before/after example](../examples/group#keeping-backend-configuration-dry) |
 | Check producer and consumer declarations | [Contracts](contracts.md) |

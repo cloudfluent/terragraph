@@ -2,6 +2,7 @@ package graph
 
 import (
 	"fmt"
+	"github.com/hashicorp/hcl/v2"
 	"sort"
 	"strings"
 
@@ -11,6 +12,7 @@ import (
 
 // resolveContext tracks state for one Build() call: in-progress group resolutions (by absolute source directory + group name), to catch group self-reference cycles, plus per-directory caches so a group source directory or a node's module directory and file mode is only ever read and parsed once no matter how many times it's referenced (multiple `use` instances of the same group, or multiple nodes sharing one `source` via backend_config). Both caches are safe uncontended: Build runs entirely single-threaded, and every goroutine terragraph ever spawns (see engine.runLevels) starts only after the graph it walks has already been fully built.
 type resolveContext struct {
+	evaluation *hcl.EvalContext
 	// observation skips execution-only validation while retaining the existing recursive source resolver.
 	observation bool
 	stack       []string
@@ -40,9 +42,12 @@ func (rc *resolveContext) parseGroupDir(dir string) (*blueprint.Blueprint, error
 	if bp, ok := rc.groupDirs[dir]; ok {
 		return bp, nil
 	}
-	bp, err := blueprint.ParseDir(dir)
+	bp, err := blueprint.ParseDir(dir, rc.evaluation)
 	if err != nil {
 		return nil, err
+	}
+	if len(bp.Plugins) > 0 {
+		return nil, fmt.Errorf("group source %s: plugin declarations belong in the root blueprint", dir)
 	}
 	if rc.groupDirs == nil {
 		rc.groupDirs = map[string]*blueprint.Blueprint{}

@@ -29,7 +29,7 @@ type SourceNode struct {
 
 // SourceNodes shares group parsing, cycle detection and namespace rules with Build while omitting schema-dependent validation until after fetching.
 func SourceNodes(bp *blueprint.Blueprint, baseDir string) ([]SourceNode, error) {
-	return sourceNodes(bp, baseDir, "", nil, &resolveContext{})
+	return sourceNodes(bp, baseDir, "", nil, &resolveContext{evaluation: bp.Evaluation})
 }
 
 func sourceNodes(bp *blueprint.Blueprint, baseDir, namespace string, ambientBackend map[string]string, rc *resolveContext) ([]SourceNode, error) {

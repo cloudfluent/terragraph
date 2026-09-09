@@ -3,6 +3,7 @@ package blueprint
 
 import (
 	"fmt"
+	"github.com/hashicorp/hcl/v2"
 	"strings"
 )
 
@@ -98,7 +99,7 @@ type Use struct {
 	Runtime string
 	// Env, if set, contributes extra environment variables to every node this instantiation expands to (e.g. which AWS account/region/role the whole group deploys into), merged under whatever ambient Env an enclosing Use.Env already contributed and merged under, key-by-key, by each internal node's own Env in turn. Like Runtime, a group definition has no equivalent of its own: which account a reusable group deploys into is a fact about where it's instantiated.
 	Env map[string]string
-	// Vars is optional and supplies literal input values for this instance, keyed by the group's export input names (not internal node.input paths). Same literal object as Node.Vars: JSON-compatible values, no references to other nodes' outputs, no functions. Graph expansion rewrites each key through the resolved export onto the leaf nodes' Vars maps (see graph.applyUseVars); a group definition has no equivalent, because instance data belongs at the use site.
+	// Vars is optional and supplies literal input values for this instance, keyed by the group's export input names (not internal node.input paths). Same literal object as Node.Vars: JSON-compatible values, no references to other nodes' outputs; explicitly installed plugin functions may compute values. Graph expansion rewrites each key through the resolved export onto the leaf nodes' Vars maps (see graph.applyUseVars); a group definition has no equivalent, because instance data belongs at the use site.
 	Vars map[string]any
 	// Approve, if set, becomes the approve level for every node this instantiation expands to, unless that node sets its own. Like Runtime, only the instantiation site can set this and a group definition has no equivalent: how much of a reusable group may be changed unattended is a fact about where it is deployed, not about the group.
 	Approve Approve
@@ -195,6 +196,9 @@ type S3Lock struct {
 
 // Blueprint is the fully parsed graph topology: nodes and the edges between them, plus any group definitions and instantiations. It carries no resource configuration, only wiring.
 type Blueprint struct {
+	// Evaluation carries only caller-approved functions into group parsing; blueprint never loads executable code.
+	Evaluation *hcl.EvalContext
+	Plugins    []PluginConfig
 	// Execution configures journals and optional retained plans without changing any node backend.
 	Execution *ExecutionConfig
 	Nodes     []Node

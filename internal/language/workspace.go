@@ -397,6 +397,7 @@ var completionSchemas = map[string][]attributeSpec{
 		{name: "vendor", insert: "vendor {\n}", detail: "Blueprint block", documentation: "Configures the local vendor directory."},
 		{name: "tfvars", insert: "tfvars {\n}", detail: "Blueprint block", documentation: "Configures where resolved input values are written."},
 		{name: "lock", insert: "lock {\n  s3 {\n    bucket = \"\"\n    key    = \"\"\n    region = \"\"\n  }\n}", detail: "Blueprint block", documentation: "Serializes plan/apply/destroy across machines with a remote lock object."},
+		{name: "plugin", insert: "plugin \"name\" {\n  source = \"\"\n  version = \"\"\n}", detail: "Optional executable plugin", documentation: "Declares a version-locked plugin; the editor never executes plugin code."},
 		{name: "execution", insert: "execution {\n}", detail: "Blueprint block", documentation: "Configures execution record storage and retained plan lifetime."},
 		{name: "snapshots", insert: "snapshots { }", detail: "Blueprint block", documentation: "Opts the graph into local output snapshots, consumed as the input source of last resort."},
 	},
@@ -414,6 +415,11 @@ var completionSchemas = map[string][]attributeSpec{
 	},
 	"export.input":  {{name: "to", insert: "to = node.", detail: "required input reference"}},
 	"export.output": {{name: "from", insert: "from = node.", detail: "required output reference"}},
+	"plugin": {
+		{name: "source", insert: "source = \"\"", detail: "required package identity"},
+		{name: "version", insert: "version = \"\"", detail: "required version constraint"},
+		{name: "config", insert: "config = {\n}", detail: "literal plugin configuration"},
+	},
 	"execution": {
 		{name: "bucket", insert: "bucket = \"\"", detail: "optional string", documentation: "S3 bucket for execution records and retained plans; requires a shared graph lock."},
 		{name: "prefix", insert: "prefix = \"\"", detail: "optional string", documentation: "Dedicated artifact prefix, separate from state and locks."},
@@ -433,7 +439,7 @@ var completionSchemas = map[string][]attributeSpec{
 	},
 	"node": {
 		{name: "source", insert: "source = \"\"", detail: "required string", documentation: "Path or remote source of the Terraform or OpenTofu module."},
-		{name: "vars", insert: "vars = {\n}", detail: "object", documentation: "Literal Terraform input values. Use an edge for another node's output."},
+		{name: "vars", insert: "vars = {\n}", detail: "object", documentation: "Terraform input values, optionally computed by installed plugin functions. Use an edge for another node's output."},
 		{name: "env", insert: "env = {\n}", detail: "map(string)", documentation: "Extra environment variables for this module's Terraform or OpenTofu process."},
 		{name: "runtime", insert: "runtime = runtime.", detail: "runtime reference", documentation: "Selects a declared runtime for this node."},
 		{name: "backend_address", insert: "backend_address = {\n  s3_key_prefix = \"prod\"\n}", detail: "object", documentation: "Optional S3 key generation. Inherits when omitted; {} disables it. Explicit addresses win."},

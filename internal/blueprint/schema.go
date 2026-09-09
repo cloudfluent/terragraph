@@ -8,6 +8,7 @@ import "github.com/hashicorp/hcl/v2"
 func BlockAttributes() map[string][]string {
 	schemas := map[string]*hcl.BodySchema{
 		"execution": executionSchema,
+		"plugin":    pluginSchema,
 		"node":      nodeSchema,
 		"edge":      edgeSchema,
 		"use":       useSchema,
