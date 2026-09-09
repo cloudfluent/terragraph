@@ -62,7 +62,7 @@ func (e *executable) GRPCServer(_ *processplugin.GRPCBroker, s *grpc.Server) err
 	s.RegisterService(&grpc.ServiceDesc{ServiceName: rpcName, HandlerType: (*service)(nil), Methods: []grpc.MethodDesc{
 		{MethodName: "Describe", Handler: describeRPC},
 		{MethodName: "Invoke", Handler: invokeRPC},
-	}, Streams: []grpc.StreamDesc{{StreamName: "Logs", Handler: serveLogs, ServerStreams: true}}}, e)
+	}, Streams: []grpc.StreamDesc{{StreamName: "Logs", Handler: serveLogs, ServerStreams: true}, {StreamName: "InvokePlan", Handler: servePlan, ClientStreams: true}}}, e)
 	return nil
 }
 func (e *executable) GRPCClient(_ context.Context, _ *processplugin.GRPCBroker, c *grpc.ClientConn) (any, error) {
@@ -127,6 +127,9 @@ func (c *client) Describe(ctx context.Context) (Descriptor, error) {
 	return d, err
 }
 func (c *client) Invoke(ctx context.Context, r Request) (Response, error) {
+	if len(r.Event.Plan) > 0 {
+		return c.invokePlanStream(ctx, r)
+	}
 	var result Response
 	err := c.c.Invoke(ctx, "/"+rpcName+"/Invoke", &r, &result, grpc.ForceCodec(codec{}), grpc.MaxCallRecvMsgSize(MaxMessageSize), grpc.MaxCallSendMsgSize(MaxMessageSize))
 	return result, err

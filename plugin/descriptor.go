@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"slices"
 
 	"github.com/hashicorp/go-version"
 	ctyjson "github.com/zclconf/go-cty/cty/json"
@@ -53,6 +54,29 @@ func (d Descriptor) Validate() error {
 			if f.Effect != "pure" && f.Effect != "read_only" && f.Effect != "idempotent_external" && f.Effect != "non_idempotent_external" {
 				return fmt.Errorf("feature.%s: invalid effect", f.Name)
 			}
+			if f.Kind == "validator" || f.Kind == "expansion" {
+				if f.Effect != "pure" {
+					return fmt.Errorf("feature.%s: static features must be pure", f.Name)
+				}
+			}
+			if (f.Kind == "gate" || f.Kind == "validator" || f.Kind == "observer") && len(f.Events) == 0 {
+				return fmt.Errorf("feature.%s: declare lifecycle events", f.Name)
+			}
+			for _, phase := range f.Events {
+				if !slices.Contains(LifecyclePhases, phase) {
+					return fmt.Errorf("feature.%s: unsupported event %q", f.Name, phase)
+				}
+				if f.Kind == "gate" && !slices.Contains([]string{"graph.validate", "selection.ready", "run.prepare", "node.prepare", "source.vendor.before", "node.init.before", "node.plan.ready", "node.mutation.admit", "native.operation.before", "level.finished"}, phase) {
+					return fmt.Errorf("feature.%s: event %s cannot block a completed operation", f.Name, phase)
+				}
+				if f.Kind == "gate" && phase == "graph.validate" && f.Effect != "pure" {
+					return fmt.Errorf("feature.%s: static graph gates must be pure; move external checks to run.prepare", f.Name)
+				}
+				if f.Kind == "validator" && phase != "graph.validate" {
+					return fmt.Errorf("feature.%s: validators run at graph.validate", f.Name)
+				}
+			}
+
 		default:
 			return fmt.Errorf("feature.%s: unsupported kind %q", f.Name, f.Kind)
 		}

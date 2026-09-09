@@ -36,7 +36,7 @@ func newExecutionRecoveryCmd(path *string, binaryOf func() exec.Binary, loggerOf
 				if writeErr := writeJSON(cmd, errorResultDTO{SchemaVersion: 1, Diagnostics: diagnostics}); writeErr != nil {
 					return writeErr
 				}
-			} else if writeErr := writeJSON(cmd, executionRecoveryDTO{SchemaVersion: 1, executionDTO: executionToDTO(record), Diagnostics: diagnostics}); writeErr != nil {
+			} else if writeErr := writeJSON(cmd, executionRecoveryDTO{SchemaVersion: record.SchemaVersion, executionDTO: executionToDTO(record), Diagnostics: diagnostics}); writeErr != nil {
 				return writeErr
 			}
 			return err

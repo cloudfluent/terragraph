@@ -191,3 +191,5 @@ This allows create and update actions by default for the instance's nodes. A nod
 The root blueprint's `vendor.directory` and `vendor.manifest_file` control these copies and their manifest. Existing group-local copies remain usable when no root qualified copy exists. Refreshes publish into the root vendor directory and check local state before changing execution directories; see [vendoring](vendoring.md) for compatibility and refresh rules.
 
 Optional [plugin functions](plugins.md) declared by the root blueprint are available in group node and use `vars`. Group source directories cannot declare their own executable plugins.
+
+Plugin `input` and `credential` bindings on nodes inside a group use aliases explicitly declared by the root blueprint. Group expansion preserves those bindings on qualified leaves. A `use.vars` value forwarded to an input already supplied by a plugin is a supplier conflict; remove one binding. Groups cannot install packages or grant plugin access. See [Plugins](plugins.md).

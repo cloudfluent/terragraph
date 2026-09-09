@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/cloudfluent/terragraph/internal/blueprint"
+	"github.com/cloudfluent/terragraph/internal/engine"
 	"github.com/cloudfluent/terragraph/internal/plugins"
 	"github.com/cloudfluent/terragraph/internal/runlock"
 	"github.com/spf13/cobra"
@@ -66,6 +67,38 @@ func newPluginCmd(path *string) *cobra.Command {
 			}
 		}
 		return nil
+	}})
+	var stopped, acknowledge bool
+	recoverCmd := &cobra.Command{Use: "recover EXECUTION_ID CALL_ID", Short: "Retry a recorded idempotent plugin effect or acknowledge its externally reviewed outcome", Args: cobra.ExactArgs(2), RunE: func(cmd *cobra.Command, args []string) error {
+		e, close, err := engine.OpenExecutionHistory(cmd.Context(), *path, cmd.ErrOrStderr())
+		if err != nil {
+			return err
+		}
+		defer close()
+		if !acknowledge {
+			configs, _, err := blueprint.LoadPlugins(*path)
+			if err != nil {
+				return err
+			}
+			e.Blueprint.Plugins = configs
+		}
+		record, err := e.RecoverPluginCall(args[0], args[1], stopped, acknowledge)
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s: %s\n", record.ID, record.Status)
+		return err
+	}}
+	recoverCmd.Flags().BoolVar(&stopped, "confirm-stopped", false, "confirm the previous executor has stopped")
+	recoverCmd.Flags().BoolVar(&acknowledge, "acknowledge-external-state", false, "record that the external outcome was inspected and resolved without replaying it")
+	root.AddCommand(recoverCmd)
+	root.AddCommand(&cobra.Command{Use: "report EXECUTION_ID CALL_ID", Short: "Write a plugin-authored report to stdout; may contain sensitive plan evidence", Args: cobra.ExactArgs(2), RunE: func(cmd *cobra.Command, args []string) error {
+		e, close, err := engine.OpenExecutionHistory(cmd.Context(), *path, cmd.ErrOrStderr())
+		if err != nil {
+			return err
+		}
+		defer close()
+		return e.ReadPluginReport(args[0], args[1], cmd.OutOrStdout())
 	}})
 	return root
 }

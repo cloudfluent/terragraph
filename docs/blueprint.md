@@ -297,3 +297,7 @@ A blueprint may contain one `snapshots` block; it accepts no settings. During `a
 Snapshots are a last resort after this run's applied outputs and live `terraform output`. They may be stale and do not replace a refreshed plan or automatically apply upstream nodes. Without the block, snapshots are neither written nor used. See [output snapshots](execution-model.md#output-snapshots) for fallback conditions and refreshing existing snapshots.
 
 For additional checks on values exchanged between modules, see [producer and consumer contracts](contracts.md). Contract types accept native expressions such as `type = list(string)` and legacy strings. Consumer type omission retains the module variable's type check. Explicit contracts add actual-value checks during plan/apply, with `warn` as the default and `enforce` to block violations.
+
+## Plugin-supplied node inputs
+
+Node `input` blocks bind an exact `plugin.alias.feature` and a literal `ref` object for deferred resolution. Node `credential` blocks additionally allowlist returned environment names. These are distinct from `vars` and are validated as separate suppliers; plugin inputs require sensitive module variables. Root plugin `feature` and `access` blocks configure enforcement, deadlines, environment grants, and plan disclosure. See [Plugins](plugins.md) for syntax, lifecycle, failure, and recovery rules.

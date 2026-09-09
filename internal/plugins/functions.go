@@ -18,9 +18,10 @@ import (
 
 // Evaluation owns the static sessions until group expansion completes; it exposes no variables or runtime resolvers to HCL.
 type Evaluation struct {
-	Context  *hcl.EvalContext
-	sessions []*Session
-	workDir  string
+	Lifecycle *Lifecycle
+	Context   *hcl.EvalContext
+	sessions  []*Session
+	workDir   string
 }
 
 // Evaluate loads only explicitly locked pure functions and refuses unsupported features instead of silently ignoring policy.
@@ -46,12 +47,15 @@ func Evaluate(ctx context.Context, path string) (_ *Evaluation, resultErr error)
 		if err != nil {
 			return nil, err
 		}
-		for _, feature := range p.Descriptor.Features {
-			if feature.Kind != "function" {
-				return nil, fmt.Errorf("plugin.%s.feature.%s: %s is not enabled by this host version; use a function-only package", config.Name, feature.Name, feature.Kind)
-			}
-		}
+
 		packages[i] = p
+	}
+	e.Lifecycle, err = NewLifecycle(ctx, dir, configs, "static", "", nil)
+	if err != nil {
+		return nil, err
+	}
+	if err := e.Lifecycle.Emit(ctx, sdk.Event{Phase: "config.evaluate", Status: "started"}); err != nil {
+		return nil, err
 	}
 	parent := filepath.Join(dir, ".terragraph", "plugins", "work")
 	if err := os.MkdirAll(parent, 0700); err != nil {
@@ -62,6 +66,15 @@ func Evaluate(ctx context.Context, path string) (_ *Evaluation, resultErr error)
 		return nil, err
 	}
 	for i, config := range configs {
+		hasFunctions := false
+		for _, f := range packages[i].Descriptor.Features {
+			if f.Kind == "function" {
+				hasFunctions = true
+			}
+		}
+		if !hasFunctions {
+			continue
+		}
 		work := filepath.Join(e.workDir, config.Name)
 		if err := os.Mkdir(work, 0700); err != nil {
 			return nil, err
@@ -77,6 +90,9 @@ func Evaluate(ctx context.Context, path string) (_ *Evaluation, resultErr error)
 			return nil, fmt.Errorf("plugin.%s.configure: %w", config.Name, err)
 		}
 		for _, feature := range packages[i].Descriptor.Features {
+			if feature.Kind != "function" {
+				continue
+			}
 			name := config.Name + "_" + feature.Name
 			if _, exists := e.Context.Functions[name]; exists {
 				return nil, fmt.Errorf("plugin function %s is declared twice; change a plugin alias", name)
@@ -120,6 +136,13 @@ func staticFunction(ctx context.Context, session *Session, feature sdk.Feature) 
 
 // Close removes transient package working files after terminating every static session.
 func (e *Evaluation) Close() error {
+	var lifecycleErr error
+	if e.Lifecycle != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		lifecycleErr = e.Lifecycle.Close(ctx)
+		cancel()
+		e.Lifecycle = nil
+	}
 	for _, session := range e.sessions {
 		session.Close()
 	}
@@ -129,5 +152,5 @@ func (e *Evaluation) Close() error {
 		}
 		e.workDir = ""
 	}
-	return nil
+	return lifecycleErr
 }

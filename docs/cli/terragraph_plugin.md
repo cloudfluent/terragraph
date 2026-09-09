@@ -22,3 +22,5 @@ Install and inspect version-locked executable plugins
 * [terragraph plugin inspect](terragraph_plugin_inspect.md)	 - Read package metadata and checksums without executing plugin code
 * [terragraph plugin install](terragraph_plugin_install.md)	 - Install a local release package and pin its checksum for this platform
 * [terragraph plugin list](terragraph_plugin_list.md)	 - Verify and list locked plugins for this platform without executing them
+* [terragraph plugin recover](terragraph_plugin_recover.md)	 - Retry a recorded idempotent plugin effect or acknowledge its externally reviewed outcome
+* [terragraph plugin report](terragraph_plugin_report.md)	 - Write a plugin-authored report to stdout; may contain sensitive plan evidence

@@ -3,11 +3,13 @@ package engine
 import (
 	"errors"
 	"fmt"
+	sdk "github.com/cloudfluent/terragraph/plugin"
 	"os"
 	"time"
 
 	"github.com/cloudfluent/terragraph/internal/exec"
 	"github.com/cloudfluent/terragraph/internal/graph"
+	"github.com/cloudfluent/terragraph/internal/plugins"
 )
 
 // SavePlans freezes only the current frontier; later inputs must come from real upstream outputs after the reviewed frontier has been applied.
@@ -48,6 +50,7 @@ func (e *Engine) SavePlans(opts Options, continueID string) (record ExecutionRec
 		return record, err
 	}
 	defer s.close()
+	defer func() { resultErr = errors.Join(resultErr, e.finishPlugins(resultErr)) }()
 	record = s.record
 	if continueID != "" {
 		opts, err = e.storedSelection(opts, s.record)
@@ -63,6 +66,7 @@ func (e *Engine) SavePlans(opts Options, continueID string) (record ExecutionRec
 		return record, fmt.Errorf("execution %s is %s; apply its pending plans or start a fresh execution", s.record.ID, s.record.Status)
 	}
 	defer func() {
+		resultErr = errors.Join(resultErr, e.finishPlugins(resultErr))
 		if resultErr != nil {
 			resultErr = errors.Join(resultErr, s.finishSaved(resultErr))
 		}
@@ -74,6 +78,15 @@ func (e *Engine) SavePlans(opts Options, continueID string) (record ExecutionRec
 	}
 	if s.record.Binding != "" && s.record.Binding != binding {
 		return record, WithDiagnostic(fmt.Errorf("graph configuration changed; cancel this execution and create a fresh plan"), Diagnostic{Code: "saved_plan_incompatible", Category: "artifact", Phase: "artifact"})
+	}
+	if e.plugins == nil {
+		names := []string{}
+		for _, n := range s.record.Nodes {
+			names = append(names, n.Name)
+		}
+		if err := e.startPlugins("plan", s, names); err != nil {
+			return record, err
+		}
 	}
 	next := s.record
 	next.Binding = binding
@@ -101,6 +114,12 @@ func (e *Engine) SavePlans(opts Options, continueID string) (record ExecutionRec
 		if err := e.saveFrontierNode(s, node.Name, opts); err != nil {
 			return record, errors.Join(err, s.noteSavedFailure(node.Name, "plan_step_failed"))
 		}
+		if err := e.plugins.Emit(e.context(), sdk.Event{Phase: "node.finished", Node: node.Name, Status: StatusPlanned}); err != nil {
+			return record, err
+		}
+		if err := e.plugins.CompletionError(); err != nil {
+			return record, err
+		}
 		count++
 	}
 	if count == 0 {
@@ -113,6 +132,9 @@ func (e *Engine) SavePlans(opts Options, continueID string) (record ExecutionRec
 }
 
 func (e *Engine) saveFrontierNode(s *executionSession, name string, opts Options) error {
+	if err := e.plugins.Emit(e.context(), sdk.Event{Phase: "node.prepare", Node: name}); err != nil {
+		return err
+	}
 	vars, err := e.resolveLiveInputs(name)
 	if err != nil {
 		return err
@@ -199,6 +221,7 @@ func (e *Engine) ApplySavedPlans(id string, opts Options) (result RunResult, res
 	}
 	result.ExecutionID = s.record.ID
 	defer s.close()
+	defer func() { resultErr = errors.Join(resultErr, e.finishPlugins(resultErr)) }()
 	opts, err = e.storedSelection(opts, s.record)
 	opts.announceSelection(false)
 	if err != nil {
@@ -218,10 +241,19 @@ func (e *Engine) ApplySavedPlans(id string, opts Options) (result RunResult, res
 		return result, WithDiagnostic(fmt.Errorf("graph configuration changed; cancel this execution and create a fresh plan"), Diagnostic{Code: "saved_plan_incompatible", Category: "artifact", Phase: "artifact"})
 	}
 	defer func() {
+		resultErr = errors.Join(resultErr, e.finishPlugins(resultErr))
 		if resultErr != nil {
 			resultErr = errors.Join(resultErr, s.finishSaved(resultErr))
 		}
 	}()
+	names := []string{}
+	for _, n := range s.record.Nodes {
+		names = append(names, n.Name)
+	}
+	if err := e.startPlugins("apply", s, names); err != nil {
+		return result, err
+	}
+
 	for _, node := range append([]ExecutionNode(nil), s.record.Nodes...) {
 		if node.Phase != "planned" {
 			continue
@@ -236,6 +268,12 @@ func (e *Engine) ApplySavedPlans(id string, opts Options) (result RunResult, res
 			return result, errors.Join(err, s.noteSavedFailure(node.Name, "apply_step_failed"))
 		}
 		result.Nodes = append(result.Nodes, run)
+		if err := e.plugins.Emit(e.context(), sdk.Event{Phase: "node.finished", Node: node.Name, Status: status}); err != nil {
+			return result, err
+		}
+		if err := e.plugins.CompletionError(); err != nil {
+			return result, err
+		}
 	}
 	next := s.record
 	next.Status = "completed"
@@ -259,6 +297,9 @@ func (e *Engine) ApplySavedPlans(id string, opts Options) (result RunResult, res
 }
 
 func (e *Engine) applySavedNode(s *executionSession, node ExecutionNode, opts Options) (string, error) {
+	if err := e.plugins.Emit(e.context(), sdk.Event{Phase: "node.prepare", Node: node.Name}); err != nil {
+		return StatusNotRun, err
+	}
 	bundle, err := e.readPlanBundle(s, node)
 	if err != nil {
 		return "", err
@@ -306,6 +347,9 @@ func (e *Engine) applySavedNode(s *executionSession, node ExecutionNode, opts Op
 	}
 	defer cleanup()
 	if err := os.WriteFile(path, bundle.Plan, 0600); err != nil {
+		return "", err
+	}
+	if err := e.pluginPlan(node.Name, r, path, "node.plan.ready"); err != nil {
 		return "", err
 	}
 	plan := &preparedNodePlan{name: node.Name, runner: r, path: path, changed: bundle.Changed, cleanup: cleanup, session: s, verifyUnchanged: true}
@@ -367,11 +411,22 @@ func (e *Engine) savedGraphBinding(record ExecutionRecord) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return executionDigest(struct {
+	binding, err := executionDigest(struct {
 		Contracts, ContractMode string
 		Nodes                   map[string]any
 		Edges                   any
 	}{contracts, e.Graph.ContractMode, nodes, e.Graph.Edges})
+	if err != nil {
+		return "", err
+	}
+	if e.Blueprint != nil && len(e.Blueprint.Plugins) > 0 {
+		p, err := plugins.Binding(e.BaseDir, e.Blueprint.Plugins)
+		if err != nil {
+			return "", err
+		}
+		return executionDigest([]string{binding, p})
+	}
+	return binding, nil
 }
 
 func (e *Engine) resolveLiveInputs(name string) (map[string]any, error) {

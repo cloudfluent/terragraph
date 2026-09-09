@@ -58,6 +58,8 @@ func (p PortRef) String() string {
 //
 // Vars is optional and supplies literal input values directly, keyed by variable name: for a value that's genuinely this node's own data (e.g. "this tenant's CIDR is 10.16.0.0/20"), not something that comes from another node's real output. It's merged into the same <node source>/.terragraph.auto.tfvars.json a data edge's resolved value would populate (see engine.Engine.resolveInputs), type-checked against the target variable's declared type the same way, and it's an error for a variable to be set by more than one source at once (two data edges, or a data edge and Vars together). Unlike BackendConfig (always strings), a value here can be any JSON-compatible shape a Terraform variable can hold (string, number, bool, list, or a nested object), so a module needing many inputs can still be wired with one Vars entry per node instead of one edge per variable.
 type Node struct {
+	Inputs        map[string]PluginBinding `json:"Inputs,omitempty"`
+	Credentials   map[string]PluginBinding `json:"Credentials,omitempty"`
 	Name          string
 	Source        string
 	BackendConfig map[string]string

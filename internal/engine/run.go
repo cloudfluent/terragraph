@@ -9,9 +9,12 @@ import (
 	"sort"
 	"sync"
 
+	"context"
 	"github.com/cloudfluent/terragraph/internal/blueprint"
 	"github.com/cloudfluent/terragraph/internal/exec"
 	"github.com/cloudfluent/terragraph/internal/graph"
+	sdk "github.com/cloudfluent/terragraph/plugin"
+	"time"
 )
 
 // Options controls the scope and execution behavior of a plan/apply/destroy run.
@@ -105,6 +108,15 @@ func (e *Engine) runLevels(opts Options, reverse bool, action nodeAction, afterL
 	runs = make([]NodeRun, 0)
 	// Sort the final returned slice so failed runs include their not-run nodes in the same deterministic order as successful runs.
 	defer func() {
+		if e.plugins != nil {
+			ctx, cancel := context.WithTimeout(context.WithoutCancel(e.context()), 5*time.Second)
+			defer cancel()
+			for _, run := range runs {
+				if emitErr := e.plugins.Emit(ctx, sdk.Event{Phase: "node.finished", Node: run.Node, Status: run.Status}); emitErr != nil {
+					e.plugins.AddCompletionError(emitErr)
+				}
+			}
+		}
 		sort.Slice(runs, func(i, j int) bool {
 			if runs[i].Level != runs[j].Level {
 				return runs[i].Level < runs[j].Level
@@ -159,9 +171,25 @@ func (e *Engine) runLevels(opts Options, reverse bool, action nodeAction, afterL
 					}
 				}
 				if err == nil {
+					err = e.plugins.Emit(e.context(), sdk.Event{Phase: "node.prepare", Node: name})
+				}
+				if err == nil {
 					outputs, status, err = action(name, snapshot, out)
 				} else {
 					status = StatusNotRun
+				}
+
+				if e.plugins != nil {
+					terminal := status
+					if err != nil && terminal != StatusNotRun {
+						terminal = StatusFailed
+					}
+					ctx, cancel := context.WithTimeout(context.WithoutCancel(e.context()), 5*time.Second)
+					emitErr := e.plugins.Emit(ctx, sdk.Event{Phase: "node.finished", Node: name, Status: terminal})
+					cancel()
+					if emitErr != nil {
+						e.plugins.AddCompletionError(emitErr)
+					}
 				}
 
 				if buf != nil {
@@ -193,6 +221,12 @@ func (e *Engine) runLevels(opts Options, reverse bool, action nodeAction, afterL
 			}(i, name)
 		}
 		wg.Wait()
+		if completionErr := e.plugins.CompletionError(); completionErr != nil {
+			return markNotRun(runs, levels, li+1), completionErr
+		}
+		if emitErr := e.plugins.Emit(e.context(), sdk.Event{Phase: "level.finished", Nodes: level}); emitErr != nil {
+			return markNotRun(runs, levels, li+1), emitErr
+		}
 
 		for _, err := range errs {
 			if err != nil {

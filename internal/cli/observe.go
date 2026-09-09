@@ -85,9 +85,18 @@ func newObservationCmd(kind string, path *string, binaryOf func() exec.Binary) *
 	if !status {
 		cmd.Use = "output [name]"
 	}
-	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+	cmd.RunE = func(cmd *cobra.Command, args []string) (resultErr error) {
+		var session *engine.ObservationSession
 		result := observationResultDTO{SchemaVersion: 1, Nodes: []observationDTO{}, Diagnostics: []diagnosticDTO{}}
 		finish := func(err error) error {
+			if session != nil {
+				closeErr := session.Close()
+				session = nil
+				if closeErr != nil {
+					err = errors.Join(err, closeErr)
+					result.Diagnostics = append(result.Diagnostics, diagnosticDTO{Category: "plugin", Severity: "error", Code: "plugin_cleanup_failed", Phase: "cleanup", Subject: kind, Message: "plugin cleanup failed", Remedy: "inspect stderr and retained plugin receipts"})
+				}
+			}
 			if format == "json" {
 				if writeErr := writeJSON(cmd, result); writeErr != nil {
 					return writeErr
@@ -108,13 +117,18 @@ func newObservationCmd(kind string, path *string, binaryOf func() exec.Binary) *
 		if raw && (format == "json" || len(args) != 1 || node == "") {
 			return failure("invalid_arguments", "arguments", "--raw requires one named scalar and conflicts with --output json", "use output --node NAME OUTPUT --raw")
 		}
-		session, err := engine.OpenObservation(cmd.Context(), *path, binaryOf(), cmd.ErrOrStderr())
+		opened, err := engine.OpenObservation(cmd.Context(), *path, binaryOf(), cmd.ErrOrStderr())
 		if err != nil {
 			// Parsing errors can quote source expressions; keep this public failure free of source values.
 			result.Diagnostics = append(result.Diagnostics, diagnosticDTO{Category: "configuration", Severity: "error", Code: "observation_load_failed", Phase: "load", Subject: kind, Message: "could not load or lock the blueprint", Remedy: "check blueprint syntax, source directories, and local lock availability", Source: errorLocation(err)})
 			return finish(fmt.Errorf("%s: could not load or lock the blueprint; check syntax, source directories, and local lock availability", kind))
 		}
-		defer session.Close()
+		session = opened
+		defer func() {
+			if session != nil {
+				resultErr = errors.Join(resultErr, session.Close())
+			}
+		}()
 		names, err := session.Names(node)
 		if err != nil {
 			return failure("unknown_node", "selection", err.Error(), "select an exact expanded leaf")

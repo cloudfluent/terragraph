@@ -1,4 +1,4 @@
-package plugins
+package exec
 
 import (
 	"fmt"
@@ -9,8 +9,8 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// startPluginProcess assigns the suspended server to a kill-on-close job before any plugin code can create untracked children.
-func startPluginProcess(cmd *exec.Cmd) (func(), error) {
+// StartManagedProcess assigns the suspended server to a kill-on-close job before any plugin code can create untracked children.
+func StartManagedProcess(cmd *exec.Cmd) (func(), error) {
 	job, err := windows.CreateJobObject(nil, nil)
 	if err != nil {
 		return nil, err
@@ -46,7 +46,7 @@ func startPluginProcess(cmd *exec.Cmd) (func(), error) {
 	}
 	status, _, _ := resume.Call(uintptr(process))
 	if status != 0 {
-		return fail(fmt.Errorf("resuming plugin process failed"))
+		return fail(fmt.Errorf("resuming managed process failed"))
 	}
 	return func() { _ = windows.CloseHandle(job) }, nil
 }

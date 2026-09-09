@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/cloudfluent/terragraph/internal/exec"
+	sdk "github.com/cloudfluent/terragraph/plugin"
 )
 
 // Plan runs `terraform plan` over the selected nodes in topological order, returning each node's outcome (see NodeRun). A node downstream of one that has never been applied will fail to resolve its inputs. See the "known limitation" in the project plan: planning a value that doesn't exist yet is inherently impossible when every node is an independent root module.
@@ -95,7 +96,7 @@ func (e *Engine) plan(opts Options, inspect, allowTextFallback bool) (result Run
 		// Removed however this node exits: the file holds resolved input values in cleartext, and the next run rewrites it from scratch anyway.
 		defer func() { _ = os.Remove(varsPath) }()
 
-		r := &exec.Runner{Context: e.context(), Binary: e.runtimeFor(name), Dir: nodeDir, DataDir: e.dataDir(name), Env: e.envFor(name), Stdout: out, Stderr: out}
+		r := &exec.Runner{Hook: e.pluginRuntime(name), Context: e.context(), Binary: e.runtimeFor(name), Dir: nodeDir, DataDir: e.dataDir(name), Env: e.envFor(name), Stdout: out, Stderr: out}
 		if err := session.transition(name, "initializing", "", ""); err != nil {
 			return fail("journal_failed", "init", err)
 		}
@@ -107,12 +108,12 @@ func (e *Engine) plan(opts Options, inspect, allowTextFallback bool) (result Run
 			return fail("journal_failed", "init", err)
 		}
 
-		if inspect || e.hasContracts(name) {
+		if inspect || e.hasContracts(name) || e.plugins.Has("node.plan.ready") {
 			backend := e.Graph.Nodes[name].Schema.Backend
 			if backend == "remote" || backend == "cloud" || !r.SupportsSavedPlan() {
 				capability := fmt.Errorf("backend does not support saved-plan inspection; use text plan for native preview")
 				review.failure(name, "inspection_unsupported", "capability", capability)
-				if inspect && !allowTextFallback {
+				if (inspect && !allowTextFallback) || e.plugins.Has("node.plan.ready") {
 					return nil, "", capability
 				}
 			} else {
@@ -134,6 +135,9 @@ func (e *Engine) plan(opts Options, inspect, allowTextFallback bool) (result Run
 				if err != nil {
 					return fail("contract_failed", "contracts", err)
 				}
+				if err := e.pluginPlan(name, r, planPath, "node.plan.ready"); err != nil {
+					return fail("plugin_gate_failed", "plan", err)
+				}
 				review.normalize(changed)
 				if err := session.transition(name, "completed", "", ""); err != nil {
 					return fail("journal_failed", "plan", err)
@@ -146,6 +150,9 @@ func (e *Engine) plan(opts Options, inspect, allowTextFallback bool) (result Run
 		}
 		if err := r.Plan(exec.VarFileArgs(varsPath, vars)...); err != nil {
 			return fail("plan_failed", "plan", fmt.Errorf("plan: %w", err))
+		}
+		if err := e.plugins.Emit(e.context(), sdk.Event{Phase: "node.plan.ready", Node: name, Status: "text_only"}); err != nil {
+			return fail("plugin_failed", "plan", err)
 		}
 		if err := session.transition(name, "completed", "", ""); err != nil {
 			return fail("journal_failed", "plan", err)

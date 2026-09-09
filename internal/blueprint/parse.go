@@ -75,6 +75,7 @@ var contractsModeSchema = &hcl.BodySchema{
 }
 
 var nodeSchema = &hcl.BodySchema{
+	Blocks: []hcl.BlockHeaderSchema{{Type: "input", LabelNames: []string{"name"}}, {Type: "credential", LabelNames: []string{"name"}}},
 	Attributes: []hcl.AttributeSchema{
 		{Name: "source", Required: true},
 		{Name: "backend_config", Required: false},
@@ -797,7 +798,13 @@ func parseNodeBlock(block *hcl.Block, evaluation ...*hcl.EvalContext) (Node, err
 		return Node{}, fmt.Errorf("node.%s: %w", block.Labels[0], err)
 	}
 
+	inputs, credentials, err := parsePluginBindings(content.Blocks)
+	if err != nil {
+		return Node{}, fmt.Errorf("node.%s: %w", block.Labels[0], err)
+	}
+
 	return Node{
+		Inputs: inputs, Credentials: credentials,
 		Name:           block.Labels[0],
 		Source:         val.AsString(),
 		BackendConfig:  backendConfig,

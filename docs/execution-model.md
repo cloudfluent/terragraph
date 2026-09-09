@@ -422,3 +422,7 @@ never automatic replay. Contract meaning and mode participate in retained-plan
 bindings. Review JSON exposes independent conditions through `review.contracts`.
 Known null is reconstructed only from the same successful plan, never from a
 missing live output. See the contracts reference for restart and recovery limits.
+
+## Plugin lifecycle outcomes
+
+Plugin gates participate before mutation admission and cannot bypass core approval. Plan gates inspect the same plan bytes and are rechecked after approval; saved plans bind the selected plugin packages, configuration, input values, and authenticated target identities. Required observer failures are recorded separately from node infrastructure phases, so an applied node is not relabelled as an uncertain mutation solely because delivery failed. Unresolved external effects and credential cleanup require [plugin recovery](plugins.md#reports-and-recovery) before their barrier can be cleared. Plugin records use schema version 2, with version 1 retained for plugin-free records.

@@ -108,6 +108,11 @@ func (e *Engine) RunNode(name string, args []string) (resultErr error) {
 		flags := []string{"-lock=true", "-backup=" + backupPath}
 		native = append(append(append([]string(nil), native[:at]...), flags...), native[at:]...)
 	}
+	if !op.readOnly && !op.init {
+		if err := e.pluginAdmitNative(name, op.name); err != nil {
+			return err
+		}
+	}
 	phase := "operating"
 	if op.readOnly {
 		phase = "reading"

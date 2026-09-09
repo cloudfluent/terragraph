@@ -18,6 +18,7 @@ type executionNodeDTO struct {
 }
 
 type executionDTO struct {
+	PluginCalls []pluginCallDTO    `json:"plugin_calls,omitempty"`
 	Selection   *selectionDTO      `json:"selection,omitempty"`
 	ID          string             `json:"id"`
 	Preparation string             `json:"preparation,omitempty"`
@@ -43,6 +44,9 @@ func executionToDTO(record engine.ExecutionRecord) executionDTO {
 	for _, node := range record.Nodes {
 		dto.Nodes = append(dto.Nodes, executionNodeDTO{Node: node.Name, Review: reviewToDTO(node.Review), Phase: node.Phase, PlanID: node.PlanID, Code: node.Code})
 	}
+	for _, call := range record.PluginCalls {
+		dto.PluginCalls = append(dto.PluginCalls, pluginCallDTO{ID: call.ID, Plugin: call.Alias, Feature: call.Feature, Phase: call.Event.Phase, Node: call.Event.Node, Status: call.Status, Code: call.Code, Decision: call.Decision, ReportAvailable: len(call.Report) > 0})
+	}
 	return dto
 }
 
@@ -67,6 +71,11 @@ func newExecutionHistoryCmd(kind string, path *string) *cobra.Command {
 				result.Diagnostics = errorDiagnostics(resultErr, engine.Diagnostic{Code: "execution_read_failed", Category: categoryForPhase(phase), Phase: phase, Subject: "execution", Remedy: "check the selected execution store and restore missing records; do not infer that infrastructure was unchanged"})
 			}
 			if output == "json" {
+				for _, record := range result.Executions {
+					if len(record.PluginCalls) > 0 {
+						result.SchemaVersion = 2
+					}
+				}
 				if err := writeJSON(cmd, result); err != nil {
 					resultErr = errors.Join(resultErr, err)
 				}
@@ -77,6 +86,9 @@ func newExecutionHistoryCmd(kind string, path *string) *cobra.Command {
 					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s  %s  %s\n", record.ID, record.Operation, record.Status)
 					if kind == "show" {
 						printSelection(cmd.OutOrStdout(), record.Selection, nil)
+						for _, call := range record.PluginCalls {
+							_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  plugin %s.%s %s %s: %s\n", call.Plugin, call.Feature, call.Phase, call.ID, call.Status)
+						}
 						if record.Backup {
 							_, _ = fmt.Fprintln(cmd.OutOrStdout(), "  backup: available (export with plan show --backup)")
 						}
@@ -124,4 +136,16 @@ func newExecutionHistoryCmd(kind string, path *string) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&output, "output", "text", "output format: text or json")
 	return cmd
+}
+
+type pluginCallDTO struct {
+	ID              string `json:"id"`
+	Plugin          string `json:"plugin"`
+	Feature         string `json:"feature"`
+	Phase           string `json:"phase"`
+	Node            string `json:"node,omitempty"`
+	Status          string `json:"status"`
+	Code            string `json:"code,omitempty"`
+	Decision        string `json:"decision,omitempty"`
+	ReportAvailable bool   `json:"report_available"`
 }

@@ -43,6 +43,9 @@ func (e *Engine) RecoverExecution(id string, confirmStopped, stateReviewed, repl
 	if !executionNeedsRecovery(record) {
 		return record, fmt.Errorf("execution %s does not need recovery; inspect it with plan show", id)
 	}
+	if pluginRecoveryRequired(record) {
+		return record, fmt.Errorf("execution has unresolved plugin effects; use plugin recover before infrastructure recovery")
+	}
 	session := &executionSession{engine: e, store: store, record: record, revision: revision}
 	if replan {
 		// Acknowledgement releases the coordination barrier without relabelling an unknown historical mutation as successful.
