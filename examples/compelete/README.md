@@ -216,6 +216,22 @@ Change dev's checkout image tag in `environments.hcl` and apply the graph to
 observe downstream propagation. Leave an unchanged environment alone; a
 leaf-only apply will not update its release or the final landscape for you.
 
+Repeat `--node` to select several exact leaves, and add `--downstream` to
+include their successors across data and ordering edges:
+
+```sh
+../../terragraph graph --node dev.checkout.deployment --node dev.payments.deployment --downstream
+../../terragraph apply --node dev.checkout.deployment --node dev.payments.deployment --downstream --auto-approve --parallelism 4
+```
+
+This selects four leaves: both dev deployments, `dev.release`, and
+`landscape`. The boundary summary shows that landscape also needs existing
+outputs from `stg.release` and `prd.release`; neither environment is applied.
+Upstream dependencies are never included automatically. A group name such
+as `dev` is not a valid leaf selector. For saved execution, supply selection
+flags only on the initial `plan --save`; continuation and saved apply keep
+the recorded membership.
+
 The default `safe` policy permits create/update and refuses replacement.
 Changing a VPC CIDR triggers replacement in this fixture. `--auto-approve`
 does not bypass that refusal. `--approve none` can reject all resource
@@ -289,7 +305,7 @@ dependencies. The native fixture execution requires no network access.
 
 | Mode | Exercises |
 |---|---|
-| `smoke` (default) | Validation, 63-node parallel bootstrap, idempotency, warmed plan, six unique environment VPCs, output/status, sensitive redaction/snapshots, exact leaf selection, runtime precondition, contract rejection, replacement refusal, saved leaf, production destroy refusal, reverse teardown |
+| `smoke` (default) | Validation, 63-node parallel bootstrap, idempotency, warmed plan, six unique environment VPCs, output/status, sensitive redaction/snapshots, exact and downstream selection with boundary inputs, runtime precondition, contract rejection, replacement refusal, saved leaf, production destroy refusal, reverse teardown |
 | `saved` | Fresh 12-frontier reviewed bootstrap, continuation, cancellation, pruning, teardown |
 | `native` | Scoped init, console, state list/show/pull/mv/rm, import, and archived native backup export, using only the organization fixture |
 | `vendor` | Local Git upstream, pinned commit and source subdirectory, nested group leaves, custom vendor directory/manifest, exclusions, one-leaf fetch, skip, forced refresh, apply/destroy |
@@ -311,6 +327,7 @@ running any consumers. The native lab verifies that reconciliation step.
 |---|---|
 | Directory loading, nested groups, exports, fan-out, literal inputs, source reuse | Main 63-node graph |
 | Scalar/multi-input data edges and node/group ordering | Main graph |
+| Repeated exact selectors, downstream union, selection reasons and boundary inputs | Day-two walkthrough and smoke graph/apply assertions |
 | Strict type/nullability/sensitivity contracts | Every main-graph data connection |
 | Per-instance env and leaf overrides | Environment/account `env`, nested platform `env`, system-pool override |
 | State and `TF_DATA_DIR` isolation, temporary tfvars, local process lock | Real execution, with state/source checks in verifier |

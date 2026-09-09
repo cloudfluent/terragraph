@@ -93,6 +93,17 @@ def smoke(lab):
     lab.run("status", "--node", "prd.platform.cluster")
     scoped = lab.run("apply", "--node", "dev.checkout.deployment", "--auto-approve")
     require([n["node"] for n in scoped["nodes"]] == ["dev.checkout.deployment"], "leaf selection expanded")
+    selection_args = ("--node", "dev.checkout.deployment", "--node", "dev.payments.deployment", "--downstream")
+    selected_graph = lab.run("graph", *selection_args)
+    selected_names = {"dev.checkout.deployment", "dev.payments.deployment", "dev.release", "landscape"}
+    require({name for level in selected_graph["levels"] for name in level} == selected_names,
+            "downstream selection did not union the two application seeds")
+    boundary_sources = {edge["from"]["node"] for edge in selected_graph["selection"]["boundary_edges"]}
+    require({"stg.release", "prd.release"} <= boundary_sources, "selection omitted external landscape inputs")
+    selected_apply = lab.run("apply", *selection_args, "--auto-approve", "--parallelism", "4")
+    require({node["node"] for node in selected_apply["nodes"]} == selected_names
+            and all(node["status"] == "unchanged" for node in selected_apply["nodes"]),
+            "selected apply expanded into other environments or skipped selected descendants")
     require(source_digest(lab.root) == digest, "execution modified fixture source files")
     require(not list((lab.root / ".terragraph").rglob("*.tfplan")), "temporary plans were not removed")
     require(not list((lab.root / ".terragraph/vars").glob("*.json")), "temporary input files were not removed")
