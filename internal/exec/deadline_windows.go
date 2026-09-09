@@ -5,13 +5,19 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"os/exec"
+	"sync"
 	"syscall"
 	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
+
+// runtimeCleanupGrace bounds kernel-accounting and pipe-drain failures after a node has already exhausted its deadline.
+const runtimeCleanupGrace = 5 * time.Second
 
 // runWithDeadline assigns a suspended runtime to a non-breakaway job before it can spawn providers, so a deadline owns the complete ordinary process tree.
 func runWithDeadline(ctx context.Context, cmd *exec.Cmd) error {
@@ -29,30 +35,40 @@ func runWithDeadline(ctx context.Context, cmd *exec.Cmd) error {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
 	cmd.SysProcAttr.CreationFlags |= windows.CREATE_SUSPENDED
+	stopOutput := protectRuntimeOutput(cmd)
+	defer stopOutput()
+	// Pipe draining must not end while a wrapper's descendants still have time left to run.
+	cmd.WaitDelay = runtimeCleanupGrace
+	if deadline, ok := ctx.Deadline(); ok {
+		cmd.WaitDelay += max(time.Until(deadline), 0)
+	}
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	abort := func(err error) error {
-		_ = windows.TerminateJobObject(job, 1)
+	abort := func(cause error) error {
 		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		return err
+		return waitForRuntime(ctx, cmd, job, runtimeCleanupGrace, cause)
 	}
-	process, err := windows.OpenProcess(windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE, false, uint32(cmd.Process.Pid))
+	process, err := windows.OpenProcess(windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE|windows.PROCESS_SUSPEND_RESUME, false, uint32(cmd.Process.Pid))
 	if err != nil {
 		return abort(fmt.Errorf("opening suspended runtime: %w", err))
 	}
+	defer func() { _ = windows.CloseHandle(process) }()
 	assignErr := windows.AssignProcessToJobObject(job, process)
-	_ = windows.CloseHandle(process)
 	if assignErr != nil {
 		return abort(fmt.Errorf("assigning runtime job: %w; remove incompatible host job restrictions or omit node timeouts", assignErr))
 	}
 	if err := ctx.Err(); err != nil {
 		return abort(err)
 	}
-	if err := resumeRuntime(uint32(cmd.Process.Pid)); err != nil {
+	if err := resumeRuntime(process); err != nil {
 		return abort(err)
 	}
+	return waitForRuntime(ctx, cmd, job, runtimeCleanupGrace, nil)
+}
+
+// waitForRuntime bounds shutdown even if termination fails or job accounting never acknowledges exited processes.
+func waitForRuntime(ctx context.Context, cmd *exec.Cmd, job windows.Handle, grace time.Duration, initialErr error) error {
 	processes := map[uint32]windows.Handle{}
 	defer func() {
 		for _, process := range processes {
@@ -63,73 +79,126 @@ func runWithDeadline(ctx context.Context, cmd *exec.Cmd) error {
 	go func() { done <- cmd.Wait() }()
 	ticker := time.NewTicker(20 * time.Millisecond)
 	defer ticker.Stop()
-	var waitErr error
-	waited, terminated := false, false
+	var timer *time.Timer
+	defer func() {
+		if timer != nil {
+			timer.Stop()
+		}
+	}()
+	var expired <-chan time.Time
+	var waitErr, shutdownErr error
+	waited, stopping := false, false
 	cancel := ctx.Done()
+	stop := func(cause error) {
+		shutdownErr = errors.Join(shutdownErr, cause)
+		if stopping {
+			return
+		}
+		stopping = true
+		cancel = nil
+		timer = time.NewTimer(grace)
+		expired = timer.C
+		if err := windows.TerminateJobObject(job, 1); err != nil {
+			shutdownErr = errors.Join(shutdownErr, fmt.Errorf("terminating runtime job: %w", err))
+		}
+	}
+	if initialErr != nil {
+		stop(initialErr)
+	}
 	for {
-		// Job accounting can reach zero before process handles become signalled; retain handles before termination to wait through kernel cleanup.
-		captureErr := captureJobProcesses(job, processes)
-		if captureErr != nil && !terminated {
-			_ = windows.TerminateJobObject(job, 1)
-			terminated = true
-			cancel = nil
-			waitErr = errors.Join(waitErr, captureErr)
+		if !stopping {
+			if err := captureJobProcesses(job, processes); err != nil {
+				stop(err)
+			}
 		}
 		select {
-		case err := <-done:
-			waitErr = errors.Join(waitErr, err)
+		case waitErr = <-done:
 			waited = true
 			done = nil
 		default:
 		}
 		active, queryErr := activeJobProcesses(job)
 		if queryErr == nil && active == 0 && waited && jobProcessesExited(processes) {
-			if terminated && ctx.Err() != nil {
-				return ctx.Err()
+			if stopping {
+				return errors.Join(ctx.Err(), shutdownErr)
 			}
 			return waitErr
 		}
-		if !terminated && ctx.Err() != nil {
-			if err := windows.TerminateJobObject(job, 1); err == nil {
-				terminated = true
-				cancel = nil
+		if !stopping {
+			if err := ctx.Err(); err != nil {
+				stop(err)
+			} else if queryErr != nil {
+				stop(fmt.Errorf("querying runtime job: %w", queryErr))
 			}
 		}
 		select {
-		case err := <-done:
-			waitErr = errors.Join(waitErr, err)
+		case waitErr = <-done:
 			waited = true
 			done = nil
 		case <-cancel:
 		case <-ticker.C:
+		case <-expired:
+			// The owner also closes the kill-on-close job on return; retained handles provide a fallback when job termination itself was denied.
+			for pid, process := range processes {
+				if status, _ := windows.WaitForSingleObject(process, 0); status == windows.WAIT_OBJECT_0 {
+					continue
+				}
+				if err := windows.TerminateProcess(process, 1); err != nil {
+					shutdownErr = errors.Join(shutdownErr, fmt.Errorf("terminating runtime process %d: %w", pid, err))
+				}
+			}
+			if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+				shutdownErr = errors.Join(shutdownErr, fmt.Errorf("terminating runtime: %w", err))
+			}
+			return errors.Join(ctx.Err(), shutdownErr, fmt.Errorf("runtime cleanup exceeded %s; inspect the execution and recover any uncertain mutation before retrying", grace))
 		}
 	}
 }
 
-// resumeRuntime finds the initial thread after os/exec closes its thread handle; the process has not executed user code yet.
-func resumeRuntime(pid uint32) error {
-	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPTHREAD, 0)
-	if err != nil {
-		return fmt.Errorf("locating runtime thread: %w", err)
+// resumeRuntime resumes the whole suspended process, including extra threads created before user code, just as the plugin host does.
+func resumeRuntime(process windows.Handle) error {
+	resume := windows.NewLazySystemDLL("ntdll.dll").NewProc("NtResumeProcess")
+	if err := resume.Find(); err != nil {
+		return fmt.Errorf("locating runtime resume procedure: %w", err)
 	}
-	defer func() { _ = windows.CloseHandle(snapshot) }()
-	entry := windows.ThreadEntry32{Size: uint32(unsafe.Sizeof(windows.ThreadEntry32{}))}
-	for err := windows.Thread32First(snapshot, &entry); err == nil; err = windows.Thread32Next(snapshot, &entry) {
-		if entry.OwnerProcessID != pid {
-			continue
-		}
-		thread, err := windows.OpenThread(windows.THREAD_SUSPEND_RESUME, false, entry.ThreadID)
-		if err != nil {
-			return fmt.Errorf("opening runtime thread: %w", err)
-		}
-		_, err = windows.ResumeThread(thread)
-		_ = windows.CloseHandle(thread)
-		if err != nil {
-			return fmt.Errorf("resuming runtime thread: %w", err)
-		}
-		return nil
+	status, _, _ := resume.Call(uintptr(process))
+	if status != 0 {
+		return fmt.Errorf("resuming runtime process: %w", windows.NTStatus(status))
 	}
-	return fmt.Errorf("runtime initial thread unavailable; retry after checking host process restrictions")
+	return nil
+}
+
+// runtimeOutput detaches late pipe copies before a bounded shutdown returns buffers to their caller.
+type runtimeOutput struct {
+	mu     *sync.Mutex
+	writer io.Writer
+}
+
+func (out *runtimeOutput) Write(p []byte) (int, error) {
+	out.mu.Lock()
+	defer out.mu.Unlock()
+	if out.writer == nil {
+		return len(p), nil
+	}
+	return out.writer.Write(p)
+}
+
+// protectRuntimeOutput serializes both streams because engine actions commonly share one buffer for stdout and stderr.
+func protectRuntimeOutput(cmd *exec.Cmd) func() {
+	mu := &sync.Mutex{}
+	stdout, stderr := &runtimeOutput{mu: mu, writer: cmd.Stdout}, &runtimeOutput{mu: mu, writer: cmd.Stderr}
+	// Files stay inherited handles so a blocked console or pipe cannot strand a parent-side copying goroutine.
+	if _, file := cmd.Stdout.(*os.File); !file && cmd.Stdout != nil {
+		cmd.Stdout = stdout
+	}
+	if _, file := cmd.Stderr.(*os.File); !file && cmd.Stderr != nil {
+		cmd.Stderr = stderr
+	}
+	return func() {
+		mu.Lock()
+		defer mu.Unlock()
+		stdout.writer, stderr.writer = nil, nil
+	}
 }
 
 // jobAccounting matches JOBOBJECT_BASIC_ACCOUNTING_INFORMATION; active membership includes children even after their wrapper exits.
@@ -151,6 +220,9 @@ func captureJobProcesses(job windows.Handle, processes map[uint32]windows.Handle
 		data := make([]byte, size)
 		err := windows.QueryInformationJobObject(job, windows.JobObjectBasicProcessIdList, uintptr(unsafe.Pointer(&data[0])), uint32(len(data)), nil)
 		if errors.Is(err, windows.ERROR_MORE_DATA) {
+			if size >= 8*1024*1024 {
+				return fmt.Errorf("runtime process list keeps growing; reduce node concurrency before retrying")
+			}
 			size *= 2
 			continue
 		}
@@ -165,7 +237,7 @@ func captureJobProcesses(job windows.Handle, processes map[uint32]windows.Handle
 			if _, exists := processes[pid]; exists {
 				continue
 			}
-			handle, err := windows.OpenProcess(windows.SYNCHRONIZE, false, pid)
+			handle, err := windows.OpenProcess(windows.SYNCHRONIZE|windows.PROCESS_TERMINATE, false, pid)
 			if errors.Is(err, windows.ERROR_INVALID_PARAMETER) {
 				continue
 			}
