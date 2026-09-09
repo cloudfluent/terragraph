@@ -9,6 +9,8 @@ Split infrastructure into independent Terraform modules and you lose the one thi
 
 terragraph closes that gap without any of the three tradeoffs. Every root module stays completely standalone, with its own backend, providers, and resources, and no reference to any other module. A separate file declares the **wiring**: which output feeds which input. terragraph reads that file, works out the dependency order, and passes the real values through automatically as it applies each module, with no generated code and no shared state.
 
+That same clarity is central to terragraph's goal of making infrastructure easier and safer for AI agents to manage. Agent friendliness is part of the design from the start, as agents take on more infrastructure work.
+
 ## Install
 
 macOS via Homebrew:
