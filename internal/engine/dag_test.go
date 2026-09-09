@@ -5,6 +5,8 @@ import (
 	"errors"
 	"io"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -201,5 +203,44 @@ func TestRunLevels_OverlappingFailurePreservesExecutionJournal(t *testing.T) {
 	}
 	if record.Status != "needs_recovery" || record.Nodes[1].Phase != "indeterminate" || record.Nodes[2].Phase != "completed" || record.Nodes[3].Phase != "pending" {
 		t.Fatalf("record = %+v, want preserved completion and explicit recovery", record)
+	}
+}
+
+func TestRunLevels_PoolsDoNotBlockUnrelatedWork(t *testing.T) {
+	e := newTestEngine([]string{"a", "b", "c"}, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	e.Context = ctx
+	release := make(chan struct{})
+	var inPool atomic.Int32
+	action := func(name string, _ map[string]exec.Outputs, _ io.Writer) (exec.Outputs, string, error) {
+		if name == "c" {
+			close(release)
+			return nil, StatusApplied, nil
+		}
+		if n := inPool.Add(1); n != 1 {
+			t.Errorf("pool users = %d, want 1", n)
+		}
+		defer inPool.Add(-1)
+		if name == "a" {
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return nil, "", ctx.Err()
+			}
+		}
+		return nil, StatusApplied, nil
+	}
+	runs, err := e.runLevels(Options{Parallelism: 2, Pools: []ConcurrencyPool{{Name: "account", Limit: 1, Nodes: []string{"a", "b"}}, {Name: "api", Limit: 1, Nodes: []string{"a", "b"}}}}, false, action, nil)
+	if err != nil {
+		t.Fatalf("runs = %+v, err = %v", runs, err)
+	}
+}
+
+func TestApply_PoolCannotSilentlyReferenceUnknownLeaf(t *testing.T) {
+	e := dagFixture(t)
+	_, err := e.Apply(Options{AutoApprove: true, Pools: []ConcurrencyPool{{Name: "api", Limit: 1, Nodes: []string{"missing"}}}})
+	if err == nil || !strings.Contains(err.Error(), "unknown or repeated node") {
+		t.Fatalf("got = %v, want invalid pool rejected before runtime", err)
 	}
 }

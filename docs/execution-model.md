@@ -423,3 +423,9 @@ never automatic replay. Contract meaning and mode participate in retained-plan
 bindings. Review JSON exposes independent conditions through `review.contracts`.
 Known null is reconstructed only from the same successful plan, never from a
 missing live output. See the contracts reference for restart and recovery limits.
+
+### Shared concurrency pools
+
+`--pool account=2:app,worker` limits the listed leaves to two simultaneous node actions, in addition to the global `--parallelism` cap. Repeat `--pool` for independent service limits; a node can belong to several pools and starts only when every required pool has capacity. Capacity is acquired together at dispatch and released only after the action and its cleanup finish. Waiting for a pool consumes no global slot, so unrelated ready nodes can proceed. Pool membership never expands the selected graph. Pool names must be unique, limits positive, and members known, unrepeated expanded leaves. The comma-separated member syntax is specific to `--pool`; `--node` retains literal commas.
+
+These pools apply to ordinary plan/apply/destroy DAG runs, are local to this invocation, and are not distributed locks or provider rate limits. Saved frontier commands reject `--pool` because they retain their existing sequential execution and recovery rules. Reports, selection inspection, approval requirements, and execution journal contents are unchanged.

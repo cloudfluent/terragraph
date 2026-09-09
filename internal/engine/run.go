@@ -16,6 +16,8 @@ import (
 type Options struct {
 	// RetainPlan persists optional plan artifacts without pausing ordinary apply.
 	RetainPlan bool
+	// Pools constrain shared services without introducing artificial dependency edges.
+	Pools []ConcurrencyPool
 	// Nodes is nil for the whole graph; a non-nil empty list must never silently broaden execution.
 	Nodes []string
 	// Downstream follows both data and ordering dependencies so consumers cannot be omitted by edge kind.
@@ -88,6 +90,9 @@ type nodeAction func(name string, applied map[string]exec.Outputs, out io.Writer
 
 // runLevels dispatches selected nodes as their prerequisites succeed, retaining level labels and the existing failure boundary so queued siblings still run after an ordinary failure.
 func (e *Engine) runLevels(opts Options, reverse bool, action nodeAction, afterLevel func() error, preserveIndependent ...bool) (runs []NodeRun, err error) {
+	if err := e.validatePools(opts); err != nil {
+		return nil, err
+	}
 	levels, err := e.executionLevels(opts, reverse)
 	if err != nil {
 		return nil, err
@@ -95,6 +100,13 @@ func (e *Engine) runLevels(opts Options, reverse bool, action nodeAction, afterL
 	keepGoing := len(preserveIndependent) > 0 && preserveIndependent[0]
 	runs = make([]NodeRun, 0)
 	indices := map[string]int{}
+	poolUse := make([]int, len(opts.Pools))
+	poolFor := map[string][]int{}
+	for i, pool := range opts.Pools {
+		for _, name := range pool.Nodes {
+			poolFor[name] = append(poolFor[name], i)
+		}
+	}
 	for li, level := range levels {
 		for _, name := range level {
 			indices[name] = len(runs)
@@ -178,6 +190,18 @@ func (e *Engine) runLevels(opts Options, reverse bool, action nodeAction, afterL
 			if !ready {
 				continue
 			}
+			for _, pi := range poolFor[runs[i].Node] {
+				if poolUse[pi] >= opts.Pools[pi].Limit {
+					ready = false
+					break
+				}
+			}
+			if !ready {
+				continue
+			}
+			for _, pi := range poolFor[runs[i].Node] {
+				poolUse[pi]++
+			}
 			snapshot := make(map[string]exec.Outputs, len(applied))
 			for name, outputs := range applied {
 				snapshot[name] = outputs
@@ -207,6 +231,9 @@ func (e *Engine) runLevels(opts Options, reverse bool, action nodeAction, afterL
 		}
 		result := <-completed
 		active--
+		for _, pi := range poolFor[runs[result.index].Node] {
+			poolUse[pi]--
+		}
 		if result.buffer != nil {
 			_, _ = fmt.Fprintf(e.Stdout, "=== node %s ===\n", runs[result.index].Node)
 			_, _ = io.Copy(e.Stdout, result.buffer)
@@ -231,6 +258,9 @@ var errPlanBlocked = errors.New("plan not reached")
 
 // resolveSelection freezes membership before runtime checks and keeps every scheduler on the same filtered levels.
 func (e *Engine) resolveSelection(opts Options) (Options, error) {
+	if err := e.validatePools(opts); err != nil {
+		return opts, err
+	}
 	selection, err := graph.Select(e.Graph, opts.Nodes, opts.Downstream)
 	if err != nil {
 		return opts, WithDiagnostic(err, Diagnostic{Code: "invalid_arguments", Category: "arguments", Phase: "selection", Subject: "selection", Remedy: "select expanded node names from graph output"})

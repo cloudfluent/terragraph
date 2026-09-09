@@ -17,6 +17,7 @@ terragraph apply [flags]
       --output string      output format: text or json (default "text")
       --parallelism int    max ready nodes to run concurrently (default 1)
       --plan string        apply the stored frontier of a saved execution without replanning
+      --pool stringArray   shared limit as name=limit:node,node (repeatable; nodes may belong to several pools)
       --retain-plan        retain optional plan artifacts while ordinary apply continues
 ```
 
