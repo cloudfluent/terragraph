@@ -338,7 +338,7 @@ func newPlanCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fun
 		},
 	}
 	selection.add(cmd)
-	cmd.Flags().IntVar(&parallelism, "parallelism", 1, "max nodes to run concurrently within one execution level")
+	cmd.Flags().IntVar(&parallelism, "parallelism", 1, "max ready nodes to run concurrently")
 	cmd.Flags().StringVar(&output, "output", "text", "output format: text or json")
 	cmd.Flags().BoolVar(&save, "save", false, "save only the ready graph frontier for a later apply --plan")
 	cmd.Flags().StringVar(&continueID, "continue", "", "create the next frontier after applying this saved execution")
@@ -407,7 +407,7 @@ func newApplyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fu
 	cmd.Flags().BoolVar(&retainPlan, "retain-plan", false, "retain optional plan artifacts while ordinary apply continues")
 	cmd.Flags().BoolVar(&autoApprove, "auto-approve", false, "skip the interactive approval prompt")
 	cmd.Flags().StringVar(&approve, "approve", string(blueprint.ApproveSafe), "what a node may do without saying so per run: none, safe (create/update), or all (adds replace/delete); a node's own approve wins over this")
-	cmd.Flags().IntVar(&parallelism, "parallelism", 1, "max nodes to run concurrently within one execution level")
+	cmd.Flags().IntVar(&parallelism, "parallelism", 1, "max ready nodes to run concurrently")
 	// Accepted and ignored for one release so existing scripts keep running. There is no longer a local cache to bypass: apply asks Terraform whether each node needs applying, every run.
 	cmd.Flags().BoolVar(&force, "force", false, "no longer has any effect")
 	_ = cmd.Flags().MarkDeprecated("force", "there is no local cache to bypass; apply now plans every node")
@@ -453,7 +453,7 @@ func newDestroyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf 
 	}
 	selection.add(cmd)
 	cmd.Flags().BoolVar(&autoApprove, "auto-approve", false, "skip interactive approval")
-	cmd.Flags().IntVar(&parallelism, "parallelism", 1, "max nodes to run concurrently within one execution level")
+	cmd.Flags().IntVar(&parallelism, "parallelism", 1, "max ready nodes to run concurrently")
 	cmd.Flags().StringVar(&output, "output", "text", "output format: text or json")
 	// No --approve here, unlike apply: destroy's gate reads what a node declared, and the layering rule is that a CLI flag only fills a gap nothing else spoke to — so a flag could never permit a teardown the blueprint refused, and offering one would only suggest otherwise.
 	return cmd

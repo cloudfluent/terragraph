@@ -15,7 +15,7 @@ terragraph apply [flags]
   -h, --help               help for apply
       --node stringArray   select an exact leaf name (repeat for multiple nodes; commas are literal)
       --output string      output format: text or json (default "text")
-      --parallelism int    max nodes to run concurrently within one execution level (default 1)
+      --parallelism int    max ready nodes to run concurrently (default 1)
       --plan string        apply the stored frontier of a saved execution without replanning
       --retain-plan        retain optional plan artifacts while ordinary apply continues
 ```
