@@ -422,3 +422,7 @@ never automatic replay. Contract meaning and mode participate in retained-plan
 bindings. Review JSON exposes independent conditions through `review.contracts`.
 Known null is reconstructed only from the same successful plan, never from a
 missing live output. See the contracts reference for restart and recovery limits.
+
+### Partial destroy protection
+
+A selected `destroy` refuses to remove a producer if any declared transitive consumer is outside the selection. Both data and ordering edges count. Inspect the boundary using `graph --node <leaf>` and include consumers with `destroy --node <leaf> --downstream`. To intentionally leave them behind, pass `--allow-orphan-destroy`; this acknowledges scope only and does not bypass node approval policy, interactive confirmation, runtime checks, or execution recovery. The default whole-graph destroy is unchanged. The check runs before runtime calls or a new execution record and reports `incomplete_destroy_scope` through the existing structured diagnostics. It does not inspect Terraform state or discover undeclared consumers.

@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
+
+	"github.com/cloudfluent/terragraph/internal/graph"
 
 	"github.com/cloudfluent/terragraph/internal/blueprint"
 	"github.com/cloudfluent/terragraph/internal/exec"
@@ -19,6 +22,9 @@ func (e *Engine) Destroy(opts Options) (result RunResult, resultErr error) {
 		return result, selectionErr
 	}
 	opts.announceSelection(true)
+	if err := e.checkDestroyScope(opts); err != nil {
+		return result, err
+	}
 
 	// Same reason Apply refuses it: concurrent nodes have their output buffered and flushed a node at a time, so terraform's confirmation prompt would be invisible until long after the answer was needed. Checked before taking the run lock, so an unrunnable combination fails immediately instead of after waiting for whatever else holds it.
 	if !opts.AutoApprove && opts.parallelism() > 1 {
@@ -179,4 +185,29 @@ func (e *Engine) destroyContractPlan(name string, r *exec.Runner, session *execu
 		return session.fail(name, "indeterminate", fmt.Errorf("destroy: %w", err))
 	}
 	return session.transition(name, "completed", "", "")
+}
+
+// checkDestroyScope refuses to remove producers while declared consumers remain outside the selected teardown.
+func (e *Engine) checkDestroyScope(opts Options) error {
+	if opts.selection == nil || opts.AllowOrphanDestroy {
+		return nil
+	}
+	all, err := graph.Select(e.Graph, opts.selection.Names(), true)
+	if err != nil {
+		return err
+	}
+	selected := map[string]bool{}
+	for _, name := range opts.selection.Names() {
+		selected[name] = true
+	}
+	var outside []string
+	for _, name := range all.Names() {
+		if !selected[name] {
+			outside = append(outside, name)
+		}
+	}
+	if len(outside) == 0 {
+		return nil
+	}
+	return WithDiagnostic(fmt.Errorf("destroy: selected nodes have outside consumers %s; include them with --downstream or acknowledge with --allow-orphan-destroy", strings.Join(outside, ", ")), Diagnostic{Code: "incomplete_destroy_scope", Category: "arguments", Phase: "selection", Subject: "selection", Remedy: "include consumers with --downstream or acknowledge with --allow-orphan-destroy"})
 }

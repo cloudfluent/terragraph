@@ -418,6 +418,7 @@ func newApplyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fu
 func newDestroyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf func() *slog.Logger) *cobra.Command {
 	var selection selectionFlags
 	var autoApprove bool
+	var allowOrphanDestroy bool
 	var parallelism int
 	var output string
 	cmd := &cobra.Command{
@@ -447,11 +448,13 @@ func newDestroyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf 
 			var scope *selectionDTO
 			opts := selection.options(cmd, output, &scope)
 			opts.AutoApprove, opts.Parallelism = autoApprove, parallelism
+			opts.AllowOrphanDestroy = allowOrphanDestroy
 			runs, err := e.Destroy(opts)
 			return finishRun(cmd, output, runs, err, scope)
 		},
 	}
 	selection.add(cmd)
+	cmd.Flags().BoolVar(&allowOrphanDestroy, "allow-orphan-destroy", false, "acknowledge consumers left outside the selected destroy scope")
 	cmd.Flags().BoolVar(&autoApprove, "auto-approve", false, "skip interactive approval")
 	cmd.Flags().IntVar(&parallelism, "parallelism", 1, "max nodes to run concurrently within one execution level")
 	cmd.Flags().StringVar(&output, "output", "text", "output format: text or json")
