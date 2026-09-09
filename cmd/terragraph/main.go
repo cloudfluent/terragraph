@@ -21,7 +21,7 @@ func main() {
 	}
 	ctx, stop := executionContext(name)
 	defer stop()
-	if err := root.ExecuteContext(ctx); err != nil {
+	if err := cli.Execute(ctx, root, os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		if name == "run" {
 			var native interface{ ExitCode() int }

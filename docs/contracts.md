@@ -153,3 +153,9 @@ All codes are warnings in `warn` mode and errors in `enforce` mode.
 | C007 | Consumer's claimed type cannot be safely converted to the module variable's declared type |
 | C008 | Consumer's explicit sensitivity differs from the module variable's declaration |
 | C009 | Producer's explicit sensitivity differs from the module output's declaration |
+
+## Machine-readable validation
+
+`validate --output json` returns contract identifiers such as `C001` and `C009` directly in `problems[].code`, with `category: "validation"`, `phase: "validation"`, `subject`, `severity`, and `remedy`. Consumers do not need to extract bracketed codes from human messages. The existing messages retain their bracketed codes for text users.
+
+Contract warnings still allow `valid: true`; only enforce mode makes them errors. Preflight validation failures in graph and execution commands include the actual structured problems in `diagnostics`, so an agent does not need to invoke a second command just to identify the problem. See [agent usage](agent-usage.md).

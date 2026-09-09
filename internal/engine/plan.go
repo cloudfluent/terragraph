@@ -11,44 +11,45 @@ import (
 )
 
 // Plan runs `terraform plan` over the selected nodes in topological order, returning each node's outcome (see NodeRun). A node downstream of one that has never been applied will fail to resolve its inputs. See the "known limitation" in the project plan: planning a value that doesn't exist yet is inherently impossible when every node is an independent root module.
-func (e *Engine) Plan(opts Options) ([]NodeRun, error) {
+func (e *Engine) Plan(opts Options) (RunResult, error) {
 	return e.plan(opts, false, false)
 }
 
 // ReviewPlan inspects ephemeral saved plans while preserving independent results after failed dependencies.
-func (e *Engine) ReviewPlan(opts Options, allowTextFallback bool) ([]NodeRun, error) {
+func (e *Engine) ReviewPlan(opts Options, allowTextFallback bool) (RunResult, error) {
 	return e.plan(opts, true, allowTextFallback)
 }
 
-func (e *Engine) plan(opts Options, inspect, allowTextFallback bool) (runs []NodeRun, resultErr error) {
+func (e *Engine) plan(opts Options, inspect, allowTextFallback bool) (result RunResult, resultErr error) {
 	opts, selectionErr := e.resolveSelection(opts)
 	if selectionErr != nil {
-		return nil, selectionErr
+		return result, selectionErr
 	}
 	opts.announceSelection(false)
 
 	unlock, err := e.lockRun()
 	if err != nil {
-		return nil, err
+		return result, err
 	}
 	defer unlock()
 
 	if !inspect {
 		if err := e.checkRuntimeFiles(opts); err != nil {
-			return nil, err
+			return result, err
 		}
 	}
 
 	unlockGraph, err := e.lockGraph()
 	if err != nil {
-		return nil, err
+		return result, err
 	}
 	defer unlockGraph()
 
 	session, err := e.startExecution("plan", opts, false)
 	if err != nil {
-		return nil, err
+		return result, err
 	}
+	result.ExecutionID = session.record.ID
 	defer session.close()
 	defer func() {
 		if finishErr := session.finish(resultErr); finishErr != nil {
@@ -69,6 +70,7 @@ func (e *Engine) plan(opts Options, inspect, allowTextFallback bool) (runs []Nod
 		fail := func(code, phase string, err error) (exec.Outputs, string, error) {
 			if inspect {
 				review.failure(name, code, phase, err)
+				err = WithDiagnostic(err, *review.Diagnostic)
 			}
 			return nil, "", err
 		}
@@ -155,7 +157,14 @@ func (e *Engine) plan(opts Options, inspect, allowTextFallback bool) (runs []Nod
 				review.failure(runs[i].Node, "not_reached", "schedule", reason)
 			}
 			runs[i].Review = review
+			if review.Diagnostic != nil {
+				runs[i].Diagnostics = Diagnostics(runs[i].Err, *review.Diagnostic)
+				if len(runs[i].Diagnostics) == 0 {
+					runs[i].Diagnostics = []Diagnostic{*review.Diagnostic}
+				}
+			}
 		}
 	}
-	return runs, runErr
+	result.Nodes = runs
+	return result, runErr
 }

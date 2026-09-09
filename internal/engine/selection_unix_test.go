@@ -116,8 +116,8 @@ func TestApply_SelectionReadsExternalInputsAndPlansAfterNoOp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertSelectedRuns(t, runs, []string{"b", "c", "d"})
-	if !announced || runs[0].Status != StatusUnchanged || runs[1].Status != StatusApplied {
+	assertSelectedRuns(t, runs.Nodes, []string{"b", "c", "d"})
+	if !announced || runs.Nodes[0].Status != StatusUnchanged || runs.Nodes[1].Status != StatusApplied {
 		t.Fatalf("got = %+v, announced = %t", runs, announced)
 	}
 	calls := selectionCalls(t, e)
@@ -155,7 +155,7 @@ func TestApply_MultipleSeedsRunConvergenceOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Full-graph levels retain x before b, even though a is not selected.
-	assertSelectedRuns(t, runs, []string{"x", "b", "c", "d"})
+	assertSelectedRuns(t, runs.Nodes, []string{"x", "b", "c", "d"})
 	if calls := selectionCalls(t, e); strings.Count(calls, "c plan\n") != 1 || strings.Count(calls, "c apply\n") != 1 {
 		t.Fatalf("got = %s", calls)
 	}
@@ -180,7 +180,7 @@ func TestApply_SelectionKeepsDuplicateDataEdges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertSelectedRuns(t, runs, []string{"b", "c", "d"})
+	assertSelectedRuns(t, runs.Nodes, []string{"b", "c", "d"})
 	calls := selectionCalls(t, e)
 	if strings.Count(calls, "c plan\n") != 1 || strings.Contains(calls, "x output\n") {
 		t.Fatalf("got = %s", calls)
@@ -197,7 +197,7 @@ func TestDestroy_SelectionReversesOrderAndPreservesPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertSelectedRuns(t, runs, []string{"d", "c", "b"})
+	assertSelectedRuns(t, runs.Nodes, []string{"d", "c", "b"})
 	calls := selectionCalls(t, e)
 	for _, name := range []string{"a", "x", "p", "q"} {
 		if strings.Contains(calls, name+" destroy\n") {
@@ -216,8 +216,8 @@ func TestApply_SelectionOutputFailureNeverExpandsScope(t *testing.T) {
 	if err == nil {
 		t.Fatal("missing outputs accepted")
 	}
-	assertSelectedRuns(t, runs, []string{"b", "c", "d"})
-	if runs[0].Status != StatusFailed || runs[1].Status != StatusNotRun {
+	assertSelectedRuns(t, runs.Nodes, []string{"b", "c", "d"})
+	if runs.Nodes[0].Status != StatusFailed || runs.Nodes[1].Status != StatusNotRun {
 		t.Fatalf("got = %+v", runs)
 	}
 	calls := selectionCalls(t, e)
@@ -240,7 +240,7 @@ func TestSavedExecution_SelectionStaysFixedAcrossFrontiers(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		assertSelectedRuns(t, runs, []string{want})
+		assertSelectedRuns(t, runs.Nodes, []string{want})
 		if want != "d" {
 			next, err := e.SavePlans(Options{}, record.ID)
 			if err != nil || !reflect.DeepEqual(next.Selection, record.Selection) || len(next.Nodes) != 3 {
@@ -328,7 +328,7 @@ func TestSavedExecution_OldRecordKeepsMembershipWithoutMetadata(t *testing.T) {
 	if err != nil || selection != nil {
 		t.Fatalf("got = %+v, %v", selection, err)
 	}
-	assertSelectedRuns(t, runs, []string{"b"})
+	assertSelectedRuns(t, runs.Nodes, []string{"b"})
 	next, err := e.SavePlans(Options{}, record.ID)
 	if err != nil || next.Selection != nil || len(next.Nodes) != 3 {
 		t.Fatalf("got = %+v, %v", next, err)
@@ -414,7 +414,7 @@ func TestApply_SelectionCannotBypassUnrelatedRecovery(t *testing.T) {
 	}
 	session.close()
 	runs, err := e.Apply(Options{Nodes: []string{"b"}, Downstream: true, AutoApprove: true})
-	if err == nil || !strings.Contains(err.Error(), "unresolved mutation") || len(runs) != 0 {
+	if err == nil || !strings.Contains(err.Error(), "unresolved mutation") || len(runs.Nodes) != 0 {
 		t.Fatalf("got = %+v, %v", runs, err)
 	}
 	if calls := selectionCalls(t, e); calls != "" {
@@ -455,8 +455,8 @@ func TestReviewPlan_SelectionPreservesIndependentFailureHandling(t *testing.T) {
 	if err == nil {
 		t.Fatal("provider failure accepted")
 	}
-	assertSelectedRuns(t, runs, []string{"created", "failed", "dependent"})
-	if runs[0].Status != StatusPlanned || runs[1].Status != StatusFailed || runs[2].Status != StatusNotRun {
+	assertSelectedRuns(t, runs.Nodes, []string{"created", "failed", "dependent"})
+	if runs.Nodes[0].Status != StatusPlanned || runs.Nodes[1].Status != StatusFailed || runs.Nodes[2].Status != StatusNotRun {
 		t.Fatalf("got = %+v", runs)
 	}
 	calls := selectionCalls(t, e)
@@ -481,9 +481,9 @@ func TestApply_SelectionReducesIndependentRuntimeCalls(t *testing.T) {
 		}
 		calls := selectionCalls(t, e)
 		plans, inits := strings.Count(calls, " plan\n"), strings.Count(calls, " init\n")
-		if len(runs) != want || plans != want || inits != want {
-			t.Fatalf("got = %d nodes, %d plans, %d inits; want %d", len(runs), plans, inits, want)
+		if len(runs.Nodes) != want || plans != want || inits != want {
+			t.Fatalf("got = %d nodes, %d plans, %d inits; want %d", len(runs.Nodes), plans, inits, want)
 		}
-		t.Logf("selected=%t nodes=%d plan=%d init=%d apply=%d", selected, len(runs), plans, inits, strings.Count(calls, " apply\n"))
+		t.Logf("selected=%t nodes=%d plan=%d init=%d apply=%d", selected, len(runs.Nodes), plans, inits, strings.Count(calls, " apply\n"))
 	}
 }

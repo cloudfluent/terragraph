@@ -44,22 +44,24 @@ func contractProblems(g *Graph) []Problem {
 	}
 
 	var problems []Problem
-	report := func(format string, args ...any) {
-		problems = append(problems, Problem{Severity: severity, Message: fmt.Sprintf(format, args...)})
+	report := func(code, subject, remedy, format string, args ...any) {
+		problems = append(problems, Problem{Code: code, Subject: subject, Remedy: remedy, Severity: severity, Message: fmt.Sprintf(format, args...)})
 	}
 
 	// C001/C002/C006: contracts against reality, independent of edges — a promise about a port the module never declared, or a scope nothing instantiates, is wrong whether or not anything consumes it yet.
 	for _, dc := range sortedContracts(g.Contracts) {
 		owners := byKey[dc.Dir]
 		if len(owners) == 0 {
-			report("contract.[C006] %s: no node in this graph uses source %q; update the scope path or remove the contract", dc.Scope, dc.Scope)
+			report("C006", dc.Scope, "update the scope path or remove the contract", "contract.[C006] %s: no node in this graph uses source %q; update the scope path or remove the contract", dc.Scope, dc.Scope)
 			continue
 		}
 		var messages []string
 		affected := map[string][]string{}
+		metadata := map[string]Problem{}
 		for _, schemaOwner := range owners {
-			reportForNode := func(format string, args ...any) {
+			reportForNode := func(code, subject, remedy, format string, args ...any) {
 				message := fmt.Sprintf(format, args...)
+				metadata[message] = Problem{Code: code, Subject: subject, Remedy: remedy}
 				if _, seen := affected[message]; !seen {
 					messages = append(messages, message)
 				}
@@ -67,17 +69,17 @@ func contractProblems(g *Graph) []Problem {
 			}
 			for _, name := range sortedPorts(dc.Producer) {
 				if !schemaOwner.Schema.HasOutput(name) {
-					reportForNode("contract.[C001] producer %s.output.%s: module declares no such output; remove the promise or add the output", dc.Scope, name)
+					reportForNode("C001", dc.Scope, "remove the promise or declare the output", "contract.[C001] producer %s.output.%s: module declares no such output; remove the promise or add the output", dc.Scope, name)
 					continue
 				}
 				// C009: the module's own sensitive flag is a fact Terraform already declares; a producer claiming the opposite is wrong about its own module. Only an explicit claim can contradict (absent stays no-claim).
 				if p := dc.Producer[name]; p.Sensitive != nil && *p.Sensitive != schemaOwner.Schema.OutputDetails[name].Sensitive {
-					reportForNode("contract.[C009] producer %s.output.%s claims sensitive = %t but the module declares sensitive = %t; fix the contract — the module is the declaration of record", dc.Scope, name, *p.Sensitive, schemaOwner.Schema.OutputDetails[name].Sensitive)
+					reportForNode("C009", dc.Scope, "align the producer sensitivity with the module", "contract.[C009] producer %s.output.%s claims sensitive = %t but the module declares sensitive = %t; fix the contract — the module is the declaration of record", dc.Scope, name, *p.Sensitive, schemaOwner.Schema.OutputDetails[name].Sensitive)
 				}
 			}
 			for _, name := range sortedPorts(dc.Consumer) {
 				if !schemaOwner.Schema.HasVariable(name) {
-					reportForNode("contract.[C002] consumer %s.input.%s: module declares no such variable; remove the requirement or add the variable", dc.Scope, name)
+					reportForNode("C002", dc.Scope, "remove the requirement or declare the variable", "contract.[C002] consumer %s.input.%s: module declares no such variable; remove the requirement or add the variable", dc.Scope, name)
 					continue
 				}
 				v := schemaOwner.Schema.Variables[name]
@@ -86,27 +88,27 @@ func contractProblems(g *Graph) []Problem {
 				if c.Type != "" && v.Type != "" {
 					ct, err := parseCtyType(c.Type)
 					if err != nil {
-						reportForNode("contract.[C007] consumer %s.input.%s: %v", dc.Scope, name, err)
+						reportForNode("C007", dc.Scope, "align the contract with the module variable type", "contract.[C007] consumer %s.input.%s: %v", dc.Scope, name, err)
 						continue
 					}
 					mt, err := parseModuleCtyType(v.Type)
 					if err != nil {
-						reportForNode("contract.[C007] consumer %s.input.%s: module type %v", dc.Scope, name, err)
+						reportForNode("C007", dc.Scope, "align the contract with the module variable type", "contract.[C007] consumer %s.input.%s: module type %v", dc.Scope, name, err)
 						continue
 					}
 					// Safe conversion, not unsafe: cty will coerce string to number unsafely, which is exactly the mismatch this code exists to catch, while map(string) into map(any) is safe and is the narrowing to allow. Identical types need no conversion at all, so Equals still has to be asked first.
 					if !ct.Equals(mt) && convert.GetConversion(ct, mt) == nil {
-						reportForNode("contract.[C007] consumer %s.input.%s claims type %s, which the module's declared %s can never accept; fix the contract — the module is the declaration of record", dc.Scope, name, c.Type, v.Type)
+						reportForNode("C007", dc.Scope, "align the contract with the module variable type", "contract.[C007] consumer %s.input.%s claims type %s, which the module's declared %s can never accept; fix the contract — the module is the declaration of record", dc.Scope, name, c.Type, v.Type)
 					}
 				}
 				// C008: the input-side twin of C009 — explicit sensitive claim, either direction, against the variable's declared flag.
 				if c.Sensitive != nil && *c.Sensitive != v.Sensitive {
-					reportForNode("contract.[C008] consumer %s.input.%s claims sensitive = %t but the module declares sensitive = %t; fix the contract — the module is the declaration of record", dc.Scope, name, *c.Sensitive, v.Sensitive)
+					reportForNode("C008", dc.Scope, "align the consumer sensitivity with the module", "contract.[C008] consumer %s.input.%s claims sensitive = %t but the module declares sensitive = %t; fix the contract — the module is the declaration of record", dc.Scope, name, *c.Sensitive, v.Sensitive)
 				}
 			}
 		}
 		for _, message := range messages {
-			report("%s [%s]", message, strings.Join(affected[message], ", "))
+			report(metadata[message].Code, metadata[message].Subject, metadata[message].Remedy, "%s [%s]", message, strings.Join(affected[message], ", "))
 		}
 	}
 
@@ -129,24 +131,24 @@ func contractProblems(g *Graph) []Problem {
 		if p.Type != "" && c.Type != "" {
 			pt, err := parseCtyType(p.Type)
 			if err != nil {
-				report("contract.[C003] producer %s.output.%s: %v", from.Scope, e.From.Name, err)
+				report("C003", "node."+e.To.Node+".input."+e.To.Name, "correct the producer and consumer types", "contract.[C003] producer %s.output.%s: %v", from.Scope, e.From.Name, err)
 				continue
 			}
 			ct, err := parseCtyType(c.Type)
 			if err != nil {
-				report("contract.[C003] consumer %s.input.%s: %v", to.Scope, e.To.Name, err)
+				report("C003", "node."+e.To.Node+".input."+e.To.Name, "correct the producer and consumer types", "contract.[C003] consumer %s.input.%s: %v", to.Scope, e.To.Name, err)
 				continue
 			}
 			if !pt.Equals(ct) && convert.GetConversionUnsafe(pt, ct) == nil {
-				report("contract.[C003] producer %s.output.%s (%s) -> consumer %s.input.%s (%s): types are not convertible; change one side", from.Scope, e.From.Name, p.Type, to.Scope, e.To.Name, c.Type)
+				report("C003", "node."+e.To.Node+".input."+e.To.Name, "correct the producer and consumer types", "contract.[C003] producer %s.output.%s (%s) -> consumer %s.input.%s (%s): types are not convertible; change one side", from.Scope, e.From.Name, p.Type, to.Scope, e.To.Name, c.Type)
 			}
 		}
 		// Absent producer nullable means "may be null" (the lenient claim), so an explicit non-null requirement is violated by it; absent consumer nullable accepts null and can never be violated by nullability.
 		if c.Nullable != nil && !*c.Nullable && (p.Nullable == nil || *p.Nullable) {
-			report("contract.[C004] producer %s.output.%s may be null but consumer %s.input.%s requires non-null; the producer must promise nullable = false", from.Scope, e.From.Name, to.Scope, e.To.Name)
+			report("C004", "node."+e.To.Node+".input."+e.To.Name, "require the producer to promise nullable = false", "contract.[C004] producer %s.output.%s may be null but consumer %s.input.%s requires non-null; the producer must promise nullable = false", from.Scope, e.From.Name, to.Scope, e.To.Name)
 		}
 		if p.Sensitive != nil && *p.Sensitive && (c.Sensitive == nil || !*c.Sensitive) {
-			report("contract.[C005] producer %s.output.%s is sensitive but consumer %s.input.%s does not accept sensitive values; set sensitive = true on the consumer or stop marking the output", from.Scope, e.From.Name, to.Scope, e.To.Name)
+			report("C005", "node."+e.To.Node+".input."+e.To.Name, "accept sensitive values in the consumer contract", "contract.[C005] producer %s.output.%s is sensitive but consumer %s.input.%s does not accept sensitive values; set sensitive = true on the consumer or stop marking the output", from.Scope, e.From.Name, to.Scope, e.To.Name)
 		}
 	}
 	return problems

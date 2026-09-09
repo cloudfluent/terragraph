@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -59,15 +60,15 @@ func newExecutionHistoryCmd(kind string, path *string) *cobra.Command {
 		if backup && output != "text" {
 			return fmt.Errorf("--backup emits raw native state; omit --output json")
 		}
+		phase := "arguments"
 		result := executionHistoryDTO{SchemaVersion: 1, Executions: []executionDTO{}, Diagnostics: []diagnosticDTO{}}
 		defer func() {
 			if resultErr != nil {
-				diagnostic := diagnosticToDTO(engine.Diagnostic{Code: "execution_read_failed", Phase: "history", Subject: "execution", Message: resultErr.Error(), Remedy: "check the selected execution store and restore missing records; do not infer that infrastructure was unchanged"})
-				result.Diagnostics = append(result.Diagnostics, diagnostic)
+				result.Diagnostics = errorDiagnostics(resultErr, engine.Diagnostic{Code: "execution_read_failed", Category: categoryForPhase(phase), Phase: phase, Subject: "execution", Remedy: "check the selected execution store and restore missing records; do not infer that infrastructure was unchanged"})
 			}
 			if output == "json" {
-				if err := writeJSON(cmd.OutOrStdout(), result); resultErr == nil {
-					resultErr = err
+				if err := writeJSON(cmd, result); err != nil {
+					resultErr = errors.Join(resultErr, err)
 				}
 				return
 			}
@@ -95,6 +96,8 @@ func newExecutionHistoryCmd(kind string, path *string) *cobra.Command {
 		if output != "text" && output != "json" {
 			return fmt.Errorf("unknown output %q (want text or json)", output)
 		}
+		phase = "history"
+		diagnosticPhase(cmd, "record")
 		e, close, err := engine.OpenExecutionHistory(cmd.Context(), *path, cmd.ErrOrStderr())
 		if err != nil {
 			return err

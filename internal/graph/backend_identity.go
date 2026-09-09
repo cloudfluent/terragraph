@@ -126,20 +126,20 @@ func knownBackendProblems(g *Graph) []Problem {
 				if bPath, okB := localStatePath(b); okB {
 					same, known, err := pathidentity.Same(aPath, bPath)
 					if err != nil {
-						problems = append(problems, Problem{Severity: SeverityError, Message: fmt.Sprintf("node.%s and node.%s: checking local state paths: %v; make their parent directories accessible", aName, bName, err)})
+						problems = append(problems, Problem{Code: "state_identity_failed", Subject: "node." + aName + ",node." + bName, Remedy: "make state parent directories accessible", Severity: SeverityError, Message: fmt.Sprintf("node.%s and node.%s: checking local state paths: %v; make their parent directories accessible", aName, bName, err)})
 					} else if known && same {
-						problems = append(problems, Problem{Severity: SeverityError, Message: fmt.Sprintf("node.%s and node.%s resolve to the same local state; set distinct backend_config.path values or remove the source/path alias", aName, bName)})
+						problems = append(problems, Problem{Code: "state_conflict", Subject: "node." + aName + ",node." + bName, Remedy: "set distinct backend_config.path values", Severity: SeverityError, Message: fmt.Sprintf("node.%s and node.%s resolve to the same local state; set distinct backend_config.path values or remove the source/path alias", aName, bName)})
 					} else if !known {
-						problems = append(problems, Problem{Severity: SeverityWarning, Message: fmt.Sprintf("node.%s and node.%s: local state path separation could not be verified; use distinct paths or verify their parent directories", aName, bName)})
+						problems = append(problems, Problem{Code: "state_identity_unverified", Subject: "node." + aName + ",node." + bName, Remedy: "verify distinct state paths", Severity: SeverityWarning, Message: fmt.Sprintf("node.%s and node.%s: local state path separation could not be verified; use distinct paths or verify their parent directories", aName, bName)})
 					}
 				}
 			}
 			aAddr, knownA := s3Address(a)
 			bAddr, knownB := s3Address(b)
 			if knownA && knownB && aAddr == bAddr {
-				problems = append(problems, Problem{Severity: SeverityError, Message: fmt.Sprintf("node.%s and node.%s resolve to the same s3 state; set distinct backend bucket/key addresses", aName, bName)})
+				problems = append(problems, Problem{Code: "state_conflict", Subject: "node." + aName + ",node." + bName, Remedy: "set distinct backend bucket and key addresses", Severity: SeverityError, Message: fmt.Sprintf("node.%s and node.%s resolve to the same s3 state; set distinct backend bucket/key addresses", aName, bName)})
 			} else if possibleS3Collision(aAddr, bAddr) {
-				problems = append(problems, Problem{Severity: SeverityWarning, Message: fmt.Sprintf("node.%s and node.%s may resolve to the same s3 state because the AWS partition is not statically known; set explicit backend region and endpoint settings where applicable and verify that the resolved bucket/key namespaces are distinct", aName, bName)})
+				problems = append(problems, Problem{Code: "state_identity_unverified", Subject: "node." + aName + ",node." + bName, Remedy: "verify distinct S3 state namespaces", Severity: SeverityWarning, Message: fmt.Sprintf("node.%s and node.%s may resolve to the same s3 state because the AWS partition is not statically known; set explicit backend region and endpoint settings where applicable and verify that the resolved bucket/key namespaces are distinct", aName, bName)})
 			}
 		}
 	}

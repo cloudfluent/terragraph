@@ -92,10 +92,10 @@ func TestReviewPlan_ActionsOutputOnlyPolicyAndCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(runs) != len(names) {
-		t.Fatalf("got = %d", len(runs))
+	if len(runs.Nodes) != len(names) {
+		t.Fatalf("got = %d", len(runs.Nodes))
 	}
-	for _, run := range runs {
+	for _, run := range runs.Nodes {
 		review := run.Review
 		if review == nil || !review.Evidence || review.HasChanges == nil {
 			t.Fatalf("missing evidence: %+v", run)
@@ -132,7 +132,7 @@ func TestReviewPlan_PreservesIndependentResults(t *testing.T) {
 		t.Fatal("failed plan must fail run")
 	}
 	byName := map[string]NodeRun{}
-	for _, run := range runs {
+	for _, run := range runs.Nodes {
 		byName[run.Node] = run
 	}
 	if byName["independent"].Status != StatusPlanned || !byName["independent"].Review.Evidence {
@@ -151,7 +151,7 @@ func TestReviewPlan_UpstreamMissingDiffersFromCredentialFailure(t *testing.T) {
 	e := reviewFixture(t, body)
 	t.Setenv("TG_REVIEW_OUTPUT_FAIL", "1")
 	runs, err := e.ReviewPlan(Options{Nodes: []string{"consumer"}}, false)
-	if err == nil || runs[0].Review.Diagnostic.Code != "upstream_output_unavailable" || runs[0].Review.HasChanges != nil {
+	if err == nil || runs.Nodes[0].Review.Diagnostic.Code != "upstream_output_unavailable" || runs.Nodes[0].Review.HasChanges != nil {
 		t.Fatalf("got = %+v, %v", runs, err)
 	}
 	state := filepath.Join(e.BaseDir, ".terragraph", "state", "created.tfstate")
@@ -163,7 +163,7 @@ func TestReviewPlan_UpstreamMissingDiffersFromCredentialFailure(t *testing.T) {
 	}
 	t.Setenv("TG_REVIEW_OUTPUT_FAIL", "1")
 	runs, err = e.ReviewPlan(Options{Nodes: []string{"consumer"}}, false)
-	if err == nil || runs[0].Review.Diagnostic.Code != "input_resolution_failed" || strings.Contains(err.Error(), "has not been applied") {
+	if err == nil || runs.Nodes[0].Review.Diagnostic.Code != "input_resolution_failed" || strings.Contains(err.Error(), "has not been applied") {
 		t.Fatalf("got = %+v, %v", runs, err)
 	}
 }
@@ -172,7 +172,7 @@ func TestReviewPlan_LiveAndSnapshotBasis(t *testing.T) {
 	body := "snapshots {}\n" + reviewNode("created") + reviewNode("consumer") + "edge {\n from = node.created.output.id\n to = node.consumer.input.input\n}\n"
 	e := reviewFixture(t, body)
 	runs, err := e.ReviewPlan(Options{Nodes: []string{"consumer"}}, false)
-	if err != nil || runs[0].Review.Inputs[0].Source != "live" || len(runs[0].Review.Limitations) < 2 {
+	if err != nil || runs.Nodes[0].Review.Inputs[0].Source != "live" || len(runs.Nodes[0].Review.Limitations) < 2 {
 		t.Fatalf("got = %+v, %v", runs, err)
 	}
 	sensitive := false
@@ -181,7 +181,7 @@ func TestReviewPlan_LiveAndSnapshotBasis(t *testing.T) {
 	}
 	t.Setenv("TG_REVIEW_OUTPUT_FAIL", "1")
 	runs, err = e.ReviewPlan(Options{Nodes: []string{"consumer"}}, false)
-	if err != nil || runs[0].Review.Inputs[0].Source != "snapshot" {
+	if err != nil || runs.Nodes[0].Review.Inputs[0].Source != "snapshot" {
 		t.Fatalf("got = %+v, %v", runs, err)
 	}
 }
@@ -189,7 +189,7 @@ func TestReviewPlan_LiveAndSnapshotBasis(t *testing.T) {
 func TestReviewPlan_DeclaredPolicyWins(t *testing.T) {
 	e := reviewFixture(t, "node \"created\" {\n source = \"./module\"\n approve = \"none\"\n}\n")
 	runs, err := e.ReviewPlan(Options{Approve: "all"}, false)
-	if err != nil || runs[0].Review.Policy != "none" || runs[0].Review.PolicyDecision != "block" {
+	if err != nil || runs.Nodes[0].Review.Policy != "none" || runs.Nodes[0].Review.PolicyDecision != "block" {
 		t.Fatalf("got = %+v, %v", runs, err)
 	}
 }
@@ -204,11 +204,11 @@ func TestReviewPlan_UnsupportedBackendKeepsTextPreview(t *testing.T) {
 		t.Fatal(err)
 	}
 	runs, err := loaded.ReviewPlan(Options{}, false)
-	if err == nil || runs[0].Review.Diagnostic.Code != "inspection_unsupported" || runs[0].Review.HasChanges != nil {
+	if err == nil || runs.Nodes[0].Review.Diagnostic.Code != "inspection_unsupported" || runs.Nodes[0].Review.HasChanges != nil {
 		t.Fatalf("got = %+v, %v", runs, err)
 	}
 	runs, err = loaded.ReviewPlan(Options{}, true)
-	if err != nil || runs[0].Status != StatusPlanned || runs[0].Review.Evidence {
+	if err != nil || runs.Nodes[0].Status != StatusPlanned || runs.Nodes[0].Review.Evidence {
 		t.Fatalf("got = %+v, %v", runs, err)
 	}
 	calls, _ := os.ReadFile(os.Getenv("TG_REVIEW_CALLS"))
@@ -227,7 +227,7 @@ func TestReviewPlan_InspectionFailureRemovesPlan(t *testing.T) {
 		t.Fatal(err)
 	}
 	runs, err := e.ReviewPlan(Options{}, false)
-	if err == nil || runs[0].Review.Diagnostic.Code != "inspection_failed" || runs[0].Review.HasChanges != nil {
+	if err == nil || runs.Nodes[0].Review.Diagnostic.Code != "inspection_failed" || runs.Nodes[0].Review.HasChanges != nil {
 		t.Fatalf("got = %+v, %v", runs, err)
 	}
 	if _, err := os.Stat(e.planPath("created")); !os.IsNotExist(err) {

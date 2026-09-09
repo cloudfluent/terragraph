@@ -13,7 +13,7 @@ import (
 // SavePlans freezes only the current frontier; later inputs must come from real upstream outputs after the reviewed frontier has been applied.
 func (e *Engine) SavePlans(opts Options, continueID string) (record ExecutionRecord, resultErr error) {
 	if continueID != "" && opts.hasSelectionFlags() {
-		return record, fmt.Errorf("--continue already fixes node selection; omit --node and --downstream")
+		return record, WithDiagnostic(fmt.Errorf("--continue already fixes node selection; omit --node and --downstream"), Diagnostic{Code: "invalid_arguments", Category: "arguments", Phase: "arguments"})
 	}
 	if continueID == "" {
 		var err error
@@ -73,7 +73,7 @@ func (e *Engine) SavePlans(opts Options, continueID string) (record ExecutionRec
 		return record, err
 	}
 	if s.record.Binding != "" && s.record.Binding != binding {
-		return record, fmt.Errorf("graph configuration changed; cancel this execution and create a fresh plan")
+		return record, WithDiagnostic(fmt.Errorf("graph configuration changed; cancel this execution and create a fresh plan"), Diagnostic{Code: "saved_plan_incompatible", Category: "artifact", Phase: "artifact"})
 	}
 	next := s.record
 	next.Binding = binding
@@ -172,45 +172,46 @@ func (e *Engine) saveFrontierNode(s *executionSession, name string, opts Options
 }
 
 // ApplySavedPlans applies exactly the stored frontier and never plans or applies downstream nodes in the same invocation.
-func (e *Engine) ApplySavedPlans(id string, opts Options) (runs []NodeRun, resultErr error) {
+func (e *Engine) ApplySavedPlans(id string, opts Options) (result RunResult, resultErr error) {
 	if opts.hasSelectionFlags() {
-		return nil, fmt.Errorf("--plan already fixes node selection; omit --node and --downstream")
+		return result, WithDiagnostic(fmt.Errorf("--plan already fixes node selection; omit --node and --downstream"), Diagnostic{Code: "invalid_arguments", Category: "arguments", Phase: "arguments"})
 	}
 	if opts.parallelism() > 1 && !opts.AutoApprove {
-		return nil, fmt.Errorf("--parallelism needs --auto-approve")
+		return result, WithDiagnostic(fmt.Errorf("--parallelism needs --auto-approve"), Diagnostic{Code: "invalid_arguments", Category: "arguments", Phase: "arguments"})
 	}
 	unlock, err := e.lockRun()
 	if err != nil {
-		return nil, err
+		return result, err
 	}
 	defer unlock()
 	unlockGraph, err := e.lockGraph()
 	if err != nil {
-		return nil, err
+		return result, err
 	}
 	defer unlockGraph()
 	s, err := e.openSavedExecution(id)
 	if err != nil {
-		return nil, err
+		return result, err
 	}
+	result.ExecutionID = s.record.ID
 	defer s.close()
 	opts, err = e.storedSelection(opts, s.record)
 	opts.announceSelection(false)
 	if err != nil {
-		return nil, err
+		return result, err
 	}
 	if err := e.checkRuntimeFiles(opts); err != nil {
-		return nil, err
+		return result, err
 	}
 	if s.record.Status != "waiting_for_apply" {
-		return nil, fmt.Errorf("execution %s is %s; only waiting_for_apply can be applied", id, s.record.Status)
+		return result, fmt.Errorf("execution %s is %s; only waiting_for_apply can be applied", id, s.record.Status)
 	}
 	binding, err := e.savedGraphBinding(s.record)
 	if err != nil {
-		return nil, err
+		return result, err
 	}
 	if binding != s.record.Binding {
-		return nil, fmt.Errorf("graph configuration changed; cancel this execution and create a fresh plan")
+		return result, WithDiagnostic(fmt.Errorf("graph configuration changed; cancel this execution and create a fresh plan"), Diagnostic{Code: "saved_plan_incompatible", Category: "artifact", Phase: "artifact"})
 	}
 	defer func() {
 		if resultErr != nil {
@@ -224,11 +225,13 @@ func (e *Engine) ApplySavedPlans(id string, opts Options) (runs []NodeRun, resul
 		run := NodeRun{Node: node.Name, Level: 1}
 		status, err := e.applySavedNode(s, node, opts)
 		run.Status, run.Err = status, err
+		run.Diagnostics = Diagnostics(err, Diagnostic{Code: "runtime_failed", Category: "runtime", Phase: "apply", Subject: "node." + node.Name})
 		if err != nil {
 			run.Status = StatusFailed
-			return append(runs, run), errors.Join(err, s.noteSavedFailure(node.Name, "apply_step_failed"))
+			result.Nodes = append(result.Nodes, run)
+			return result, errors.Join(err, s.noteSavedFailure(node.Name, "apply_step_failed"))
 		}
-		runs = append(runs, run)
+		result.Nodes = append(result.Nodes, run)
 	}
 	next := s.record
 	next.Status = "completed"
@@ -243,12 +246,12 @@ func (e *Engine) ApplySavedPlans(id string, opts Options) (runs []NodeRun, resul
 		next.FinishedAt = &now
 	}
 	if err := s.publish(next); err != nil {
-		return runs, err
+		return result, err
 	}
 	if err := e.cleanupExecution(s.store, next); err != nil {
 		e.logger().Warn("execution artifact cleanup deferred", "execution", next.ID, "error", err)
 	}
-	return runs, nil
+	return result, nil
 }
 
 func (e *Engine) applySavedNode(s *executionSession, node ExecutionNode, opts Options) (string, error) {
@@ -267,14 +270,14 @@ func (e *Engine) applySavedNode(s *executionSession, node ExecutionNode, opts Op
 		return "", err
 	}
 	if target != node.Target {
-		return "", fmt.Errorf("node.%s: backend target changed; create a fresh plan", node.Name)
+		return "", WithDiagnostic(fmt.Errorf("node.%s: backend target changed; create a fresh plan", node.Name), Diagnostic{Code: "saved_plan_incompatible", Category: "artifact", Phase: "artifact"})
 	}
 	binding, err := e.planBinding(node.Name, r, vars)
 	if err != nil {
 		return "", err
 	}
 	if binding != bundle.Binding {
-		return "", fmt.Errorf("node.%s: source, runtime, paths, or inputs changed; create a fresh plan", node.Name)
+		return "", WithDiagnostic(fmt.Errorf("node.%s: source, runtime, paths, or inputs changed; create a fresh plan", node.Name), Diagnostic{Code: "saved_plan_incompatible", Category: "artifact", Phase: "artifact"})
 	}
 	if err := s.transition(node.Name, "initializing", "", ""); err != nil {
 		return "", err
@@ -307,27 +310,29 @@ func (e *Engine) applySavedNode(s *executionSession, node ExecutionNode, opts Op
 }
 
 func (e *Engine) openSavedExecution(id string) (*executionSession, error) {
+	// Store availability and record integrity cannot establish that the saved plan itself is incompatible.
+	readDiagnostic := Diagnostic{Code: "execution_read_failed", Category: "record", Phase: "history", Subject: "execution", RelatedExecutionID: id, Remedy: "check the selected execution store and requested ID; restore access or missing records before retrying"}
 	store, err := e.openExecutionStore()
 	if err != nil {
-		return nil, err
+		return nil, WithDiagnostic(err, readDiagnostic)
 	}
 	record, revision, err := readExecutionRecord(e.context(), store, id)
 	if err != nil {
 		_ = store.close()
-		return nil, err
+		return nil, WithDiagnostic(err, readDiagnostic)
 	}
 	scope, err := e.executionScope()
 	if err != nil {
 		_ = store.close()
-		return nil, err
+		return nil, WithDiagnostic(err, Diagnostic{Code: "configuration_failed", Category: "configuration", Phase: "prepare", Subject: "execution", RelatedExecutionID: id, Remedy: "check the blueprint coordination scope configuration before retrying"})
 	}
 	if record.Scope != scope || record.Operation != "saved_apply" || record.RecoveryAt != nil || executionNeedsRecovery(record) {
 		_ = store.close()
-		return nil, fmt.Errorf("execution cannot resume in its current scope or recovery status; inspect plan show")
+		return nil, WithDiagnostic(fmt.Errorf("execution cannot resume in its current scope or recovery status; inspect plan show"), Diagnostic{Code: "saved_plan_incompatible", Category: "artifact", Phase: "artifact", Subject: "execution", RelatedExecutionID: id, Remedy: "inspect plan show and restore the original scope or resolve its recovery status before continuing"})
 	}
 	if err := e.checkExecutionBarrier(store, scope, id); err != nil {
 		_ = store.close()
-		return nil, err
+		return nil, WithDiagnostic(err, readDiagnostic)
 	}
 	return &executionSession{engine: e, store: store, record: record, revision: revision}, nil
 }

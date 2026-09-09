@@ -16,10 +16,10 @@ func finishSavedExecution(cmd *cobra.Command, output string, record engine.Execu
 		result.Executions = append(result.Executions, executionToDTO(record))
 	}
 	if resultErr != nil {
-		result.Diagnostics = append(result.Diagnostics, diagnosticToDTO(engine.Diagnostic{Code: "saved_plan_failed", Phase: "plan", Subject: "execution", Message: resultErr.Error(), Remedy: "inspect plan show before retrying; never replay an uncertain mutation"}))
+		result.Diagnostics = errorDiagnostics(resultErr, engine.Diagnostic{Code: "saved_plan_failed", Phase: "plan", Subject: "execution", Remedy: "inspect plan show before retrying; never replay an uncertain mutation"})
 	}
 	if output == "json" {
-		if err := writeJSON(cmd.OutOrStdout(), result); err != nil {
+		if err := writeJSON(cmd, result); err != nil {
 			return err
 		}
 	} else if record.ID != "" {
