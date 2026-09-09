@@ -21,6 +21,9 @@ func (e *Engine) ReviewPlan(opts Options, allowTextFallback bool) (RunResult, er
 }
 
 func (e *Engine) plan(opts Options, inspect, allowTextFallback bool) (result RunResult, resultErr error) {
+	if err := opts.validateTimeout(false); err != nil {
+		return result, err
+	}
 	opts, selectionErr := e.resolveSelection(opts)
 	if selectionErr != nil {
 		return result, selectionErr
@@ -61,6 +64,8 @@ func (e *Engine) plan(opts Options, inspect, allowTextFallback bool) (result Run
 	var reviewMu sync.Mutex
 	reviews := map[string]*PlanReview{}
 	runs, runErr := e.runLevels(opts, false, func(name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
+		e, cancel := e.nodeEngine(opts)
+		defer cancel()
 		review := newPlanReview(e.approveFor(name, opts.Approve))
 		if inspect {
 			reviewMu.Lock()

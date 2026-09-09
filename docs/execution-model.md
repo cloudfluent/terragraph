@@ -422,3 +422,9 @@ never automatic replay. Contract meaning and mode participate in retained-plan
 bindings. Review JSON exposes independent conditions through `review.contracts`.
 Known null is reconstructed only from the same successful plan, never from a
 missing live output. See the contracts reference for restart and recovery limits.
+
+### Per-node deadlines
+
+`--node-timeout 5m` on plan/apply/destroy limits each node action independently; 0 (the default) disables it. The deadline begins after dispatch and includes input resolution, init, planning, mutation, and output collection. Queue time, graph/runtime preflight, and lock acquisition are excluded. Saved frontier planning and `apply --plan` use the same per-node boundary and keep their existing membership, policy, and recovery rules. Apply and destroy require `--auto-approve` when deadlines are enabled.
+
+A deadline does not establish whether infrastructure changed. The existing journal records observed outcomes and retains indeterminate mutations for explicit recovery; timeout never retries a mutation. Successfully completed actions retain their success even if cancellation arrives at the completion boundary. Subprocess cleanup can extend elapsed time beyond the deadline: Unix waits for its process group and Windows assigns timed runtimes to a non-breakaway job before they execute, then waits for tracked processes to terminate before releasing the action slot or graph lock.

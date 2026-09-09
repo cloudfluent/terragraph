@@ -9,15 +9,16 @@ terragraph apply [flags]
 ### Options
 
 ```
-      --approve string     what a node may do without saying so per run: none, safe (create/update), or all (adds replace/delete); a node's own approve wins over this (default "safe")
-      --auto-approve       skip the interactive approval prompt
-      --downstream         include all successors of --node across data and ordering edges
-  -h, --help               help for apply
-      --node stringArray   select an exact leaf name (repeat for multiple nodes; commas are literal)
-      --output string      output format: text or json (default "text")
-      --parallelism int    max nodes to run concurrently within one execution level (default 1)
-      --plan string        apply the stored frontier of a saved execution without replanning
-      --retain-plan        retain optional plan artifacts while ordinary apply continues
+      --approve string          what a node may do without saying so per run: none, safe (create/update), or all (adds replace/delete); a node's own approve wins over this (default "safe")
+      --auto-approve            skip the interactive approval prompt
+      --downstream              include all successors of --node across data and ordering edges
+  -h, --help                    help for apply
+      --node stringArray        select an exact leaf name (repeat for multiple nodes; commas are literal)
+      --node-timeout duration   deadline per node action, excluding queue time (0 disables; apply/destroy require --auto-approve)
+      --output string           output format: text or json (default "text")
+      --parallelism int         max nodes to run concurrently within one execution level (default 1)
+      --plan string             apply the stored frontier of a saved execution without replanning
+      --retain-plan             retain optional plan artifacts while ordinary apply continues
 ```
 
 ### Options inherited from parent commands
