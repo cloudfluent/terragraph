@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.2.6](https://github.com/cloudfluent/terragraph/compare/v0.2.5...v0.2.6) (2026-09-09)
+
+
+### Features
+
+* add optional S3 state address generation ([#114](https://github.com/cloudfluent/terragraph/issues/114)) ([1ae39a7](https://github.com/cloudfluent/terragraph/commit/1ae39a7b44801caf14d5d8738eed1477d921790a))
+* enforce runtime contracts and accept native type expressions ([#111](https://github.com/cloudfluent/terragraph/issues/111)) ([acc8250](https://github.com/cloudfluent/terragraph/commit/acc8250c8147245ee63e960713b18d325cb1a78c))
+* improve CLI results and diagnostics for agents ([#110](https://github.com/cloudfluent/terragraph/issues/110)) ([83ed519](https://github.com/cloudfluent/terragraph/commit/83ed51909c8402f5099828516a97249c33537d05))
+
+
+### Documentation
+
+* add complete multi-account AWS example ([#107](https://github.com/cloudfluent/terragraph/issues/107)) ([904a154](https://github.com/cloudfluent/terragraph/commit/904a154516bcfab05a09a28efc4527747f669720))
+* correct complete example spelling ([#109](https://github.com/cloudfluent/terragraph/issues/109)) ([cb6dbd0](https://github.com/cloudfluent/terragraph/commit/cb6dbd073952e9321d6735a7a43d11dddc2c8588))
+* explain DRY backend configuration in guides and examples ([#116](https://github.com/cloudfluent/terragraph/issues/116)) ([b65a3cc](https://github.com/cloudfluent/terragraph/commit/b65a3cc84effcb6030b825eeb950e6a3154e3c92))
+* highlight AI agent friendliness in README ([#115](https://github.com/cloudfluent/terragraph/issues/115)) ([54a4683](https://github.com/cloudfluent/terragraph/commit/54a4683fe52c27b0d9c311eedc6e9cd9a0f7d42f))
+* use native contract types in the complete example ([#112](https://github.com/cloudfluent/terragraph/issues/112)) ([6cb81b9](https://github.com/cloudfluent/terragraph/commit/6cb81b98f42ca098e51b053d6a746a583f738161))
+
 ## [0.2.5](https://github.com/cloudfluent/terragraph/compare/v0.2.4...v0.2.5) (2026-09-09)
 
 
