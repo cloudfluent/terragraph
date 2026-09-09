@@ -95,7 +95,7 @@ func (e *Engine) plan(opts Options, inspect, allowTextFallback bool) (result Run
 		// Removed however this node exits: the file holds resolved input values in cleartext, and the next run rewrites it from scratch anyway.
 		defer func() { _ = os.Remove(varsPath) }()
 
-		r := &exec.Runner{Context: e.context(), Binary: e.runtimeFor(name), Dir: nodeDir, DataDir: e.dataDir(name), Env: e.envFor(name), Stdout: out, Stderr: out}
+		r := &exec.Runner{OutputRetries: e.OutputRetries, Context: e.context(), Binary: e.runtimeFor(name), Dir: nodeDir, DataDir: e.dataDir(name), Env: e.envFor(name), Stdout: out, Stderr: out}
 		if err := session.transition(name, "initializing", "", ""); err != nil {
 			return fail("journal_failed", "init", err)
 		}

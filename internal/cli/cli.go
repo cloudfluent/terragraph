@@ -284,6 +284,7 @@ func newPlanCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fun
 	var save bool
 	var continueID string
 	var parallelism int
+	var outputRetries int
 	cmd := &cobra.Command{
 		Use:   "plan",
 		Short: "Review node plans, actions, approval policy, and evidence limitations",
@@ -316,11 +317,15 @@ func newPlanCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fun
 				return policyErr
 			}
 			phase = "load"
+			if outputRetries < 0 || outputRetries > 10 {
+				return fmt.Errorf("--output-retries must be between 0 and 10; use 0 to disable retries")
+			}
 			e, unlock, err := loadLockedEngine(cmd, blueprintPath, binaryOf, loggerOf)
 			if err != nil {
 				return err
 			}
 			defer unlock()
+			e.OutputRetries = outputRetries
 			phase = "validation"
 			if err := checkValidate(cmd, e); err != nil {
 				return err
@@ -338,6 +343,7 @@ func newPlanCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fun
 		},
 	}
 	selection.add(cmd)
+	cmd.Flags().IntVar(&outputRetries, "output-retries", 0, "additional attempts for failed output reads only (0-10; mutations are never retried)")
 	cmd.Flags().IntVar(&parallelism, "parallelism", 1, "max nodes to run concurrently within one execution level")
 	cmd.Flags().StringVar(&output, "output", "text", "output format: text or json")
 	cmd.Flags().BoolVar(&save, "save", false, "save only the ready graph frontier for a later apply --plan")
@@ -353,6 +359,7 @@ func newApplyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fu
 	var retainPlan bool
 	var autoApprove bool
 	var parallelism int
+	var outputRetries int
 	var force bool
 	var approve string
 	var output string
@@ -371,11 +378,15 @@ func newApplyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fu
 			if output == "json" && !autoApprove {
 				return fmt.Errorf("--output json needs --auto-approve: the approval prompt would have nowhere to appear without corrupting the JSON payload; approve in text mode or pass --auto-approve")
 			}
+			if outputRetries < 0 || outputRetries > 10 {
+				return fmt.Errorf("--output-retries must be between 0 and 10; use 0 to disable retries")
+			}
 			e, unlock, err := loadLockedEngine(cmd, blueprintPath, binaryOf, loggerOf)
 			if err != nil {
 				return err
 			}
 			defer unlock()
+			e.OutputRetries = outputRetries
 			if err := checkValidate(cmd, e); err != nil {
 				return err
 			}
@@ -403,6 +414,7 @@ func newApplyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fu
 		},
 	}
 	selection.add(cmd)
+	cmd.Flags().IntVar(&outputRetries, "output-retries", 0, "additional attempts for failed output reads only (0-10; mutations are never retried)")
 	cmd.Flags().StringVar(&planID, "plan", "", "apply the stored frontier of a saved execution without replanning")
 	cmd.Flags().BoolVar(&retainPlan, "retain-plan", false, "retain optional plan artifacts while ordinary apply continues")
 	cmd.Flags().BoolVar(&autoApprove, "auto-approve", false, "skip the interactive approval prompt")
@@ -419,6 +431,7 @@ func newDestroyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf 
 	var selection selectionFlags
 	var autoApprove bool
 	var parallelism int
+	var outputRetries int
 	var output string
 	cmd := &cobra.Command{
 		Use:   "destroy",
@@ -432,11 +445,15 @@ func newDestroyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf 
 			if output == "json" && !autoApprove {
 				return fmt.Errorf("--output json needs --auto-approve: the destroy confirmation would have nowhere to appear without corrupting the JSON payload; confirm in text mode or pass --auto-approve")
 			}
+			if outputRetries < 0 || outputRetries > 10 {
+				return fmt.Errorf("--output-retries must be between 0 and 10; use 0 to disable retries")
+			}
 			e, unlock, err := loadLockedEngine(cmd, blueprintPath, binaryOf, loggerOf)
 			if err != nil {
 				return err
 			}
 			defer unlock()
+			e.OutputRetries = outputRetries
 			if err := checkValidate(cmd, e); err != nil {
 				return err
 			}
@@ -452,6 +469,7 @@ func newDestroyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf 
 		},
 	}
 	selection.add(cmd)
+	cmd.Flags().IntVar(&outputRetries, "output-retries", 0, "additional attempts for failed output reads only (0-10; mutations are never retried)")
 	cmd.Flags().BoolVar(&autoApprove, "auto-approve", false, "skip interactive approval")
 	cmd.Flags().IntVar(&parallelism, "parallelism", 1, "max nodes to run concurrently within one execution level")
 	cmd.Flags().StringVar(&output, "output", "text", "output format: text or json")

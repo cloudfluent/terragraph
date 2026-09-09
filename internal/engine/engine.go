@@ -23,6 +23,8 @@ import (
 
 // Engine holds a loaded blueprint's graph and the I/O streams terraform/tofu subprocess output is forwarded to.
 type Engine struct {
+	// OutputRetries applies only to read-only output subprocesses, including fresh upstream reads.
+	OutputRetries int
 	// Context lets CLI cancellation reach every runtime and prevents later nodes from starting after interruption.
 	Context   context.Context
 	Binary    exec.Binary
@@ -95,6 +97,9 @@ func (e *Engine) logger() *slog.Logger {
 // one lock. See internal/runlock. The returned func releases a lock this call acquired;
 // it is a no-op when LoadLocked already holds one.
 func (e *Engine) lockRun() (func(), error) {
+	if e.OutputRetries < 0 || e.OutputRetries > 10 {
+		return nil, WithDiagnostic(fmt.Errorf("--output-retries must be between 0 and 10; use 0 to disable retries"), Diagnostic{Code: "invalid_arguments", Category: "arguments", Phase: "arguments"})
+	}
 	// Programmatic graphs can bypass parsing; check every node before acquiring locks or letting upstream output errors fall back to snapshots.
 	if e.Graph != nil {
 		names := make([]string, 0, len(e.Graph.Nodes))
@@ -262,7 +267,7 @@ func (e *Engine) dataDir(name string) string {
 
 // runner builds a Runner for internal, non-buffered use (reading an upstream node's already-applied outputs). The per-node runners used for the actual plan/apply/destroy commands (see plan.go/apply.go/destroy.go) are built separately, against that node's own buffered output writer.
 func (e *Engine) runner(name string) *exec.Runner {
-	return &exec.Runner{Context: e.context(), Binary: e.runtimeFor(name), Dir: e.nodeDir(name), DataDir: e.dataDir(name), Env: e.envFor(name), Stdout: e.Stdout, Stderr: e.Stderr}
+	return &exec.Runner{OutputRetries: e.OutputRetries, Context: e.context(), Binary: e.runtimeFor(name), Dir: e.nodeDir(name), DataDir: e.dataDir(name), Env: e.envFor(name), Stdout: e.Stdout, Stderr: e.Stderr}
 }
 
 // envFor returns name's fully resolved extra environment variables (see graph.Node.Env): whatever an enclosing Use.Env cascade contributed, already merged with the node's own Env. Unlike runtimeFor, there is no further CLI-level fallback layer to apply on top: env has no CLI equivalent, so whatever the graph already resolved is final.
