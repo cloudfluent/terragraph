@@ -30,6 +30,10 @@ func (e *Engine) prepareNodePlan(name string, runner *exec.Runner, args ...strin
 		cleanup()
 		return nil, fmt.Errorf("plan: %w", err)
 	}
+	if err := e.pluginPlan(name, runner, path, "node.plan.ready"); err != nil {
+		cleanup()
+		return nil, err
+	}
 	return &preparedNodePlan{name: name, runner: runner, path: path, changed: changed, cleanup: cleanup}, nil
 }
 
@@ -83,11 +87,18 @@ func (e *Engine) applyPreparedPlan(plan *preparedNodePlan, opts Options) (exec.O
 			return nil, "", fmt.Errorf("apply cancelled: node %s was not approved", name)
 		}
 	}
+	if err := e.pluginPlan(name, plan.runner, plan.path, "node.mutation.admit"); err != nil {
+		return nil, "", err
+	}
 	if err := plan.record("applying"); err != nil {
 		return nil, "", err
 	}
 	if err := plan.runner.ApplyPlan(plan.path); err != nil {
-		return nil, "", errors.Join(fmt.Errorf("apply: %w", err), plan.record("indeterminate"))
+		phase := "indeterminate"
+		if errors.Is(err, exec.ErrNotStarted) {
+			phase = "failed"
+		}
+		return nil, "", errors.Join(fmt.Errorf("apply: %w", err), plan.record(phase))
 	}
 
 	if err := plan.record("applied"); err != nil {

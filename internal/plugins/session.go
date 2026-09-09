@@ -37,8 +37,11 @@ type Session struct {
 }
 
 // Open rechecks executable bytes immediately before launch and never inherits ambient credentials.
-func Open(ctx context.Context, p Package, workDir string, environment []string) (*Session, error) {
+func Open(ctx context.Context, p Package, workDir string, environment []string, lifetimeContext ...context.Context) (*Session, error) {
 	parentContext := ctx
+	if len(lifetimeContext) > 0 {
+		parentContext = lifetimeContext[0]
+	}
 	ctx, startupCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer startupCancel()
 	if err := ctx.Err(); err != nil {
@@ -131,6 +134,9 @@ func Open(ctx context.Context, p Package, workDir string, environment []string) 
 
 // Call never returns raw transport or provider errors, which can contain secret request values.
 func (s *Session) Call(ctx context.Context, request sdk.Request, timeout time.Duration) (sdk.Response, error) {
+	if len(request.Event.Plan) > sdk.MaxPlanSize {
+		return sdk.Response{}, &CallError{Code: "request_too_large"}
+	}
 	if timeout <= 0 {
 		return sdk.Response{}, fmt.Errorf("plugin call requires a positive timeout")
 	}
@@ -153,7 +159,7 @@ func (s *Session) Call(ctx context.Context, request sdk.Request, timeout time.Du
 	if err := callCtx.Err(); err != nil {
 		return sdk.Response{}, &CallError{Code: "call_cancelled", cause: err}
 	}
-	data, err := json.Marshal(request)
+	data, err := json.Marshal(requestForLimit(request))
 	if err != nil {
 		return sdk.Response{}, &CallError{Code: "invalid_request"}
 	}
@@ -237,3 +243,5 @@ func (s *Session) Close() {
 		}
 	})
 }
+
+func requestForLimit(request sdk.Request) sdk.Request { request.Event.Plan = nil; return request }

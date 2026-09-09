@@ -23,6 +23,9 @@ import (
 
 // Engine holds a loaded blueprint's graph and the I/O streams terraform/tofu subprocess output is forwarded to.
 type Engine struct {
+	plugins         *plugins.Lifecycle
+	pluginOperation string
+	pluginExecution *executionSession
 	// Context lets CLI cancellation reach every runtime and prevents later nodes from starting after interruption.
 	Context   context.Context
 	Binary    exec.Binary
@@ -200,6 +203,9 @@ func load(ctx context.Context, blueprintPath string, binary exec.Binary, stdout,
 		return nil, nil, err
 	}
 
+	if err := evaluation.Lifecycle.Expand(ctx, bp); err != nil {
+		return nil, nil, err
+	}
 	build := graph.Build
 	if len(observation) > 0 && observation[0] {
 		build = graph.BuildObservation
@@ -209,6 +215,9 @@ func load(ctx context.Context, blueprintPath string, binary exec.Binary, stdout,
 		return nil, nil, err
 	}
 
+	if err := validatePluginGraph(ctx, evaluation.Lifecycle, g); err != nil {
+		return nil, nil, err
+	}
 	// The mode is blueprint-owned, reviewed configuration; wiring it here keeps graph.Build ignorant of it (severity is a validate-time concern only).
 	g.ContractMode = bp.ContractMode
 
@@ -262,7 +271,7 @@ func (e *Engine) dataDir(name string) string {
 
 // runner builds a Runner for internal, non-buffered use (reading an upstream node's already-applied outputs). The per-node runners used for the actual plan/apply/destroy commands (see plan.go/apply.go/destroy.go) are built separately, against that node's own buffered output writer.
 func (e *Engine) runner(name string) *exec.Runner {
-	return &exec.Runner{Context: e.context(), Binary: e.runtimeFor(name), Dir: e.nodeDir(name), DataDir: e.dataDir(name), Env: e.envFor(name), Stdout: e.Stdout, Stderr: e.Stderr}
+	return &exec.Runner{Hook: e.pluginRuntime(name), Context: e.context(), Binary: e.runtimeFor(name), Dir: e.nodeDir(name), DataDir: e.dataDir(name), Env: e.envFor(name), Stdout: e.Stdout, Stderr: e.Stderr}
 }
 
 // envFor returns name's fully resolved extra environment variables (see graph.Node.Env): whatever an enclosing Use.Env cascade contributed, already merged with the node's own Env. Unlike runtimeFor, there is no further CLI-level fallback layer to apply on top: env has no CLI equivalent, so whatever the graph already resolved is final.

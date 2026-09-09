@@ -123,6 +123,30 @@ func (e *Engine) resolveInputsWithBasis(name string, applied map[string]exec.Out
 		vars[varName] = val
 	}
 
+	for input, binding := range e.Graph.Nodes[name].Inputs {
+		if !e.Graph.Nodes[name].Schema.Variables[input].Sensitive {
+			return nil, fmt.Errorf("node.%s.input.%s: plugin inputs require a sensitive module variable to prevent runtime disclosure", name, input)
+		}
+		if _, exists := vars[input]; exists {
+			return nil, fmt.Errorf("node.%s.input.%s: plugin input conflicts with vars or edge; remove one supplier", name, input)
+		}
+		response, err := e.plugins.Resolve(e.context(), name, binding)
+		if err != nil {
+			return nil, err
+		}
+		value, err := response.Value.Decode()
+		if err != nil {
+			return nil, fmt.Errorf("node.%s.input.%s: invalid plugin input", name, input)
+		}
+		if err := e.checkVarType(name, input, value, true); err != nil {
+			return nil, err
+		}
+		vars[input] = value
+		if basis != nil {
+			*basis = append(*basis, InputBasis{Input: input, Source: "plugin", Node: binding.Alias, Output: binding.Feature})
+		}
+	}
+
 	return vars, nil
 }
 

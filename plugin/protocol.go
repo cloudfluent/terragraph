@@ -12,7 +12,7 @@ import (
 	ctyjson "github.com/zclconf/go-cty/cty/json"
 )
 
-const ProtocolVersion = 2
+const ProtocolVersion = 3
 const MaxMessageSize = 4 << 20
 
 // Descriptor is inspectable without executing untrusted package code during discovery or editor completion.
@@ -78,6 +78,7 @@ func (v Value) Decode() (any, error) {
 
 // Event contains immutable evidence, never a path granting write access to a native plan.
 type Event struct {
+	Graph       []GraphNode       `json:"graph,omitempty"`
 	ID          string            `json:"id"`
 	ExecutionID string            `json:"execution_id,omitempty"`
 	Operation   string            `json:"operation"`
@@ -118,6 +119,9 @@ type Lease struct {
 
 // Response separates business rejection from a broken plugin and cannot request infrastructure replay.
 type Response struct {
+	Identity       string            `json:"identity,omitempty"`
+	ExpiresAt      time.Time         `json:"expires_at,omitempty"`
+	Expansion      *Expansion        `json:"expansion,omitempty"`
 	LogsIncomplete bool              `json:"logs_incomplete,omitempty"`
 	Value          *Value            `json:"value,omitempty"`
 	Decision       string            `json:"decision,omitempty"`

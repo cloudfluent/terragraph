@@ -53,7 +53,7 @@ func TestObservation_RealLocalRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	cache := s.dir
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	result := s.Read("first", false)
 	if result.Diagnostic != nil {
 		t.Fatalf("diagnostic = %+v", result.Diagnostic)
@@ -86,7 +86,9 @@ func TestObservation_RealLocalRead(t *testing.T) {
 	if len(entries) != 2 {
 		t.Fatalf("module entries = %v", entries)
 	}
-	s.Close()
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := os.Stat(cache); !os.IsNotExist(err) {
 		t.Fatal("read cache survived close")
 	}
@@ -130,7 +132,7 @@ func TestObservation_RealHTTPReadOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	if got := s.Read("first", false); got.Diagnostic != nil || len(got.Outputs) != 2 {
 		t.Fatalf("got = %+v", got)
 	}
@@ -170,7 +172,7 @@ func TestObservation_PartialModuleAndWiring(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	if s.engine.Graph.Nodes["first"].Schema == nil {
 		t.Fatal("readable sibling lost")
 	}
@@ -189,19 +191,21 @@ func TestObservation_SessionsCoordinateAndClean(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer first.Close()
+	defer func() { _ = first.Close() }()
 	firstDir := first.dir
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := OpenObservation(ctx, path, exec.Terraform, io.Discard); err == nil {
 		t.Fatal("cancelled read acquired source lock")
 	}
-	first.Close()
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
 	second, err := OpenObservation(context.Background(), path, exec.Terraform, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer second.Close()
+	defer func() { _ = second.Close() }()
 	if second.dir == firstDir {
 		t.Fatal("sessions reused a cache")
 	}
@@ -228,7 +232,7 @@ func TestObservation_DottedGroupIgnoresApplyInputs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	names, err := s.Names("checkout.cluster")
 	if err != nil || len(names) != 1 {
 		t.Fatalf("got = %v, %v", names, err)
@@ -248,7 +252,7 @@ func TestObservation_RefusesUnverifiedPreparation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	if got := s.Read("first", false); got.Diagnostic == nil || got.Diagnostic.Code != "unsupported_backend" {
 		t.Fatalf("got = %+v", got)
 	}

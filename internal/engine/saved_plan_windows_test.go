@@ -4,6 +4,7 @@ package engine
 
 import (
 	"errors"
+	"github.com/cloudfluent/terragraph/internal/privatefs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -234,7 +235,7 @@ func TestCreatePlanDirectory_WindowsDoesNotInheritWriteACL(t *testing.T) {
 	if err := windows.SetNamedSecurityInfo(parent, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, acl, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := createPlanDirectory(filepath.Dir(path)); err != nil {
+	if err := privatefs.Directory(filepath.Dir(path)); err != nil {
 		t.Fatal(err)
 	}
 	assertPrivatePlanACL(t, filepath.Dir(path))

@@ -1,20 +1,41 @@
 package engine
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"github.com/cloudfluent/terragraph/internal/exec"
+	"github.com/cloudfluent/terragraph/internal/plugins"
 	"maps"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // recoverNodeOutputs isolates backend caches; backends without verified read-only initialization require explicit, journaled preparation.
-func (e *Engine) recoverNodeOutputs(session *executionSession, name string, allowInit bool) error {
+func (e *Engine) recoverNodeOutputs(session *executionSession, name string, allowInit bool) (resultErr error) {
 	node := e.Graph.Nodes[name]
 	if node.Schema == nil || !node.Schema.BackendConfigKnown {
 		return fmt.Errorf("node.%s: backend configuration cannot be verified; restore literal backend configuration", name)
 	}
 	r := e.runner(name)
+	if len(node.Credentials) > 0 {
+		m, err := plugins.NewCredentialRecovery(plugins.WithLogger(e.context(), e.logger()), e.BaseDir, e.Blueprint.Plugins, session.record.ID, session.recordPlugin)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.WithoutCancel(e.context()), 30*time.Second)
+			defer cancel()
+			resultErr = errors.Join(resultErr, m.Close(ctx))
+		}()
+		r.Hook = func(ctx context.Context, _ string) (context.Context, map[string]string, func(error) error, error) {
+			credentialCtx, env, err := m.Credentials(ctx, name, node.Credentials)
+			return exec.WithCredentialLifetime(credentialCtx), env, nil, err
+		}
+	}
+
 	env := maps.Clone(r.Env)
 	if env == nil {
 		env = map[string]string{}

@@ -20,6 +20,7 @@ import (
 	"github.com/cloudfluent/terragraph/internal/plugins"
 	"github.com/cloudfluent/terragraph/internal/runlock"
 	"github.com/cloudfluent/terragraph/internal/vendor"
+	sdk "github.com/cloudfluent/terragraph/plugin"
 )
 
 // NewRootCmd builds the terragraph command tree. version is surfaced via cobra's built-in --version flag; callers that don't care what it prints (tools/gendocs, tests) can pass any non-empty placeholder.
@@ -520,7 +521,7 @@ func newVendorCmd(blueprintPath *string, loggerOf func() *slog.Logger) *cobra.Co
 	cmd := &cobra.Command{
 		Use:   "vendor",
 		Short: "Fetch remote node sources into a local, committable directory",
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) (resultErr error) {
 			if output != "text" && output != "json" {
 				return fmt.Errorf("unknown output %q (want \"text\" or \"json\")", output)
 			}
@@ -543,7 +544,7 @@ func newVendorCmd(blueprintPath *string, loggerOf func() *slog.Logger) *cobra.Co
 			}
 			defer func() {
 				if err := evaluation.Close(); err != nil {
-					logger.Error("plugin cleanup failed", "error", err)
+					resultErr = errors.Join(resultErr, err)
 				}
 			}()
 			bp, _, err := blueprint.LoadPath(*blueprintPath, evaluation.Context)
@@ -551,6 +552,20 @@ func newVendorCmd(blueprintPath *string, loggerOf func() *slog.Logger) *cobra.Co
 				return err
 			}
 
+			if err := evaluation.Lifecycle.Expand(cmd.Context(), bp); err != nil {
+				return err
+			}
+			lifecycle, err := plugins.NewLifecycle(plugins.WithLogger(cmd.Context(), logger), baseDir, bp.Plugins, "vendor", "", nil)
+			if err != nil {
+				return err
+			}
+			defer func() {
+				ctx, cancel := context.WithTimeout(context.WithoutCancel(cmd.Context()), 30*time.Second)
+				defer cancel()
+				if err := lifecycle.Close(ctx); err != nil {
+					resultErr = errors.Join(resultErr, err)
+				}
+			}()
 			sources, err := graph.SourceNodes(bp, baseDir)
 			if err != nil {
 				return err
@@ -575,7 +590,26 @@ func newVendorCmd(blueprintPath *string, loggerOf func() *slog.Logger) *cobra.Co
 			}
 
 			diagnosticPhase(cmd, "artifact")
+			selected := make([]string, 0, len(nodes))
+			for _, n := range nodes {
+				selected = append(selected, n.Name)
+			}
+			if err := lifecycle.Emit(cmd.Context(), sdk.Event{Phase: "source.vendor.before", Nodes: selected}); err != nil {
+				return err
+			}
 			results, err := vendor.All(nodes, baseDir, bp.VendorDirectory(), filepath.Join(baseDir, bp.VendorManifestFile()), vendor.Options{Force: force, LegacyDirectories: legacyDirs})
+			status := "completed"
+			if err != nil {
+				status = "failed"
+			}
+			for _, r := range results {
+				if r.Err != nil {
+					status = "failed"
+				}
+			}
+			if emitErr := lifecycle.Emit(cmd.Context(), sdk.Event{Phase: "source.vendor.after", Nodes: selected, Status: status}); emitErr != nil {
+				logger.Warn("vendor observer failed", "error", emitErr)
+			}
 			errorCount := 0
 			for _, r := range results {
 				switch {

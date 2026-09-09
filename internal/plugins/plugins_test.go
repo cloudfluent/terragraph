@@ -35,6 +35,14 @@ func fixtureDescriptor() sdk.Descriptor {
 }
 
 func TestMain(m *testing.M) {
+	if strings.Contains(filepath.Base(os.Args[0]), "terraform-lifecycle") {
+		runLifecycleTerraform()
+		return
+	}
+	if os.Getenv("TERRAGRAPH_PLUGIN") == "terragraph-plugin-v1" && strings.Contains(filepath.Base(os.Args[0]), "lifecycle-plugin") {
+		serveLifecycleFixture()
+		return
+	}
 	if os.Getenv("TERRAGRAPH_PLUGIN") == "terragraph-plugin-v1" {
 		sdk.Serve(fixtureDescriptor(), func(ctx context.Context, r sdk.Request) (sdk.Response, error) {
 			if r.Action == "configure" {

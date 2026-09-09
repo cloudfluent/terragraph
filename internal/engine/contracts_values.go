@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	sdk "github.com/cloudfluent/terragraph/plugin"
 	"sort"
 
 	"github.com/cloudfluent/terragraph/internal/blueprint"
@@ -129,7 +130,13 @@ func (e *Engine) outputContractChecks(name string, outputs exec.Outputs, complet
 }
 
 func (e *Engine) validateOutputContracts(name string, outputs exec.Outputs) error {
-	return e.contractPolicy(e.outputContractChecks(name, outputs, true), true)
+	if err := e.contractPolicy(e.outputContractChecks(name, outputs, true), true); err != nil {
+		return err
+	}
+	if err := e.plugins.Emit(e.context(), sdk.Event{Phase: "node.outputs.ready", Node: name, Status: "validated"}); err != nil {
+		e.plugins.AddCompletionError(err)
+	}
+	return nil
 }
 
 // inspectContractPlan checks selected external inputs too, since managed vars alone cannot establish what the module receives.

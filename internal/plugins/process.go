@@ -2,6 +2,7 @@ package plugins
 
 import (
 	"context"
+	runtimeexec "github.com/cloudfluent/terragraph/internal/exec"
 	"io"
 	"os/exec"
 	"strconv"
@@ -37,7 +38,7 @@ func (p *processRunner) Start(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	cleanup, err := startPluginProcess(p.cmd)
+	cleanup, err := runtimeexec.StartManagedProcess(p.cmd)
 	if err != nil {
 		return err
 	}

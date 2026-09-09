@@ -105,6 +105,23 @@ func Validate(g *Graph) []Problem {
 
 	for _, name := range names {
 		node := g.Nodes[name]
+		for input := range node.Inputs {
+			subject := "node." + name + ".input." + input
+			if v, exists := node.Schema.Variables[input]; exists && !v.Sensitive {
+				problems = append(problems, Problem{Code: "plugin_input_not_sensitive", Subject: subject, Severity: SeverityError, Message: subject + ": plugin inputs require sensitive = true on the module variable"})
+			}
+			if wired[name+"."+input] {
+				problems = append(problems, Problem{Code: "input_conflict", Subject: subject, Severity: SeverityError, Message: subject + ": plugin input conflicts with vars or edge; remove one supplier"})
+			}
+			if !node.Schema.HasVariable(input) {
+				problems = append(problems, Problem{Code: "missing_input", Subject: subject, Severity: SeverityError, Message: subject + ": no such module variable; correct the binding"})
+			}
+			wired[name+"."+input] = true
+		}
+	}
+
+	for _, name := range names {
+		node := g.Nodes[name]
 		varNames := make([]string, 0, len(node.Schema.Variables))
 		for varName := range node.Schema.Variables {
 			varNames = append(varNames, varName)
@@ -114,7 +131,7 @@ func Validate(g *Graph) []Problem {
 			v := node.Schema.Variables[varName]
 			if v.Required && !wired[name+"."+varName] {
 				problems = append(problems, Problem{
-					Code: "required_input_unwired", Subject: "node." + name + ".input." + varName, Remedy: "supply the variable through an edge, vars, or runtime input",
+					Code: "required_input_unwired", Subject: "node." + name + ".input." + varName, Remedy: "supply the variable through an edge, vars, a plugin input binding, or runtime input",
 					Severity: SeverityWarning,
 					Message:  fmt.Sprintf("node.%s.input.%s: required variable %q has no edge feeding it (must be supplied some other way, e.g. terraform.tfvars)", name, varName, varName),
 				})

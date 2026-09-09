@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/cloudfluent/terragraph/internal/exec"
 	"github.com/cloudfluent/terragraph/internal/graph"
+	sdk "github.com/cloudfluent/terragraph/plugin"
 )
 
 // Diagnostic supplies stable branching fields without reflecting runtime output that may contain secrets.
@@ -39,27 +41,31 @@ func OpenObservation(ctx context.Context, path string, binary exec.Binary, stder
 	// Reuse saved-plan directory protection before creating a process-unique subtree.
 	cleanup, err := prepareSavedPlan(filepath.Join(parent, "prepare"))
 	if err != nil {
-		s.Close()
-		return nil, err
+		return nil, errors.Join(err, s.Close())
 	}
 	cleanup()
 	s.dir, err = os.MkdirTemp(parent, "read-")
 	if err != nil {
-		s.Close()
-		return nil, fmt.Errorf("creating observation directory: %w", err)
+		return nil, errors.Join(fmt.Errorf("creating observation directory: %w", err), s.Close())
+	}
+	if err := e.startPlugins("observe", nil, nil); err != nil {
+		return nil, errors.Join(err, s.Close())
 	}
 	return s, nil
 }
 
 // Close removes backend credentials cached by init before releasing source coordination.
-func (s *ObservationSession) Close() {
+func (s *ObservationSession) Close() error {
+	err := s.engine.finishPlugins(nil)
 	if s.dir != "" {
-		_ = os.RemoveAll(s.dir)
+		err = errors.Join(err, os.RemoveAll(s.dir))
+		s.dir = ""
 	}
 	if s.unlock != nil {
 		s.unlock()
 		s.unlock = nil
 	}
+	return err
 }
 
 // Observation keeps unavailable evidence distinct from successful empty collections.
@@ -101,10 +107,20 @@ func observationFailure(result Observation, code, phase, message, remedy string)
 }
 
 // Read observes one independently resolved leaf and never substitutes execution snapshots.
-func (s *ObservationSession) Read(name string, status bool) Observation {
+func (s *ObservationSession) Read(name string, status bool) (result Observation) {
 	e := s.engine
 	n := e.Graph.Nodes[name]
-	result := Observation{Node: name, Runtime: string(e.runtimeFor(name)), State: "indeterminate"}
+	result = Observation{Node: name, Runtime: string(e.runtimeFor(name)), State: "indeterminate"}
+	if e.plugins != nil {
+		defer func() {
+			if err := e.plugins.Emit(context.WithoutCancel(e.context()), sdk.Event{Phase: "node.finished", Node: name, Status: result.State}); err != nil {
+				e.plugins.AddCompletionError(err)
+			}
+		}()
+		if err := e.plugins.Emit(e.context(), sdk.Event{Phase: "node.prepare", Node: name}); err != nil {
+			return observationFailure(result, "plugin_failed", "prepare", "plugin rejected observation preparation", "review the plugin policy and diagnostics")
+		}
+	}
 	fail := func(code, phase, message, remedy string) Observation {
 		if e.context().Err() != nil {
 			code, message, remedy = "cancelled", "observation cancelled", "retry the observation"

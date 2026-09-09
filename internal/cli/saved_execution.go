@@ -19,6 +19,9 @@ func finishSavedExecution(cmd *cobra.Command, output string, record engine.Execu
 		result.Diagnostics = errorDiagnostics(resultErr, engine.Diagnostic{Code: "saved_plan_failed", Phase: "plan", Subject: "execution", Remedy: "inspect plan show before retrying; never replay an uncertain mutation"})
 	}
 	if output == "json" {
+		if len(record.PluginCalls) > 0 {
+			result.SchemaVersion = 2
+		}
 		if err := writeJSON(cmd, result); err != nil {
 			return err
 		}

@@ -14,11 +14,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cloudfluent/terragraph/internal/exec"
 	"github.com/cloudfluent/terragraph/internal/graph"
+	sdk "github.com/cloudfluent/terragraph/plugin"
 )
 
 // ExecutionRecord records observed command outcomes, never a second copy of infrastructure state.
 type ExecutionRecord struct {
+	PluginCalls []sdk.CallRecord `json:"plugin_calls,omitempty"`
 	// Selection is explanatory only; Nodes remains authoritative for saved execution membership.
 	Selection     *graph.Selection `json:"selection,omitempty"`
 	SchemaVersion int              `json:"schema_version"`
@@ -152,7 +155,7 @@ func readExecutionRecord(ctx context.Context, store executionStore, id string) (
 	if err := json.Unmarshal(obj.Data, &record); err != nil {
 		return ExecutionRecord{}, "", fmt.Errorf("reading execution record: %w", err)
 	}
-	if record.SchemaVersion != 1 || record.ID != id || record.Scope == "" || record.Status == "" {
+	if (record.SchemaVersion != 1 && record.SchemaVersion != 2) || record.ID != id || record.Scope == "" || record.Status == "" {
 		return ExecutionRecord{}, "", fmt.Errorf("execution record is incompatible or incomplete; restore a valid record")
 	}
 	if record.Selection != nil {
@@ -168,6 +171,9 @@ func readExecutionRecord(ctx context.Context, store executionStore, id string) (
 }
 
 func executionNeedsRecovery(record ExecutionRecord) bool {
+	if pluginRecoveryRequired(record) {
+		return true
+	}
 	if record.RecoveryAt != nil {
 		return false
 	}
@@ -206,6 +212,9 @@ func (e *Engine) beginExecution(operation string, names []string, selection *gra
 	}
 	now := time.Now().UTC()
 	record := ExecutionRecord{Selection: selection, SchemaVersion: 1, ID: newExecutionID("run"), Scope: scope, Operation: operation, Status: "preparing", CreatedAt: now, UpdatedAt: now, Nodes: []ExecutionNode{}}
+	if e.Blueprint != nil && len(e.Blueprint.Plugins) > 0 {
+		record.SchemaVersion = 2
+	}
 	for _, name := range names {
 		target, err := e.executionTarget(name)
 		if err != nil {
@@ -221,20 +230,41 @@ func (e *Engine) beginExecution(operation string, names []string, selection *gra
 	if err != nil {
 		return nil, WithDiagnostic(fmt.Errorf("creating execution record: %w", err), Diagnostic{Code: "execution_record_write_failed", Category: "record", Phase: "record", RelatedExecutionID: record.ID, Remedy: "inspect the execution store before retrying"})
 	}
+	s := &executionSession{engine: e, store: store, record: record, revision: rev}
+	if err := e.startPlugins(pluginOperation(operation), s, names); err != nil {
+		err = errors.Join(err, s.finish(err))
+		return nil, err
+	}
 	failed = false
-	return &executionSession{engine: e, store: store, record: record, revision: rev}, nil
+	return s, nil
 }
 
-func (s *executionSession) close() { _ = s.store.close() }
+func (s *executionSession) close() {
+	if err := s.engine.finishPlugins(nil); err != nil {
+		s.engine.logger().Error("plugin cleanup failed", "error", err)
+	}
+	_ = s.store.close()
+}
 
-func (s *executionSession) transition(name, phase, code, planID string) error {
+func (s *executionSession) transition(name, phase, code, planID string) (resultErr error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	previous := ""
+	defer func() {
+		s.mu.Unlock()
+		if resultErr == nil && (previous == "applying" || previous == "operating") && (phase == "applied" || phase == "completed" || phase == "indeterminate") {
+			ctx, cancel := context.WithTimeout(context.WithoutCancel(s.engine.context()), 5*time.Second)
+			defer cancel()
+			if err := s.engine.plugins.Emit(ctx, sdk.Event{Phase: "node.mutation.finished", Node: name, Status: phase}); err != nil {
+				s.engine.plugins.AddCompletionError(err)
+			}
+		}
+	}()
 	next := s.record
 	next.Nodes = append([]ExecutionNode(nil), s.record.Nodes...)
 	found := false
 	for i := range next.Nodes {
 		if next.Nodes[i].Name == name {
+			previous = next.Nodes[i].Phase
 			next.Nodes[i].Phase = phase
 			next.Nodes[i].Code = code
 			if planID != "" {
@@ -268,6 +298,8 @@ func (s *executionSession) publish(next ExecutionRecord) error {
 }
 
 func (s *executionSession) finish(runErr error) error {
+	pluginErr := s.engine.finishPlugins(runErr)
+	runErr = errors.Join(runErr, pluginErr)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	next := s.record
@@ -288,7 +320,7 @@ func (s *executionSession) finish(runErr error) error {
 	if err := s.engine.cleanupExecution(s.store, next); err != nil {
 		s.engine.logger().Warn("execution artifact cleanup deferred", "execution", next.ID, "error", err)
 	}
-	return nil
+	return pluginErr
 }
 
 // ListExecutions is observational with respect to infrastructure, but retains local source coordination while reading protected records.
@@ -337,6 +369,9 @@ func (e *Engine) ListExecutions() ([]ExecutionRecord, error) {
 }
 
 func (s *executionSession) fail(name, phase string, cause error) error {
+	if errors.Is(cause, exec.ErrNotStarted) {
+		phase = "failed"
+	}
 	return errors.Join(cause, s.transition(name, phase, "runtime_failed", ""))
 }
 

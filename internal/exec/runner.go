@@ -25,6 +25,7 @@ const (
 
 // Runner executes one binary against one node's working directory.
 type Runner struct {
+	Hook RuntimeHook
 	// Context bounds subprocess lifetime so cancellation finishes before the engine releases its run lock.
 	Context context.Context
 	Binary  Binary
@@ -95,7 +96,7 @@ func (r *Runner) run(args ...string) error {
 	cmd.Stdin = r.Stdin
 	cmd.Stdout = r.Stdout
 	cmd.Stderr = r.Stderr
-	return runCommand(r.Context, cmd)
+	return r.execute(cmd)
 }
 
 // Init runs `terraform init`. backendConfig entries are passed as -backend-config=key=value flags (Terraform's partial backend configuration mechanism), which lets the same module be reused by multiple nodes with distinct backend settings (e.g. state file path) without generating or editing any .tf file. A nil/empty map passes no such flags, leaving the module's own backend configuration as-is.
@@ -225,7 +226,7 @@ func (r *Runner) planJSON(planPath string) ([]byte, error) {
 	cmd.Env = env
 	cmd.Stdout = &stdout
 	cmd.Stderr = r.Stderr
-	if err := runCommand(r.Context, cmd); err != nil {
+	if err := r.execute(cmd); err != nil {
 		return nil, fmt.Errorf("running %s show -json in %s: %w", r.Binary, r.Dir, err)
 	}
 
@@ -309,7 +310,7 @@ func (r *Runner) Outputs() (Outputs, error) {
 	cmd.Env = env
 	cmd.Stdout = &stdout
 	cmd.Stderr = r.Stderr
-	if err := runCommand(r.Context, cmd); err != nil {
+	if err := r.execute(cmd); err != nil {
 		return nil, fmt.Errorf("running %s output -json in %s: %w", r.Binary, r.Dir, err)
 	}
 

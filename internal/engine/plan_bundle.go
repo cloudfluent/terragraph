@@ -14,6 +14,7 @@ import (
 
 	"github.com/cloudfluent/terragraph/internal/exec"
 	"github.com/cloudfluent/terragraph/internal/graph"
+	"github.com/cloudfluent/terragraph/internal/plugins"
 )
 
 // planBundle is an immutable private envelope; native plan bytes remain the sole authority for the changes that can be applied.
@@ -47,7 +48,7 @@ func (e *Engine) planBinding(name string, r *exec.Runner, vars map[string]any) (
 	if err != nil {
 		return "", err
 	}
-	return executionDigest(struct {
+	binding, err := executionDigest(struct {
 		Contracts, ContractMode string
 		Target                  string
 		Runtime                 exec.PlanRuntimeIdentity
@@ -56,6 +57,20 @@ func (e *Engine) planBinding(name string, r *exec.Runner, vars map[string]any) (
 		Files                   map[string]string
 		Vars                    map[string]any
 	}{contracts, e.Graph.ContractMode, target, runtime, r.Binary, r.Dir, r.DataDir, files, vars})
+	if err != nil {
+		return "", err
+	}
+	if e.Blueprint != nil && len(e.Blueprint.Plugins) > 0 {
+		p, err := plugins.Binding(e.BaseDir, e.Blueprint.Plugins)
+		if err != nil {
+			return "", err
+		}
+		return executionDigest(struct {
+			Binding, Plugins string
+			Credentials      map[string]string
+		}{binding, p, e.plugins.CredentialIdentities(name)})
+	}
+	return binding, nil
 }
 
 // planSourceFiles includes ordinary data files alongside configuration so changing file() inputs inside a source tree invalidates a retained plan.

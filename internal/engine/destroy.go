@@ -81,7 +81,7 @@ func (e *Engine) Destroy(opts Options) (result RunResult, resultErr error) {
 		// Removed however this node exits: the file holds resolved input values in cleartext, and the next run rewrites it from scratch anyway.
 		defer func() { _ = os.Remove(varsPath) }()
 
-		r := &exec.Runner{Context: e.context(), Binary: e.runtimeFor(name), Dir: e.nodeDir(name), DataDir: e.dataDir(name), Env: e.envFor(name), Stdout: out, Stderr: out}
+		r := &exec.Runner{Hook: e.pluginRuntime(name), Context: e.context(), Binary: e.runtimeFor(name), Dir: e.nodeDir(name), DataDir: e.dataDir(name), Env: e.envFor(name), Stdout: out, Stderr: out}
 		// Unlike apply, there is no saved plan here for terragraph to ask about itself, so terraform's own confirmation is the approval — and it needs somewhere to read the answer from. Left nil when auto-approving, so an unattended run can never block on a question.
 		var answered *countingReader
 		if !opts.AutoApprove && e.Stdin != nil {
@@ -93,8 +93,11 @@ func (e *Engine) Destroy(opts Options) (result RunResult, resultErr error) {
 				r.Stdin = answered
 			}
 		}
-		if dc := e.nodeContracts(name); dc != nil && len(dc.Consumer) > 0 {
+		if dc := e.nodeContracts(name); (dc != nil && len(dc.Consumer) > 0) || e.plugins.Has("node.plan.ready") {
 			return nil, StatusDestroyed, e.destroyContractPlan(name, r, session, opts, exec.VarFileArgs(varsPath, vars))
+		}
+		if err := e.pluginAdmitNative(name, "destroy"); err != nil {
+			return nil, "", err
 		}
 		if err := session.transition(name, "operating", "", ""); err != nil {
 			return nil, "", err
@@ -155,6 +158,9 @@ func (e *Engine) destroyContractPlan(name string, r *exec.Runner, session *execu
 	if err != nil {
 		return fmt.Errorf("destroy plan: %w", err)
 	}
+	if err := e.pluginPlan(name, r, path, "node.plan.ready"); err != nil {
+		return err
+	}
 	values, err := r.PlanValues(path)
 	if err != nil {
 		if policyErr := e.contractPolicy([]ContractCheck{{"node." + name, "destroy input evidence", blueprint.ContractDeferred}}, true); policyErr != nil {
@@ -171,6 +177,9 @@ func (e *Engine) destroyContractPlan(name string, r *exec.Runner, session *execu
 		if !approved {
 			return fmt.Errorf("destroy cancelled: node %s was not approved", name)
 		}
+	}
+	if err := e.pluginPlan(name, r, path, "node.mutation.admit"); err != nil {
+		return err
 	}
 	if err := session.transition(name, "operating", "", ""); err != nil {
 		return err
