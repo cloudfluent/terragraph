@@ -63,16 +63,16 @@ func (e *Engine) CancelExecution(id string) (ExecutionRecord, error) {
 		return record, fmt.Errorf("execution belongs to another coordination scope; restore the original configuration")
 	}
 	if executionNeedsRecovery(record) {
-		return record, fmt.Errorf("execution requires recovery; cancellation cannot establish that a mutation stopped")
+		return record, WithDiagnostic(fmt.Errorf("execution requires recovery; cancellation cannot establish that a mutation stopped"), Diagnostic{Code: "recovery_required", Category: "recovery", Phase: "recovery", RelatedExecutionID: record.ID, Remedy: "inspect plan show and recover after confirming the executor has stopped"})
 	}
 	if record.FinishedAt != nil {
 		return record, e.cleanupExecution(store, record)
 	}
+	s := &executionSession{engine: e, store: store, record: record, revision: revision}
 	now := time.Now().UTC()
 	record.Status, record.UpdatedAt, record.FinishedAt = "cancelled", now, &now
-	s := &executionSession{engine: e, store: store, record: record, revision: revision}
 	if err := s.publish(record); err != nil {
-		return record, err
+		return s.record, err
 	}
 	return record, e.cleanupExecution(store, record)
 }

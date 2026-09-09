@@ -31,12 +31,15 @@ func errorLocation(err error) *sourceLocationDTO {
 }
 
 type diagnosticDTO struct {
-	Source  *sourceLocationDTO `json:"source,omitempty"`
-	Code    string             `json:"code"`
-	Phase   string             `json:"phase"`
-	Subject string             `json:"subject"`
-	Message string             `json:"message"`
-	Remedy  string             `json:"remedy,omitempty"`
+	Category           string             `json:"category"`
+	Severity           string             `json:"severity"`
+	RelatedExecutionID string             `json:"related_execution_id,omitempty"`
+	Source             *sourceLocationDTO `json:"source,omitempty"`
+	Code               string             `json:"code"`
+	Phase              string             `json:"phase"`
+	Subject            string             `json:"subject"`
+	Message            string             `json:"message"`
+	Remedy             string             `json:"remedy,omitempty"`
 }
 
 type observedOutputDTO struct {
@@ -65,7 +68,13 @@ type observationResultDTO struct {
 }
 
 func diagnosticToDTO(d engine.Diagnostic) diagnosticDTO {
-	return diagnosticDTO{Code: d.Code, Phase: d.Phase, Subject: d.Subject, Message: d.Message, Remedy: d.Remedy}
+	if d.Category == "" {
+		d.Category = categoryForPhase(d.Phase)
+	}
+	if d.Severity == "" {
+		d.Severity = "error"
+	}
+	return diagnosticDTO{Category: d.Category, Severity: d.Severity, RelatedExecutionID: d.RelatedExecutionID, Code: d.Code, Phase: d.Phase, Subject: d.Subject, Message: d.Message, Remedy: d.Remedy}
 }
 
 func newObservationCmd(kind string, path *string, binaryOf func() exec.Binary) *cobra.Command {
@@ -80,14 +89,14 @@ func newObservationCmd(kind string, path *string, binaryOf func() exec.Binary) *
 		result := observationResultDTO{SchemaVersion: 1, Nodes: []observationDTO{}, Diagnostics: []diagnosticDTO{}}
 		finish := func(err error) error {
 			if format == "json" {
-				if writeErr := writeJSON(cmd.OutOrStdout(), result); writeErr != nil {
+				if writeErr := writeJSON(cmd, result); writeErr != nil {
 					return writeErr
 				}
 			}
 			return err
 		}
 		failure := func(code, phase, message, remedy string) error {
-			result.Diagnostics = append(result.Diagnostics, diagnosticDTO{Code: code, Phase: phase, Subject: kind, Message: message, Remedy: remedy})
+			result.Diagnostics = append(result.Diagnostics, diagnosticDTO{Category: categoryForPhase(phase), Severity: "error", Code: code, Phase: phase, Subject: kind, Message: message, Remedy: remedy})
 			return finish(fmt.Errorf("%s: %s; %s", kind, message, remedy))
 		}
 		if format != "text" && format != "json" {
@@ -102,7 +111,7 @@ func newObservationCmd(kind string, path *string, binaryOf func() exec.Binary) *
 		session, err := engine.OpenObservation(cmd.Context(), *path, binaryOf(), cmd.ErrOrStderr())
 		if err != nil {
 			// Parsing errors can quote source expressions; keep this public failure free of source values.
-			result.Diagnostics = append(result.Diagnostics, diagnosticDTO{Code: "observation_load_failed", Phase: "load", Subject: kind, Message: "could not load or lock the blueprint", Remedy: "check blueprint syntax, source directories, and local lock availability", Source: errorLocation(err)})
+			result.Diagnostics = append(result.Diagnostics, diagnosticDTO{Category: "configuration", Severity: "error", Code: "observation_load_failed", Phase: "load", Subject: kind, Message: "could not load or lock the blueprint", Remedy: "check blueprint syntax, source directories, and local lock availability", Source: errorLocation(err)})
 			return finish(fmt.Errorf("%s: could not load or lock the blueprint; check syntax, source directories, and local lock availability", kind))
 		}
 		defer session.Close()
@@ -130,7 +139,7 @@ func newObservationCmd(kind string, path *string, binaryOf func() exec.Binary) *
 					value, ok := outputs[args[0]]
 					if !ok {
 						dto.Status = "failed"
-						dto.Diagnostics = append(dto.Diagnostics, diagnosticDTO{Code: "output_not_found", Phase: "selection", Subject: "node." + name, Message: "named output does not exist", Remedy: "list this node's outputs without a positional name"})
+						dto.Diagnostics = append(dto.Diagnostics, diagnosticDTO{Category: "arguments", Severity: "error", Code: "output_not_found", Phase: "selection", Subject: "node." + name, Message: "named output does not exist", Remedy: "list this node's outputs without a positional name"})
 					}
 					outputs = exec.Outputs{}
 					if ok {
@@ -163,7 +172,7 @@ func newObservationCmd(kind string, path *string, binaryOf func() exec.Binary) *
 						}
 						if rawErr != nil {
 							dto.Status = "failed"
-							dto.Diagnostics = append(dto.Diagnostics, diagnosticDTO{Code: "raw_unavailable", Phase: "render", Subject: "node." + name, Message: rawErr.Error(), Remedy: "request a scalar output with the required disclosure opt-in"})
+							dto.Diagnostics = append(dto.Diagnostics, diagnosticDTO{Category: "arguments", Severity: "error", Code: "raw_unavailable", Phase: "render", Subject: "node." + name, Message: rawErr.Error(), Remedy: "request a scalar output with the required disclosure opt-in"})
 						} else {
 							if _, err := fmt.Fprint(cmd.OutOrStdout(), text); err != nil {
 								return err

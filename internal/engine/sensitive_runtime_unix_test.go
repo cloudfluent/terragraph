@@ -59,7 +59,7 @@ func TestApply_RuntimeSensitiveInputErrorsWithholdPayload(t *testing.T) {
 						t.Fatal("sensitive payload appears in engine streams")
 					}
 					reported := []error{err}
-					for _, run := range runs {
+					for _, run := range runs.Nodes {
 						reported = append(reported, run.Err)
 					}
 					for _, report := range reported {

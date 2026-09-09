@@ -17,7 +17,8 @@ import (
 
 // Diagnostic supplies stable branching fields without reflecting runtime output that may contain secrets.
 type Diagnostic struct {
-	Code, Phase, Subject, Message, Remedy string
+	Code, Phase, Subject, Message, Remedy  string
+	Category, Severity, RelatedExecutionID string
 }
 
 // ObservationSession owns the local source lock and private caches until all reads finish.

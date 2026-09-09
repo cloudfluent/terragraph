@@ -26,8 +26,8 @@ func TestRunCommands_RejectPositionalTargetsBeforeExecution(t *testing.T) {
 				if !strings.Contains(stdout, "plan_arguments_failed") {
 					t.Fatalf("missing structured argument failure: %s", stdout)
 				}
-			} else if stdout != "" || stderr != "" {
-				t.Fatalf("stdout/stderr = %q/%q, want no execution output", stdout, stderr)
+			} else if !strings.Contains(stdout, "invalid_arguments") || stderr != "" {
+				t.Fatalf("stdout/stderr = %q/%q, want argument diagnostic without execution output", stdout, stderr)
 			}
 			if _, err := os.Stat(filepath.Join(filepath.Dir(bp), ".terragraph", "lock")); !os.IsNotExist(err) {
 				t.Fatalf("lock stat = %v, want no execution lock created", err)
@@ -68,7 +68,7 @@ exit 1
 				}
 				stdout, stderr, err := runCmdAt(t, bp, args...)
 				if selection == "missing" {
-					if err == nil || !strings.Contains(err.Error(), `unknown node "missing"`) || (command != "plan" && stdout != "") || strings.Contains(stderr, "runtime called") {
+					if err == nil || !strings.Contains(err.Error(), `unknown node "missing"`) || !strings.Contains(stdout, "invalid_arguments") || strings.Contains(stderr, "runtime called") {
 						t.Fatalf("unknown node: stdout=%q stderr=%q error=%v", stdout, stderr, err)
 					}
 					return

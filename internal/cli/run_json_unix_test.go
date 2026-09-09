@@ -4,6 +4,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -56,7 +57,7 @@ func runCmdAt(t *testing.T, blueprintPath string, args ...string) (stdout, stder
 	root.SetOut(&outBuf)
 	root.SetErr(&errBuf)
 	root.SetArgs(append([]string{"--blueprint", blueprintPath}, args...))
-	err = root.Execute()
+	err = Execute(context.Background(), root, append([]string{"--blueprint", blueprintPath}, args...))
 	return outBuf.String(), errBuf.String(), err
 }
 
@@ -70,6 +71,64 @@ func assertRunDiagnostics(t *testing.T, stderr string, commands ...string) {
 				t.Fatalf("stderr = %q, want Terraform output %q", stderr, marker)
 			}
 		}
+	}
+}
+
+func TestRunJSON_FailureIDCanBeReadFromHistory(t *testing.T) {
+	for _, command := range []string{"plan", "apply", "destroy"} {
+		t.Run(command, func(t *testing.T) {
+			bp := writeRunFixture(t)
+			t.Setenv("TG_FAKE_PLAN_FAIL", "1")
+			args := []string{command, "--output=json"}
+			if command != "plan" {
+				args = append(args, "--auto-approve")
+			}
+			stdout, _, err := runCmdAt(t, bp, args...)
+			if err == nil {
+				t.Fatal("got success")
+			}
+			var result runResult
+			if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+				t.Fatal(err)
+			}
+			if result.ExecutionID == "" || len(result.Nodes) != 1 || len(result.Nodes[0].Diagnostics) == 0 {
+				t.Fatalf("got = %s", stdout)
+			}
+			history, _, err := runCmdAt(t, bp, "plan", "show", result.ExecutionID, "--output=json")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var record executionHistoryDTO
+			if err := json.Unmarshal([]byte(history), &record); err != nil {
+				t.Fatal(err)
+			}
+			if len(record.Executions) != 1 || record.Executions[0].ID != result.ExecutionID {
+				t.Fatalf("got = %s", history)
+			}
+		})
+	}
+}
+
+func TestRecoverJSON_RetainsUncertainRecordOnFailure(t *testing.T) {
+	bp := writeRunFixture(t)
+	stdout, _, err := runCmdAt(t, bp, "destroy", "--auto-approve", "--output=json")
+	if err == nil {
+		t.Fatal("got success")
+	}
+	var run runResult
+	if err := json.Unmarshal([]byte(stdout), &run); err != nil {
+		t.Fatal(err)
+	}
+	stdout, _, err = runCmdAt(t, bp, "plan", "recover", run.ExecutionID, "--confirm-stopped", "--output=json")
+	if err == nil {
+		t.Fatal("uncertain mutation recovered without state review")
+	}
+	var result executionRecoveryDTO
+	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.ID != run.ExecutionID || result.Status != "needs_recovery" || result.SchemaVersion != 1 || len(result.Diagnostics) == 0 {
+		t.Fatalf("got = %s", stdout)
 	}
 }
 

@@ -86,5 +86,5 @@ func (e *Engine) gateError(name string, level blueprint.Approve, blocked []exec.
 	} else {
 		fmt.Fprintf(&b, "\nIf this is intended, declare approve = %q on that node, or re-run with --approve=all.", blueprint.ApproveAll)
 	}
-	return fmt.Errorf("%s", b.String())
+	return WithDiagnostic(fmt.Errorf("%s", b.String()), Diagnostic{Code: "policy_blocked", Category: "policy", Phase: "policy", Remedy: "review the proposed changes and the declared approval policy"})
 }

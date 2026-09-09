@@ -14,38 +14,39 @@ import (
 // Whether a node needs applying is Terraform's decision, not terragraph's: every node is planned with -refresh=true and -detailed-exitcode, and a plan reporting no changes skips the apply. Nothing local is consulted first. An earlier version of this kept a content-addressed cache of source files, resolved inputs and execution identity as a prefilter, which was wrong in three separate ways (backend and inherited context missing from the key, drift never refreshed, files read through file()/templatefile() never invalidating) and, once every hit had to be confirmed by a plan anyway, only served to send *misses* straight to apply without one.
 //
 // When the plan does report changes, that plan is what gets applied (see Runner.PlanChanges/ApplyPlan), so a node refreshes once and the change made is the change that was planned.
-func (e *Engine) Apply(opts Options) (runs []NodeRun, resultErr error) {
+func (e *Engine) Apply(opts Options) (result RunResult, resultErr error) {
 	opts, selectionErr := e.resolveSelection(opts)
 	if selectionErr != nil {
-		return nil, selectionErr
+		return result, selectionErr
 	}
 	opts.announceSelection(false)
 
 	// Concurrent nodes have their output buffered and flushed a node at a time (see runLevels), so a prompt written mid-level would be invisible until long after the answer was needed. Rather than deadlock on that, say so — before taking the run lock, so a combination that cannot run fails immediately instead of first waiting on whatever else holds it.
 	if !opts.AutoApprove && opts.parallelism() > 1 {
-		return nil, fmt.Errorf("--parallelism %d needs --auto-approve: output from concurrent nodes is buffered, so there is nowhere to ask for approval", opts.parallelism())
+		return result, WithDiagnostic(fmt.Errorf("--parallelism %d needs --auto-approve: output from concurrent nodes is buffered, so there is nowhere to ask for approval", opts.parallelism()), Diagnostic{Code: "invalid_arguments", Category: "arguments", Phase: "arguments"})
 	}
 
 	unlock, err := e.lockRun()
 	if err != nil {
-		return nil, err
+		return result, err
 	}
 	defer unlock()
 
 	if err := e.checkRuntimeFiles(opts); err != nil {
-		return nil, err
+		return result, err
 	}
 
 	unlockGraph, err := e.lockGraph()
 	if err != nil {
-		return nil, err
+		return result, err
 	}
 	defer unlockGraph()
 
 	session, err := e.startExecution("apply", opts, false)
 	if err != nil {
-		return nil, err
+		return result, err
 	}
+	result.ExecutionID = session.record.ID
 	defer session.close()
 	defer func() {
 		if finishErr := session.finish(resultErr); finishErr != nil {
@@ -55,7 +56,7 @@ func (e *Engine) Apply(opts Options) (runs []NodeRun, resultErr error) {
 
 	e.logger().Info("apply starting", "nodes", opts.Nodes, "parallelism", opts.parallelism(), "autoApprove", opts.AutoApprove)
 
-	return e.runLevels(opts, false, func(name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
+	result.Nodes, resultErr = e.runLevels(opts, false, func(name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
 		vars, err := e.resolveInputs(name, applied)
 		if err != nil {
 			return nil, "", err
@@ -108,6 +109,7 @@ func (e *Engine) Apply(opts Options) (runs []NodeRun, resultErr error) {
 		}
 		return e.applyPreparedPlan(plan, opts)
 	}, nil)
+	return result, resultErr
 }
 
 func savedPlanUnsupportedError(name, backend string) error {

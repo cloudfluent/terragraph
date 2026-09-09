@@ -20,6 +20,7 @@ func newExecutionRecoveryCmd(path *string, binaryOf func() exec.Binary, loggerOf
 		var close func()
 		var err error
 		if replan {
+			diagnosticPhase(cmd, "record")
 			e, close, err = engine.OpenExecutionHistory(cmd.Context(), *path, cmd.ErrOrStderr())
 		} else {
 			e, close, err = loadLockedEngine(cmd, path, binaryOf, loggerOf)
@@ -29,12 +30,21 @@ func newExecutionRecoveryCmd(path *string, binaryOf func() exec.Binary, loggerOf
 		}
 		defer close()
 		record, err := e.RecoverExecution(args[0], confirmStopped, stateReviewed, replan, initializeBackend)
+		if output == "json" {
+			diagnostics := errorDiagnostics(err, engine.Diagnostic{Code: "recovery_required", Category: "recovery", Phase: "recovery", Subject: "execution", RelatedExecutionID: record.ID})
+			if record.ID == "" {
+				if writeErr := writeJSON(cmd, errorResultDTO{SchemaVersion: 1, Diagnostics: diagnostics}); writeErr != nil {
+					return writeErr
+				}
+			} else if writeErr := writeJSON(cmd, executionRecoveryDTO{SchemaVersion: 1, executionDTO: executionToDTO(record), Diagnostics: diagnostics}); writeErr != nil {
+				return writeErr
+			}
+			return err
+		}
 		if err != nil {
 			return err
 		}
-		if output == "json" {
-			return writeJSON(cmd.OutOrStdout(), executionToDTO(record))
-		}
+
 		_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s: %s; create a fresh plan before continuing\n", record.ID, record.Status)
 		return err
 	}}
@@ -44,4 +54,11 @@ func newExecutionRecoveryCmd(path *string, binaryOf func() exec.Binary, loggerOf
 	cmd.Flags().BoolVar(&replan, "replan", false, "retire the attempt while preserving its recorded outcome; requires a fresh plan")
 	cmd.Flags().StringVar(&output, "output", "text", "output format: text or json")
 	return cmd
+}
+
+// executionRecoveryDTO preserves recover's flat record while retaining partial results on failure.
+type executionRecoveryDTO struct {
+	SchemaVersion int `json:"schema_version"`
+	executionDTO
+	Diagnostics []diagnosticDTO `json:"diagnostics"`
 }

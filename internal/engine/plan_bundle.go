@@ -148,17 +148,17 @@ func (e *Engine) retainPlan(session *executionSession, plan *preparedNodePlan, v
 func (e *Engine) readPlanBundle(session *executionSession, node ExecutionNode) (planBundle, error) {
 	object, err := session.store.read(e.context(), node.PlanID+".bin")
 	if err != nil {
-		return planBundle{}, err
+		return planBundle{}, WithDiagnostic(err, Diagnostic{Code: "saved_plan_read_failed", Category: "artifact", Phase: "artifact", Subject: "node." + node.Name, RelatedExecutionID: session.record.ID, Remedy: "restore the retained plan or cancel and create a fresh plan"})
 	}
 	var bundle planBundle
 	if err := json.Unmarshal(object.Data, &bundle); err != nil {
-		return planBundle{}, fmt.Errorf("reading retained plan: %w", err)
+		return planBundle{}, WithDiagnostic(fmt.Errorf("reading retained plan: %w", err), Diagnostic{Code: "saved_plan_incompatible", Category: "artifact", Phase: "artifact", Subject: "node." + node.Name, RelatedExecutionID: session.record.ID, Remedy: "cancel and create a fresh plan"})
 	}
 	if bundle.SchemaVersion != 1 || bundle.ID != node.PlanID || bundle.Node != node.Name || bundle.ExecutionID != session.record.ID || len(bundle.Plan) == 0 {
-		return planBundle{}, fmt.Errorf("plan bundle is incompatible or does not belong to this execution; create a fresh plan")
+		return planBundle{}, WithDiagnostic(fmt.Errorf("plan bundle is incompatible or does not belong to this execution; create a fresh plan"), Diagnostic{Code: "saved_plan_incompatible", Category: "artifact", Phase: "artifact", RelatedExecutionID: session.record.ID, Remedy: "create a fresh plan"})
 	}
 	if !time.Now().UTC().Before(bundle.ExpiresAt) {
-		return planBundle{}, fmt.Errorf("plan %s expired; cancel the execution and create a fresh plan", bundle.ID)
+		return planBundle{}, WithDiagnostic(fmt.Errorf("plan %s expired; cancel the execution and create a fresh plan", bundle.ID), Diagnostic{Code: "saved_plan_expired", Category: "artifact", Phase: "artifact", RelatedExecutionID: session.record.ID, Remedy: "cancel the execution and create a fresh plan"})
 	}
 	return bundle, nil
 }

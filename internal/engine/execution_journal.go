@@ -219,7 +219,7 @@ func (e *Engine) beginExecution(operation string, names []string, selection *gra
 	}
 	rev, err := store.write(e.context(), record.ID+".json", data, "")
 	if err != nil {
-		return nil, fmt.Errorf("creating execution record: %w", err)
+		return nil, WithDiagnostic(fmt.Errorf("creating execution record: %w", err), Diagnostic{Code: "execution_record_write_failed", Category: "record", Phase: "record", RelatedExecutionID: record.ID, Remedy: "inspect the execution store before retrying"})
 	}
 	failed = false
 	return &executionSession{engine: e, store: store, record: record, revision: rev}, nil
@@ -261,7 +261,7 @@ func (s *executionSession) publish(next ExecutionRecord) error {
 	defer cancel()
 	revision, err := s.store.write(ctx, next.ID+".json", data, s.revision)
 	if err != nil {
-		return fmt.Errorf("recording execution %s: %w", next.ID, err)
+		return WithDiagnostic(fmt.Errorf("recording execution %s: %w", next.ID, err), Diagnostic{Code: "execution_record_write_failed", Category: "record", Phase: "record", RelatedExecutionID: next.ID, Remedy: "inspect plan show and recover any uncertain mutation before retrying"})
 	}
 	s.record, s.revision = next, revision
 	return nil
@@ -392,10 +392,10 @@ func (e *Engine) checkExecutionBarrier(store executionStore, scope, exceptID str
 			return err
 		}
 		if old.Scope != scope {
-			return fmt.Errorf("execution %s belongs to another coordination scope; configure the same graph lock or separate prefixes", old.ID)
+			return WithDiagnostic(fmt.Errorf("execution %s belongs to another coordination scope; configure the same graph lock or separate prefixes", old.ID), Diagnostic{Code: "execution_scope_mismatch", Category: "configuration", Phase: "prepare", RelatedExecutionID: old.ID, Remedy: "configure the same graph lock or separate execution prefixes"})
 		}
 		if old.ID != exceptID && executionNeedsRecovery(old) && (len(readOnly) == 0 || !readOnly[0]) {
-			return fmt.Errorf("execution %s has an unresolved mutation; inspect it with plan show and recover before changing infrastructure", old.ID)
+			return WithDiagnostic(fmt.Errorf("execution %s has an unresolved mutation; inspect it with plan show and recover before changing infrastructure", old.ID), Diagnostic{Code: "recovery_required", Category: "recovery", Phase: "prepare", RelatedExecutionID: old.ID, Remedy: "inspect plan show and recover before changing infrastructure"})
 		}
 	}
 	return nil

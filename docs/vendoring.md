@@ -94,3 +94,9 @@ A failed fetch preserves that node's previous copy and manifest entry. A failed 
 Before replacing an existing copy, vendoring checks local backend state, including `backend_config` overrides, workspace state, and backups. Existing state at a relative path or inside the vendor tree blocks the refresh. Migrate that state outside the tree and configure a stable absolute backend path before retrying; terragraph does not move state. Absolute state paths outside the tree are unaffected. Unknown local backend paths and differing Terraform/OpenTofu declarations also require review. These checks apply to source/ref changes, `--force`, and layout upgrades.
 
 Invalid metadata or a selected directory that is missing or escapes the package is an error. `--force` cannot bypass it. Inspect the affected copy and its state paths, recover or migrate state outside it, and verify that removal is safe. Then remove only that copy and run `terragraph vendor --node <qualified-name>` again. Keep the metadata with the package during recovery; deleting only the marker can make terragraph mistake it for an older root-source copy.
+
+## JSON failure results
+
+`vendor --output json` keeps the existing array on success and for per-node failures. Each entry adds `diagnostics`; the existing `node`, `status`, and optional `error` remain. Per-node failures still exit nonzero without wrapping the array.
+
+A global failure before results exist returns `{ "schema_version": 1, "diagnostics": [...] }`. A global failure after partial results returns `{ "schema_version": 1, "results": [...], "diagnostics": [...] }`. This changes the nonzero-exit shape for global failures that previously emitted an empty or partial array. Update consumers to accept these error shapes. No execution ID is created by vendoring. See [agent usage](agent-usage.md).

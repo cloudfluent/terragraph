@@ -130,7 +130,7 @@ func TestSavedExecution_PartialApprovalFailureKeepsUnappliedPeer(t *testing.T) {
 	}
 	_ = store.close()
 	runs, err := e.ApplySavedPlans(record.ID, Options{AutoApprove: true, Approve: blueprint.ApproveAll})
-	if err != nil || len(runs) != 1 || runs[0].Node != "b" {
+	if err != nil || len(runs.Nodes) != 1 || runs.Nodes[0].Node != "b" {
 		t.Fatalf("got = %+v, %v", runs, err)
 	}
 	data, err := os.ReadFile(log)

@@ -31,8 +31,11 @@ func TestRun_SelectionJSONIncludesSuccessAndFailures(t *testing.T) {
 				if err := json.Unmarshal([]byte(out), &result); err != nil {
 					t.Fatalf("got = %q, %v", out, err)
 				}
-				if result.Selection == nil || result.Selection.Mode != "downstream" || len(result.Nodes) != 1 || len(result.Selection.Nodes) != 1 {
+				if result.SchemaVersion != 1 || result.ExecutionID == "" || result.Selection == nil || result.Selection.Mode != "downstream" || len(result.Nodes) != 1 || len(result.Selection.Nodes) != 1 {
 					t.Fatalf("got = %s", out)
+				}
+				if fail && len(result.Nodes[0].Diagnostics) == 0 {
+					t.Fatalf("got = %s, want node diagnostics alongside selection and execution ID", out)
 				}
 			})
 		}
@@ -58,7 +61,7 @@ func TestDestroy_SelectionJSONSurvivesPreparationFailure(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &result); err != nil {
 		t.Fatalf("got = %q, %v", out, err)
 	}
-	if result.Selection == nil || len(result.Nodes) != 0 {
+	if result.Selection == nil || len(result.Nodes) != 0 || result.ExecutionID != "" || len(result.Diagnostics) != 1 || result.Diagnostics[0].Code != "policy_blocked" {
 		t.Fatalf("got = %s", out)
 	}
 }

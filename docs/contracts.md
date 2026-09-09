@@ -241,3 +241,9 @@ Provider-free regression fixtures cover Terraform 1.5.7 and 1.16.0, and OpenTofu
 1.11.0. This is a tested matrix, not a change to the project's minimum runtime
 version. An enterprise-root usability pilot is still needed before claiming
 coverage of most infrastructure teams; passing these fixtures is not that claim.
+
+## Machine-readable validation
+
+`validate --output json` returns contract identifiers such as `C001` and `C009` directly in `problems[].code`, with `category: "validation"`, `phase: "validation"`, `subject`, `severity`, and `remedy`. Consumers do not need to extract bracketed codes from human messages. The existing messages retain their bracketed codes for text users.
+
+Contract warnings still allow `valid: true`; only enforce mode makes them errors. Preflight validation failures in graph and execution commands include the actual structured problems in `diagnostics`, so an agent does not need to invoke a second command just to identify the problem. See [agent usage](agent-usage.md).
