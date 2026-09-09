@@ -309,33 +309,30 @@ func (e *Engine) applySavedNode(s *executionSession, node ExecutionNode, opts Op
 	return status, err
 }
 
-func (e *Engine) openSavedExecution(id string) (session *executionSession, resultErr error) {
-	defer func() {
-		if resultErr != nil {
-			resultErr = WithDiagnostic(resultErr, Diagnostic{Code: "saved_plan_incompatible", Category: "artifact", Phase: "artifact", RelatedExecutionID: id, Remedy: "inspect plan show before creating a fresh plan"})
-		}
-	}()
+func (e *Engine) openSavedExecution(id string) (*executionSession, error) {
+	// Store availability and record integrity cannot establish that the saved plan itself is incompatible.
+	readDiagnostic := Diagnostic{Code: "execution_read_failed", Category: "record", Phase: "history", Subject: "execution", RelatedExecutionID: id, Remedy: "check the selected execution store and requested ID; restore access or missing records before retrying"}
 	store, err := e.openExecutionStore()
 	if err != nil {
-		return nil, err
+		return nil, WithDiagnostic(err, readDiagnostic)
 	}
 	record, revision, err := readExecutionRecord(e.context(), store, id)
 	if err != nil {
 		_ = store.close()
-		return nil, err
+		return nil, WithDiagnostic(err, readDiagnostic)
 	}
 	scope, err := e.executionScope()
 	if err != nil {
 		_ = store.close()
-		return nil, err
+		return nil, WithDiagnostic(err, Diagnostic{Code: "configuration_failed", Category: "configuration", Phase: "prepare", Subject: "execution", RelatedExecutionID: id, Remedy: "check the blueprint coordination scope configuration before retrying"})
 	}
 	if record.Scope != scope || record.Operation != "saved_apply" || record.RecoveryAt != nil || executionNeedsRecovery(record) {
 		_ = store.close()
-		return nil, fmt.Errorf("execution cannot resume in its current scope or recovery status; inspect plan show")
+		return nil, WithDiagnostic(fmt.Errorf("execution cannot resume in its current scope or recovery status; inspect plan show"), Diagnostic{Code: "saved_plan_incompatible", Category: "artifact", Phase: "artifact", Subject: "execution", RelatedExecutionID: id, Remedy: "inspect plan show and restore the original scope or resolve its recovery status before continuing"})
 	}
 	if err := e.checkExecutionBarrier(store, scope, id); err != nil {
 		_ = store.close()
-		return nil, err
+		return nil, WithDiagnostic(err, readDiagnostic)
 	}
 	return &executionSession{engine: e, store: store, record: record, revision: revision}, nil
 }

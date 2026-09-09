@@ -69,6 +69,8 @@ Diagnostics have `code`, `category`, `severity`, `phase`, `subject`, and `messag
 
 Common codes include `invalid_arguments`, `policy_blocked`, `recovery_required`, `execution_record_write_failed`, `execution_record_conflict`, `saved_plan_expired`, `saved_plan_incompatible`, `runtime_failed`, and `cancelled`. Graph problems expose codes such as `missing_input`, `missing_output`, `input_conflict`, `dependency_cycle`, and the existing contract identifiers `C001`–`C009`. Unknown codes must remain visible to the caller; they are not permission to retry automatically.
 
+Saved-execution store-open failures, missing records, and unreadable records use `execution_read_failed` with category `record`. They do not establish a plan incompatibility or justify creating a new plan. `saved_plan_incompatible` is reserved for actual artifact, binding, or resume incompatibilities.
+
 An `execution_id` comes from the existing acquired execution session. It is retained after later failures. `related_execution_id` can point to an earlier execution blocking progress or an allocated ID whose initial persistence failed; neither means a new executable session exists. Commands such as validate and status do not need IDs to report useful results.
 
 ## Review and mutate separately
