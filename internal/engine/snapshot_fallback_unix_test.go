@@ -150,7 +150,7 @@ func TestResolveInputs_SnapshotFallsBackWhenLiveOutputFails(t *testing.T) {
 	t.Setenv("TG_OUTPUT_FAIL_NODE", "a")
 
 	// Applies only b: a is upstream, standing, and unreadable live.
-	if _, err := e.Apply(Options{Node: "b", AutoApprove: true}); err != nil {
+	if _, err := e.Apply(Options{Nodes: []string{"b"}, AutoApprove: true}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 
@@ -165,7 +165,7 @@ func TestResolveInputs_LiveOutputBeatsStaleSnapshot(t *testing.T) {
 	writeFallbackSnapshot(t, e, "a", "stale-snap")
 	t.Setenv("TG_OUTPUT_FIRST", "live")
 
-	if _, err := e.Apply(Options{Node: "b", AutoApprove: true}); err != nil {
+	if _, err := e.Apply(Options{Nodes: []string{"b"}, AutoApprove: true}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 
@@ -203,7 +203,7 @@ func TestResolveInputs_OptOutFailsDespiteSnapshotFile(t *testing.T) {
 	writeFallbackSnapshot(t, e, "a", "snap")
 	t.Setenv("TG_OUTPUT_FAIL_NODE", "a")
 
-	_, err := e.Apply(Options{Node: "b", AutoApprove: true})
+	_, err := e.Apply(Options{Nodes: []string{"b"}, AutoApprove: true})
 	if err == nil {
 		t.Fatal("Apply succeeded with an opted-out graph and a failing live read, want the original resolution error")
 	}
@@ -227,7 +227,7 @@ func TestResolveInputs_CorruptSnapshotIsNotAnError(t *testing.T) {
 	}
 	t.Setenv("TG_OUTPUT_FAIL_NODE", "a")
 
-	_, err := e.Apply(Options{Node: "b", AutoApprove: true})
+	_, err := e.Apply(Options{Nodes: []string{"b"}, AutoApprove: true})
 	if err == nil {
 		t.Fatal("Apply succeeded on a corrupt snapshot and a failing live read, want the original resolution error")
 	}

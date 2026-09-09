@@ -15,6 +15,12 @@ import (
 //
 // When the plan does report changes, that plan is what gets applied (see Runner.PlanChanges/ApplyPlan), so a node refreshes once and the change made is the change that was planned.
 func (e *Engine) Apply(opts Options) (result RunResult, resultErr error) {
+	opts, selectionErr := e.resolveSelection(opts)
+	if selectionErr != nil {
+		return result, selectionErr
+	}
+	opts.announceSelection(false)
+
 	// Concurrent nodes have their output buffered and flushed a node at a time (see runLevels), so a prompt written mid-level would be invisible until long after the answer was needed. Rather than deadlock on that, say so — before taking the run lock, so a combination that cannot run fails immediately instead of first waiting on whatever else holds it.
 	if !opts.AutoApprove && opts.parallelism() > 1 {
 		return result, WithDiagnostic(fmt.Errorf("--parallelism %d needs --auto-approve: output from concurrent nodes is buffered, so there is nowhere to ask for approval", opts.parallelism()), Diagnostic{Code: "invalid_arguments", Category: "arguments", Phase: "arguments"})
@@ -48,7 +54,7 @@ func (e *Engine) Apply(opts Options) (result RunResult, resultErr error) {
 		}
 	}()
 
-	e.logger().Info("apply starting", "node", opts.Node, "parallelism", opts.parallelism(), "autoApprove", opts.AutoApprove)
+	e.logger().Info("apply starting", "nodes", opts.Nodes, "parallelism", opts.parallelism(), "autoApprove", opts.AutoApprove)
 
 	result.Nodes, resultErr = e.runLevels(opts, false, func(name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
 		vars, err := e.resolveInputs(name, applied)

@@ -19,10 +19,10 @@ func TestRecoverExecution_RealFreshBackendCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.Apply(Options{Node: "first", AutoApprove: true}); err != nil {
+	if _, err := e.Apply(Options{Nodes: []string{"first"}, AutoApprove: true}); err != nil {
 		t.Fatal(err)
 	}
-	s, err := e.beginExecution("apply", []string{"first"})
+	s, err := e.beginExecution("apply", []string{"first"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

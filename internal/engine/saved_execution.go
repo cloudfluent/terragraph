@@ -7,17 +7,31 @@ import (
 	"time"
 
 	"github.com/cloudfluent/terragraph/internal/exec"
+	"github.com/cloudfluent/terragraph/internal/graph"
 )
 
 // SavePlans freezes only the current frontier; later inputs must come from real upstream outputs after the reviewed frontier has been applied.
 func (e *Engine) SavePlans(opts Options, continueID string) (record ExecutionRecord, resultErr error) {
+	if continueID != "" && opts.hasSelectionFlags() {
+		return record, WithDiagnostic(fmt.Errorf("--continue already fixes node selection; omit --node and --downstream"), Diagnostic{Code: "invalid_arguments", Category: "arguments", Phase: "arguments"})
+	}
+	if continueID == "" {
+		var err error
+		opts, err = e.resolveSelection(opts)
+		if err != nil {
+			return record, err
+		}
+		opts.announceSelection(false)
+	}
 	unlock, err := e.lockRun()
 	if err != nil {
 		return record, err
 	}
 	defer unlock()
-	if err := e.checkRuntimeFiles(opts); err != nil {
-		return record, err
+	if continueID == "" {
+		if err := e.checkRuntimeFiles(opts); err != nil {
+			return record, err
+		}
 	}
 	unlockGraph, err := e.lockGraph()
 	if err != nil {
@@ -35,8 +49,15 @@ func (e *Engine) SavePlans(opts Options, continueID string) (record ExecutionRec
 	}
 	defer s.close()
 	record = s.record
-	if continueID != "" && opts.Node != "" {
-		return record, WithDiagnostic(fmt.Errorf("--continue already fixes node selection; omit --node"), Diagnostic{Code: "invalid_arguments", Category: "arguments", Phase: "arguments"})
+	if continueID != "" {
+		opts, err = e.storedSelection(opts, s.record)
+		opts.announceSelection(false)
+		if err != nil {
+			return record, err
+		}
+		if err := e.checkRuntimeFiles(opts); err != nil {
+			return record, err
+		}
 	}
 	if s.record.Status != "preparing" && s.record.Status != "ready_for_next_plan" {
 		return record, fmt.Errorf("execution %s is %s; apply its pending plans or start a fresh execution", s.record.ID, s.record.Status)
@@ -152,8 +173,8 @@ func (e *Engine) saveFrontierNode(s *executionSession, name string, opts Options
 
 // ApplySavedPlans applies exactly the stored frontier and never plans or applies downstream nodes in the same invocation.
 func (e *Engine) ApplySavedPlans(id string, opts Options) (result RunResult, resultErr error) {
-	if opts.Node != "" {
-		return result, WithDiagnostic(fmt.Errorf("--plan already fixes node selection; omit --node"), Diagnostic{Code: "invalid_arguments", Category: "arguments", Phase: "arguments"})
+	if opts.hasSelectionFlags() {
+		return result, WithDiagnostic(fmt.Errorf("--plan already fixes node selection; omit --node and --downstream"), Diagnostic{Code: "invalid_arguments", Category: "arguments", Phase: "arguments"})
 	}
 	if opts.parallelism() > 1 && !opts.AutoApprove {
 		return result, WithDiagnostic(fmt.Errorf("--parallelism needs --auto-approve"), Diagnostic{Code: "invalid_arguments", Category: "arguments", Phase: "arguments"})
@@ -174,6 +195,14 @@ func (e *Engine) ApplySavedPlans(id string, opts Options) (result RunResult, res
 	}
 	result.ExecutionID = s.record.ID
 	defer s.close()
+	opts, err = e.storedSelection(opts, s.record)
+	opts.announceSelection(false)
+	if err != nil {
+		return result, err
+	}
+	if err := e.checkRuntimeFiles(opts); err != nil {
+		return result, err
+	}
 	if s.record.Status != "waiting_for_apply" {
 		return result, fmt.Errorf("execution %s is %s; only waiting_for_apply can be applied", id, s.record.Status)
 	}
@@ -403,4 +432,19 @@ func (s *executionSession) noteSavedFailure(name, code string) error {
 		}
 	}
 	return fmt.Errorf("node.%s: absent from execution", name)
+}
+
+// storedSelection uses record membership even for old records whose original selection intent is unknown.
+func (e *Engine) storedSelection(opts Options, record ExecutionRecord) (Options, error) {
+	opts.selection = record.Selection
+	names := make([]string, 0, len(record.Nodes))
+	for _, node := range record.Nodes {
+		names = append(names, node.Name)
+	}
+	levels, err := graph.SelectedLevels(e.Graph, names, false)
+	if err != nil {
+		return opts, err
+	}
+	opts.selection, opts.levels = record.Selection, levels
+	return opts, nil
 }

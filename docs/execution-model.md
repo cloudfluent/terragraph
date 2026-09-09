@@ -16,13 +16,60 @@ The default graph output lists execution levels. DOT output can be rendered with
 
 ## Selecting nodes
 
-`plan`, `apply`, and `destroy` select the whole graph by default. Use `--node <name>` to select exactly one leaf, including a dotted name such as `checkout.cluster`. Its dependencies and downstream nodes are **not** selected automatically; a group instance name does not select all its members.
+`graph`, `plan`, `apply`, and `destroy` select the whole graph by default. Repeat `--node <name>` to select exact leaves, including qualified names such as `checkout.cluster`. Add `--downstream` to include every reachable successor across both data edges and ordering-only edges. Multiple starting nodes contribute a union; each leaf runs once.
 
 ```sh
-terragraph apply --node checkout.cluster
+terragraph graph --node checkout.cluster --downstream
+terragraph plan --node checkout.cluster --downstream
+terragraph apply --node checkout.cluster --node payments.cluster --downstream
+terragraph destroy --node checkout.cluster --downstream
 ```
 
-Positional node names such as `terragraph apply checkout.cluster` are not supported.
+A single `--node` without `--downstream` still selects only that leaf. Names are case-sensitive and are neither trimmed nor interpreted as patterns. Empty names, unknown names, group instance names, and `--downstream` without a starting node are errors. `--node b,x` is a literal name, not a comma-separated list; use `--node b --node x`. Positional node names such as `terragraph apply checkout.cluster` are rejected. `--downstream=false` does not expand a selection and preserves whole-graph behavior when no nodes were specified.
+
+Membership is fixed before runtime calls. terragraph filters the original full-graph levels, removes empty levels, and numbers the remaining levels consecutively. It preserves alphabetical order within each level. It does not recompute a more parallel schedule after removing external dependencies. `destroy` uses the same membership with reversed levels. An unchanged upstream never skips a selected downstream node's fresh plan.
+
+Selection limits execution, not validation or coordination: errors anywhere in the blueprint can block the run, and existing local/remote locks and unresolved-execution recovery barriers still apply. Per-node data directories, approval policies, failure handling, and the requirement for `--auto-approve` with concurrent apply/destroy are unchanged. A failure can follow successful changes to other selected nodes; selection provides no atomicity or automatic rollback.
+
+### Dependencies outside the selection
+
+Unselected nodes never receive plan/apply/destroy calls. A selected consumer may read an unselected producer's existing output using the usual input-resolution path, including snapshot fallback only when already opted in and eligible. Runtime compatibility checks may also inspect selected nodes and their direct data producers. Missing outputs fail with the existing remedy; they do not expand selection. Saved planning and saved application retain their stricter requirement for live upstream outputs.
+
+Boundary edges preserve their original direction. Incoming data edges explain existing values a run may need; incoming ordering-only edges do not execute or verify completion of the external predecessor. Outgoing edges identify consumers that remain unselected and will not be updated by this invocation.
+
+### Selection output and compatibility
+
+An explicit `--node` or true `--downstream` adds a scope summary. Text execution commands print it to stdout before the first runtime subprocess, without introducing an approval step. Text graph output shows the summary and forward execution levels; destroy shows reverse execution levels. Early validation or selection errors may have no summary.
+
+`graph` reads configuration only: it does not invoke Terraform/OpenTofu, write execution records, or verify output existence, accessibility, or freshness. A later ordinary command recomputes its selection from the then-current blueprint. Use a [saved execution](executions.md) to retain membership across commands.
+
+JSON remains one result object, with an optional `selection` object alongside the existing `levels` or `nodes`. Plan retains its existing `schema_version` and `diagnostics`. A resolved selection is included even in preparation or execution failures; unresolved selection is omitted. Unselected leaves are never added to `nodes` as unchanged or not run. The selection contains names and relationships only, never output values, variables, or backend credentials.
+
+For `a -> b -> c`, selecting `b` with downstream expansion produces:
+
+```json
+{
+  "levels": [["b"], ["c"]],
+  "selection": {
+    "schema_version": 1,
+    "mode": "downstream",
+    "requested": ["b"],
+    "nodes": [
+      {"node": "b", "reason": "requested", "via": []},
+      {"node": "c", "reason": "downstream", "via": ["b"]}
+    ],
+    "boundary_edges": [
+      {"kind": "data", "from": {"node": "a", "output": "out"}, "to": {"node": "b", "input": "in"}}
+    ]
+  }
+}
+```
+
+`mode` is `exact` or `downstream`. Requested leaves retain `reason: "requested"` even if also reachable from another seed. Other leaves list their selected immediate predecessors in `via`, not every possible path. `requested`, `nodes`, and `via` are sorted by name. Boundary edges sort by source node/port, destination node/port, then kind. Ordering edges use `kind: "ordering"` and omit ports. All array fields are arrays, including empty arrays. Execution order comes from `levels` or each result node's `level`, not selection array order.
+
+Selected DOT output includes selected leaves and adjacent boundary context. External leaves are gray and labeled `not selected`; edges between two external leaves are omitted. Solid/dashed lines still distinguish data/ordering, and the legend and boundary labels distinguish scope. `--output json --format dot` remains invalid.
+
+Without explicit selection, existing output stays unchanged. Single-node membership also stays unchanged, but it now has a text summary and optional JSON selection. Repeated `--node` flags now select a union, replacing the previous implementation's last-value-wins behavior. `output`, `status`, `vendor`, and `run` retain their existing single-node interfaces. This feature does not add group selection, wildcards, upstream expansion, exclusions, or automatic change detection.
 
 ## Validation
 
@@ -117,7 +164,7 @@ This limit controls concurrent **nodes**; each Terraform/OpenTofu process still 
 
 An ordinary node failure, policy rejection, or declined confirmation does not cancel its siblings: **the other nodes in that level continue, even with `--parallelism 1`**. No later level starts. Interrupting the command has different behavior, described [below](#interrupting-an-execution).
 
-terragraph does not roll back completed changes. A failed apply may also have changed some resources before failing, or may have succeeded before a subsequent output read failed. Inspect the reported error and current state, fix the cause, and rerun `terragraph apply`. It plans again against current state and skips unchanged nodes. Use `--node` only when you intend to retry that leaf alone; it will not update consumers afterward.
+terragraph does not roll back completed changes. A failed apply may also have changed some resources before failing, or may have succeeded before a subsequent output read failed. Inspect the reported error and current state, fix the cause, and rerun `terragraph apply`. It plans again against current state and skips unchanged nodes. Use `--node` alone to retry that leaf; add `--downstream` when its reachable consumers should also be selected.
 
 ## How values are passed
 

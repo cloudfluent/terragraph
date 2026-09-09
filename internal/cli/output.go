@@ -33,6 +33,7 @@ type graphResult struct {
 	SchemaVersion int             `json:"schema_version"`
 	Diagnostics   []diagnosticDTO `json:"diagnostics"`
 	Levels        [][]string      `json:"levels"`
+	Selection     *selectionDTO   `json:"selection,omitempty"`
 }
 
 // vendorResultDTO is the JSON-facing shape of one vendor.Result. vendor.Result.Err is an error interface, which encoding/json can't marshal usefully; this flattens it to a status string plus an optional message.
@@ -90,6 +91,7 @@ type runResult struct {
 	ExecutionID   string          `json:"execution_id,omitempty"`
 	Diagnostics   []diagnosticDTO `json:"diagnostics"`
 	Nodes         []nodeRunDTO    `json:"nodes"`
+	Selection     *selectionDTO   `json:"selection,omitempty"`
 }
 
 func nodeRunsToDTO(runs []engine.NodeRun) []nodeRunDTO {

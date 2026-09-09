@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"sync"
 
@@ -17,8 +18,16 @@ import (
 type Options struct {
 	// RetainPlan persists optional plan artifacts without pausing ordinary apply.
 	RetainPlan bool
-	// Node restricts the operation to a single node. Empty means the whole graph, in topological (or, for Destroy, reverse topological) order.
-	Node string
+	// Nodes is nil for the whole graph; a non-nil empty list must never silently broaden execution.
+	Nodes []string
+	// Downstream follows both data and ordering dependencies so consumers cannot be omitted by edge kind.
+	Downstream bool
+	// SelectionSpecified preserves explicit false flags so stored executions reject every scope override.
+	SelectionSpecified bool
+	// OnSelection publishes resolved scope before runtime subprocesses, keeping presentation out of the engine.
+	OnSelection func(*graph.Selection, [][]string)
+	selection   *graph.Selection
+	levels      [][]string
 	// AutoApprove skips the interactive approval Apply would otherwise ask for, and is forwarded to `terraform destroy` as -auto-approve. It governs only whether a human is asked; what a node is permitted to do unattended is Approve's job, and the two are checked independently.
 	AutoApprove bool
 	// Approve is the run-wide default approve level (see blueprint.Approve) for nodes that declare none of their own. Empty means blueprint.ApproveSafe.
@@ -35,21 +44,16 @@ func (o Options) parallelism() int {
 }
 
 func (e *Engine) executionLevels(opts Options, reverse bool) ([][]string, error) {
-	if opts.Node != "" {
-		if _, ok := e.Graph.Nodes[opts.Node]; !ok {
-			return nil, WithDiagnostic(fmt.Errorf("unknown node %q", opts.Node), Diagnostic{Code: "invalid_arguments", Category: "arguments", Phase: "selection", Subject: "node." + opts.Node, Remedy: "select an expanded node from graph output"})
+	if opts.levels == nil {
+		var err error
+		opts, err = e.resolveSelection(opts)
+		if err != nil {
+			return nil, err
 		}
-		return [][]string{{opts.Node}}, nil
 	}
-
-	levels, err := graph.Levels(e.Graph)
-	if err != nil {
-		return nil, err
-	}
+	levels := append([][]string{}, opts.levels...)
 	if reverse {
-		for i, j := 0, len(levels)-1; i < j; i, j = i+1, j-1 {
-			levels[i], levels[j] = levels[j], levels[i]
-		}
+		slices.Reverse(levels)
 	}
 	return levels, nil
 }
@@ -220,4 +224,37 @@ func markNotRun(runs []NodeRun, levels [][]string, from int) []NodeRun {
 		}
 	}
 	return runs
+}
+
+// resolveSelection freezes membership before runtime checks and keeps every scheduler on the same filtered levels.
+func (e *Engine) resolveSelection(opts Options) (Options, error) {
+	selection, err := graph.Select(e.Graph, opts.Nodes, opts.Downstream)
+	if err != nil {
+		return opts, WithDiagnostic(err, Diagnostic{Code: "invalid_arguments", Category: "arguments", Phase: "selection", Subject: "selection", Remedy: "select expanded node names from graph output"})
+	}
+	var names []string
+	if selection != nil {
+		names = selection.Names()
+	}
+	levels, err := graph.SelectedLevels(e.Graph, names, false)
+	if err != nil {
+		return opts, err
+	}
+	opts.selection, opts.levels = selection, levels
+	return opts, nil
+}
+
+func (o Options) hasSelectionFlags() bool {
+	return o.SelectionSpecified || o.Nodes != nil || o.Downstream
+}
+
+func (o Options) announceSelection(reverse bool) {
+	if o.OnSelection == nil {
+		return
+	}
+	levels := append([][]string{}, o.levels...)
+	if reverse {
+		slices.Reverse(levels)
+	}
+	o.OnSelection(o.selection, levels)
 }

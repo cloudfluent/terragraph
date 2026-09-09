@@ -45,6 +45,7 @@ type planReviewDTO struct {
 }
 type planResultDTO struct {
 	ExecutionID   string          `json:"execution_id,omitempty"`
+	Selection     *selectionDTO   `json:"selection,omitempty"`
 	SchemaVersion int             `json:"schema_version"`
 	Nodes         []nodeRunDTO    `json:"nodes"`
 	Diagnostics   []diagnosticDTO `json:"diagnostics"`
@@ -98,8 +99,11 @@ func reviewToDTO(review *engine.PlanReview) *planReviewDTO {
 }
 
 // finishPlan emits one additive, versioned result even when preparation fails before any node can start.
-func finishPlan(cmd *cobra.Command, format string, result engine.RunResult, phase string, err error) error {
+func finishPlan(cmd *cobra.Command, format string, result engine.RunResult, phase string, err error, selection ...*selectionDTO) error {
 	dto := planResultDTO{SchemaVersion: 1, Nodes: nodeRunsToDTO(result.Nodes), ExecutionID: result.ExecutionID, Diagnostics: runDiagnostics(result, err)}
+	if len(selection) > 0 {
+		dto.Selection = selection[0]
+	}
 	if err != nil && len(result.Nodes) == 0 {
 		dto.Diagnostics = errorDiagnostics(err, engine.Diagnostic{Code: "plan_" + phase + "_failed", Category: categoryForPhase(phase), Phase: phase, Subject: "plan", Remedy: "resolve the diagnostic and rerun plan"})
 	}

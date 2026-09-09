@@ -29,7 +29,7 @@ func TestDiagnostics_CancelledRecordWriteRemainsRecordFailure(t *testing.T) {
 
 func TestExecutionJournal_BarrierDiagnosticReferencesPreviousRun(t *testing.T) {
 	e, _ := journalFixture(t)
-	s, err := e.beginExecution("apply", []string{"example"})
+	s, err := e.beginExecution("apply", []string{"example"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestExecutionJournal_BarrierDiagnosticReferencesPreviousRun(t *testing.T) {
 
 func TestExecutionJournal_ConflictDoesNotReportUnpersistedStatus(t *testing.T) {
 	e, _ := journalFixture(t)
-	s, err := e.beginExecution("apply", []string{"example"})
+	s, err := e.beginExecution("apply", []string{"example"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

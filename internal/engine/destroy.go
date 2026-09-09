@@ -14,6 +14,12 @@ import (
 //
 // Nothing has to be invalidated afterwards. Destroy once had to drop the incremental-apply cache entry for everything it tore down, because a stale "unchanged" hit against infrastructure that no longer exists would have been a correctness bug rather than a missed optimization; a later apply now asks Terraform, which plans against real state and sees the resources are gone.
 func (e *Engine) Destroy(opts Options) (result RunResult, resultErr error) {
+	opts, selectionErr := e.resolveSelection(opts)
+	if selectionErr != nil {
+		return result, selectionErr
+	}
+	opts.announceSelection(true)
+
 	// Same reason Apply refuses it: concurrent nodes have their output buffered and flushed a node at a time, so terraform's confirmation prompt would be invisible until long after the answer was needed. Checked before taking the run lock, so an unrunnable combination fails immediately instead of after waiting for whatever else holds it.
 	if !opts.AutoApprove && opts.parallelism() > 1 {
 		return result, WithDiagnostic(fmt.Errorf("--parallelism %d needs --auto-approve: output from concurrent nodes is buffered, so there is nowhere to ask for approval", opts.parallelism()), Diagnostic{Code: "invalid_arguments", Category: "arguments", Phase: "arguments"})
@@ -60,7 +66,7 @@ func (e *Engine) Destroy(opts Options) (result RunResult, resultErr error) {
 		}
 	}()
 
-	e.logger().Info("destroy starting", "node", opts.Node, "parallelism", opts.parallelism(), "autoApprove", opts.AutoApprove)
+	e.logger().Info("destroy starting", "nodes", opts.Nodes, "parallelism", opts.parallelism(), "autoApprove", opts.AutoApprove)
 
 	result.Nodes, resultErr = e.runLevels(opts, true, func(name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
 		// A destroy plan needs the same resolved input values an apply would have used (e.g. a variable feeding a resource's count or for_each), so it's evaluated identically here: every upstream dependency is still standing at this point, since destroy walks the graph in reverse topological order (downstream first).

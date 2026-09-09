@@ -7,8 +7,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func finishSavedExecution(cmd *cobra.Command, output string, record engine.ExecutionRecord, resultErr error) error {
+func finishSavedExecution(cmd *cobra.Command, output string, record engine.ExecutionRecord, resultErr error, selection ...*selectionDTO) error {
 	result := executionHistoryDTO{SchemaVersion: 1, Executions: []executionDTO{}, Diagnostics: []diagnosticDTO{}}
+	if len(selection) > 0 {
+		result.Selection = selection[0]
+	}
 	if record.ID != "" {
 		result.Executions = append(result.Executions, executionToDTO(record))
 	}

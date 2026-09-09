@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.5](https://github.com/cloudfluent/terragraph/compare/v0.2.4...v0.2.5) (2026-09-09)
+
+
+### Features
+
+* add explicit execution scope selection ([bbaf7de](https://github.com/cloudfluent/terragraph/commit/bbaf7dee092cf4d3960fbc6118e8235e328741cd))
+
 ## [0.2.4](https://github.com/cloudfluent/terragraph/compare/v0.2.3...v0.2.4) (2026-09-08)
 
 

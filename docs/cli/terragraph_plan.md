@@ -9,13 +9,14 @@ terragraph plan [flags]
 ### Options
 
 ```
-      --approve string    default policy to assess: none, safe, or all (does not authorize apply) (default "safe")
-      --continue string   create the next frontier after applying this saved execution
-  -h, --help              help for plan
-      --node string       restrict to a single node
-      --output string     output format: text or json (default "text")
-      --parallelism int   max nodes to run concurrently within one execution level (default 1)
-      --save              save only the ready graph frontier for a later apply --plan
+      --approve string     default policy to assess: none, safe, or all (does not authorize apply) (default "safe")
+      --continue string    create the next frontier after applying this saved execution
+      --downstream         include all successors of --node across data and ordering edges
+  -h, --help               help for plan
+      --node stringArray   select an exact leaf name (repeat for multiple nodes; commas are literal)
+      --output string      output format: text or json (default "text")
+      --parallelism int    max nodes to run concurrently within one execution level (default 1)
+      --save               save only the ready graph frontier for a later apply --plan
 ```
 
 ### Options inherited from parent commands

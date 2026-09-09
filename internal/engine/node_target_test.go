@@ -6,7 +6,7 @@ import "testing"
 func TestExecutionLevels_DottedNodeTarget(t *testing.T) {
 	e := newTestEngine([]string{"vpc", "checkout.cluster", "checkout.nodegroup"}, nil)
 
-	levels, err := e.executionLevels(Options{Node: "checkout.cluster"}, false)
+	levels, err := e.executionLevels(Options{Nodes: []string{"checkout.cluster"}}, false)
 	if err != nil {
 		t.Fatalf("executionLevels: %v", err)
 	}
@@ -17,7 +17,7 @@ func TestExecutionLevels_DottedNodeTarget(t *testing.T) {
 
 func TestExecutionLevels_UnknownDottedNodeTarget(t *testing.T) {
 	e := newTestEngine([]string{"vpc"}, nil)
-	if _, err := e.executionLevels(Options{Node: "checkout.cluster"}, false); err == nil {
+	if _, err := e.executionLevels(Options{Nodes: []string{"checkout.cluster"}}, false); err == nil {
 		t.Fatalf("expected an error for an unknown node target")
 	}
 }

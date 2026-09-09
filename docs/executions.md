@@ -110,7 +110,21 @@ terragraph plan --save --continue <run-id> --output json
 terragraph apply --plan <run-id> --auto-approve
 ```
 
-The first command saves only the ready frontier. A downstream node whose selected predecessor has not completed stays `pending`. Applying consumes that frontier once and stops. If a later peer fails before mutation (for example, approval policy refuses it), already completed peers stay completed and unapplied plans remain available under `waiting_for_apply`. A retry applies only those remaining peers; expired or incompatible plans still require cancellation and a fresh plan. Unknown mutation outcomes keep the recovery barrier and all evidence. `--continue` plans the next frontier using live upstream outputs; snapshots cannot replace those reads. Repeat until the record says `completed`. Use `--node` only when starting an explicitly restricted selection; continuation and saved apply inherit the stored selection. Parallelism is an upper bound; saved frontiers currently execute sequentially, while ordinary apply retains its existing concurrent scheduler.
+The first command saves only the ready frontier. A downstream node whose selected predecessor has not completed stays `pending`. Applying consumes that frontier once and stops. If a later peer fails before mutation (for example, approval policy refuses it), already completed peers stay completed and unapplied plans remain available under `waiting_for_apply`. A retry applies only those remaining peers; expired or incompatible plans still require cancellation and a fresh plan. Unknown mutation outcomes keep the recovery barrier and all evidence. `--continue` plans the next frontier using live upstream outputs; snapshots cannot replace those reads. Repeat until the record says `completed`. Use repeated `--node` and optional `--downstream` only when starting an explicitly restricted selection; continuation and saved apply inherit the stored membership. Parallelism is an upper bound; saved frontiers currently execute sequentially, while ordinary apply retains its existing concurrent scheduler.
+
+To freeze a downstream selection:
+
+```sh
+terragraph plan --save --node checkout.cluster --downstream --output json
+terragraph apply --plan <run-id> --auto-approve
+terragraph plan --save --continue <run-id> --output json
+```
+
+The initial record includes every selected leaf, even though only the ready frontier receives plan artifacts. Optional version-1 selection metadata preserves the original requested leaves, inclusion reasons, and boundary edges, and is exposed in public execution JSON. Ordinary apply/destroy records also retain this metadata; it does not make those runs automatically resumable. No new storage location or infrastructure state cache is introduced.
+
+`apply --plan` and `plan --save --continue` reject any explicitly supplied `--node` or `--downstream`, including empty names and `--downstream=false`, before runtime calls. Runtime preflight for continuation and saved application covers recorded nodes and their required direct data upstreams. It never interprets absent CLI selection flags as permission to inspect or execute every graph node.
+
+Record `nodes` remains authoritative. Metadata cannot widen membership. Old records without selection metadata use their recorded nodes normally and omit public selection; original seeds or downstream intent are never inferred. Unsupported metadata schemas and contradictions with recorded membership are treated as corrupt records and block execution under the existing corrupt-record handling rules. Existing graph binding checks still reject incompatible graph changes: downstream is never traversed again to enroll new nodes. TTL, revision, no-change plan, graph-lock, and recovery rules remain in force.
 
 Saved-plan JSON includes action metadata and the policy assessment without input or output values. Review is not approval: saved apply checks the current approval policy again and asks for confirmation unless `--auto-approve` is set. A saved no-change plan still goes through native application validation, so it cannot silently bypass the runtime's stale-plan checks.
 

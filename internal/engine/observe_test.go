@@ -268,7 +268,7 @@ func TestReviewPlan_RealOutputOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runs, err := e.ReviewPlan(Options{Node: "first"}, false)
+	runs, err := e.ReviewPlan(Options{Nodes: []string{"first"}}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
