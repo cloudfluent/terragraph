@@ -132,6 +132,19 @@ func (c *countingReader) Read(p []byte) (int, error) {
 
 // destroyContractPlan validates effective external inputs before executing the same native destroy plan, without demanding deleted outputs.
 func (e *Engine) destroyContractPlan(name string, r *exec.Runner, session *executionSession, opts Options, args []string) error {
+	if err := session.transition(name, "initializing", "", ""); err != nil {
+		return err
+	}
+	if err := e.initNode(name, r); err != nil {
+		return session.fail(name, "indeterminate", fmt.Errorf("init: %w", err))
+	}
+	if err := session.transition(name, "preparing", "", ""); err != nil {
+		return err
+	}
+	// Initialize first so stale backend metadata cannot bypass the saved-plan requirement for effective input checks.
+	if !r.SupportsSavedPlan() {
+		return fmt.Errorf("node.%s: destroy with consumer contracts requires a local plan, which the %q backend cannot produce; use a state-storage backend (s3, gcs, azurerm, http, local) instead", name, r.BackendType())
+	}
 	path := e.planPath(name)
 	cleanup, err := prepareSavedPlan(path)
 	if err != nil {

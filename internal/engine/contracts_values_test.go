@@ -66,3 +66,30 @@ consumer "./m" {
 		t.Fatalf("got = %v, want protected conversion error", err)
 	}
 }
+
+func TestInspectContractPlan_UncontractedNodeNeedsNoEvidence(t *testing.T) {
+	for _, localContract := range []string{"", `consumer "./plain" {}`} {
+		t.Run(localContract, func(t *testing.T) {
+			root := t.TempDir()
+			writeModule(t, filepath.Join(root, "plain"))
+			writeModule(t, filepath.Join(root, "contracted"))
+			path := writeBlueprint(t, root, `
+node "plain" { source = "./plain" }
+node "contracted" { source = "./contracted" }
+producer "./contracted" {
+ output "id" { type = string }
+}
+`+localContract)
+			e, err := Load(path, exec.Terraform, io.Discard, io.Discard)
+			if err != nil {
+				t.Fatal(err)
+			}
+			e.Graph.ContractMode = "enforce"
+			r := &exec.Runner{Binary: exec.Binary(filepath.Join(root, "missing-runtime")), Dir: root}
+			values, checks, err := e.inspectContractPlan("plain", r, filepath.Join(root, "missing-plan"), true)
+			if err != nil || values != nil || len(checks) != 0 {
+				t.Fatalf("got = %v, %v, %v, want no evidence request for uncontracted node", values, checks, err)
+			}
+		})
+	}
+}

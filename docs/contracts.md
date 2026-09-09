@@ -212,7 +212,10 @@ violation leaves the journal in `applied`, awaiting output recovery; it does
 not reapply the producer. Independent nodes already running in parallel are
 not rolled back. Destroy checks consumed upstream values and, for explicitly
 contracted consumers, inspects effective inputs in a saved destroy plan; it
-never requires output promises from the outputs being deleted.
+never requires output promises from the outputs being deleted. Consumer-contract
+destroy initializes the backend before planning and refuses remote/cloud backends
+with a backend-specific remedy in both modes, because effective input checks
+require a local saved plan. Destroy without consumer contracts keeps its native path.
 
 ## Adoption and compatibility
 

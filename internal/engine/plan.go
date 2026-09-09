@@ -107,7 +107,7 @@ func (e *Engine) plan(opts Options, inspect, allowTextFallback bool) (result Run
 			return fail("journal_failed", "init", err)
 		}
 
-		if inspect || e.hasContracts() {
+		if inspect || e.hasContracts(name) {
 			backend := e.Graph.Nodes[name].Schema.Backend
 			if backend == "remote" || backend == "cloud" || !r.SupportsSavedPlan() {
 				capability := fmt.Errorf("backend does not support saved-plan inspection; use text plan for native preview")
@@ -141,7 +141,7 @@ func (e *Engine) plan(opts Options, inspect, allowTextFallback bool) (result Run
 				return nil, StatusPlanned, nil
 			}
 		}
-		if e.hasContracts() {
+		if e.hasContracts(name) {
 			e.logger().Warn("contract.[C011] plan contracts deferred: backend cannot provide saved-plan evidence", "node", name)
 		}
 		if err := r.Plan(exec.VarFileArgs(varsPath, vars)...); err != nil {

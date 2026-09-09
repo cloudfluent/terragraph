@@ -25,8 +25,9 @@ func (e *Engine) nodeContracts(name string) *blueprint.DirContracts {
 	return e.Graph.Contracts.Lookup(key)
 }
 
-func (e *Engine) hasContracts() bool {
-	return e.Graph.Contracts != nil && len(e.Graph.Contracts.ByDir) > 0
+func (e *Engine) hasContracts(name string) bool {
+	dc := e.nodeContracts(name)
+	return dc != nil && (len(dc.Producer) > 0 || len(dc.Consumer) > 0)
 }
 
 func contractPorts(ports map[string]blueprint.PortContract) []string {
@@ -133,7 +134,7 @@ func (e *Engine) validateOutputContracts(name string, outputs exec.Outputs) erro
 
 // inspectContractPlan checks selected external inputs too, since managed vars alone cannot establish what the module receives.
 func (e *Engine) inspectContractPlan(name string, r *exec.Runner, path string, requireInputs bool) (*exec.PlanValues, []ContractCheck, error) {
-	if !e.hasContracts() {
+	if !e.hasContracts(name) {
 		return nil, nil, nil
 	}
 	values, err := r.PlanValues(path)
