@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.7](https://github.com/cloudfluent/terragraph/compare/v0.2.6...v0.2.7) (2026-09-09)
+
+
+### Features
+
+* add executable plugins with HCL functions and SDK logging ([#117](https://github.com/cloudfluent/terragraph/issues/117)) ([fa62784](https://github.com/cloudfluent/terragraph/commit/fa627840f32e91fcf10e7ed500b8237ca363db45))
+* add plugin lifecycle core and first-party debug observer ([#125](https://github.com/cloudfluent/terragraph/issues/125)) ([d4cddfc](https://github.com/cloudfluent/terragraph/commit/d4cddfc478b304644173be1a54865398cc78d98a))
+
 ## [0.2.6](https://github.com/cloudfluent/terragraph/compare/v0.2.5...v0.2.6) (2026-09-09)
 
 
