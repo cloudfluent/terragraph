@@ -70,7 +70,7 @@ func (e *Engine) Apply(opts Options) (result RunResult, resultErr error) {
 		defer func() { _ = os.Remove(varsPath) }()
 		varFileArgs := exec.VarFileArgs(varsPath, vars)
 
-		r := &exec.Runner{Context: e.context(), Binary: e.runtimeFor(name), Dir: e.nodeDir(name), DataDir: e.dataDir(name), Env: e.envFor(name), Stdout: out, Stderr: out}
+		r := &exec.Runner{OutputRetries: e.OutputRetries, Context: e.context(), Binary: e.runtimeFor(name), Dir: e.nodeDir(name), DataDir: e.dataDir(name), Env: e.envFor(name), Stdout: out, Stderr: out}
 		if err := session.transition(name, "initializing", "", ""); err != nil {
 			return nil, "", err
 		}
