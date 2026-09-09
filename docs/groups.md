@@ -189,3 +189,5 @@ This allows create and update actions by default for the instance's nodes. A nod
 `terragraph vendor` fetches remote node sources inside local groups into the calling blueprint's vendor directory under their qualified names, such as `vendor/checkout.vpc/` or `vendor/prod.inner.vpc/`. Run `terragraph vendor --node prod.inner.vpc` to fetch one leaf. Each instance gets its own copy; the group's source directory is not modified.
 
 The root blueprint's `vendor.directory` and `vendor.manifest_file` control these copies and their manifest. Existing group-local copies remain usable when no root qualified copy exists. Refreshes publish into the root vendor directory and check local state before changing execution directories; see [vendoring](vendoring.md) for compatibility and refresh rules.
+
+Optional [plugin functions](plugins.md) declared by the root blueprint are available in group node and use `vars`. Group source directories cannot declare their own executable plugins.

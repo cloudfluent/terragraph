@@ -17,6 +17,7 @@ import (
 	"github.com/cloudfluent/terragraph/internal/graph"
 	"github.com/cloudfluent/terragraph/internal/graphlock"
 	"github.com/cloudfluent/terragraph/internal/lsp"
+	"github.com/cloudfluent/terragraph/internal/plugins"
 	"github.com/cloudfluent/terragraph/internal/runlock"
 	"github.com/cloudfluent/terragraph/internal/vendor"
 )
@@ -51,6 +52,7 @@ func NewRootCmd(version string) *cobra.Command {
 				return err
 			}
 			logger = newLogger(cmd.ErrOrStderr(), level)
+			cmd.SetContext(plugins.WithLogger(cmd.Context(), logger))
 			return nil
 		},
 	}
@@ -69,6 +71,7 @@ func NewRootCmd(version string) *cobra.Command {
 	root.AddCommand(newForceUnlockCmd(&blueprintPath))
 	root.AddCommand(newVendorCmd(&blueprintPath, loggerOf))
 	root.AddCommand(newLanguageServerCmd())
+	root.AddCommand(newPluginCmd(&blueprintPath))
 
 	return root
 }
@@ -88,7 +91,7 @@ func newLanguageServerCmd() *cobra.Command {
 // loadEngine loads the blueprint into an Engine and wires the CLI's logger into it. Shared by every command that needs a built graph (validate/graph/plan/apply/destroy); vendor parses the blueprint directly instead (see newVendorCmd) since building the graph would fail for any not-yet-vendored remote node.
 func loadEngine(cmd *cobra.Command, blueprintPath *string, binaryOf func() exec.Binary, loggerOf func() *slog.Logger) (*engine.Engine, error) {
 	diagnosticPhase(cmd, "load")
-	e, err := engine.Load(*blueprintPath, binaryOf(), cmd.OutOrStdout(), cmd.ErrOrStderr())
+	e, err := engine.LoadContext(plugins.WithLogger(cmd.Context(), loggerOf()), *blueprintPath, binaryOf(), cmd.OutOrStdout(), cmd.ErrOrStderr())
 	if err != nil {
 		return nil, err
 	}
@@ -99,7 +102,7 @@ func loadEngine(cmd *cobra.Command, blueprintPath *string, binaryOf func() exec.
 // loadLockedEngine is loadEngine after taking the blueprint process lock, so plan/apply/destroy inspect module files only once a concurrent vendor cannot rewrite them. The caller must invoke the returned func when the command ends.
 func loadLockedEngine(cmd *cobra.Command, blueprintPath *string, binaryOf func() exec.Binary, loggerOf func() *slog.Logger) (*engine.Engine, func(), error) {
 	diagnosticPhase(cmd, "load")
-	e, unlock, err := engine.LoadLockedContext(cmd.Context(), *blueprintPath, binaryOf(), cmd.OutOrStdout(), cmd.ErrOrStderr())
+	e, unlock, err := engine.LoadLockedContext(plugins.WithLogger(cmd.Context(), loggerOf()), *blueprintPath, binaryOf(), cmd.OutOrStdout(), cmd.ErrOrStderr())
 	if err != nil {
 		return nil, nil, err
 	}
@@ -464,7 +467,7 @@ func newForceUnlockCmd(blueprintPath *string) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// The blueprint is parsed, not built into a graph: all this needs is the lock block, and graph.Build stats every node source — so a checkout with nothing vendored yet would abort the one command that exists to recover from an interrupted run. Same reason newVendorCmd parses directly.
 			diagnosticPhase(cmd, "load")
-			bp, dir, err := blueprint.LoadPath(*blueprintPath)
+			bp, dir, err := blueprint.LoadMetadata(*blueprintPath)
 			if err != nil {
 				return err
 			}
@@ -525,20 +528,28 @@ func newVendorCmd(blueprintPath *string, loggerOf func() *slog.Logger) *cobra.Co
 
 			// Parsed directly, not via engine.Load: building the full graph would fail for any not-yet-vendored remote node, but vendoring has to work *before* the graph is buildable.
 			diagnosticPhase(cmd, "load")
-			bp, dir, err := blueprint.LoadPath(*blueprintPath)
+			baseDir, err := blueprint.BaseDirectory(*blueprintPath)
 			if err != nil {
 				return err
 			}
-			baseDir, err := filepath.Abs(dir)
-			if err != nil {
-				return fmt.Errorf("resolving blueprint directory: %w", err)
-			}
-
-			lock, err := runlock.Acquire(baseDir, cmd.ErrOrStderr())
+			lock, err := runlock.AcquireContext(cmd.Context(), baseDir, cmd.ErrOrStderr())
 			if err != nil {
 				return fmt.Errorf("locking blueprint: %w", err)
 			}
 			defer func() { _ = lock.Close() }()
+			evaluation, err := plugins.Evaluate(plugins.WithLogger(cmd.Context(), logger), *blueprintPath)
+			if err != nil {
+				return err
+			}
+			defer func() {
+				if err := evaluation.Close(); err != nil {
+					logger.Error("plugin cleanup failed", "error", err)
+				}
+			}()
+			bp, _, err := blueprint.LoadPath(*blueprintPath, evaluation.Context)
+			if err != nil {
+				return err
+			}
 
 			sources, err := graph.SourceNodes(bp, baseDir)
 			if err != nil {

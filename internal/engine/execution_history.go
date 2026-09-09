@@ -12,7 +12,7 @@ import (
 
 // OpenExecutionHistory avoids module inspection so a missing source or broken wiring cannot hide the record needed for recovery.
 func OpenExecutionHistory(ctx context.Context, path string, diagnostics io.Writer) (*Engine, func(), error) {
-	bp, dir, err := blueprint.LoadPath(path)
+	bp, dir, err := blueprint.LoadMetadata(path)
 	if err != nil {
 		return nil, nil, err
 	}

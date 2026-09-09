@@ -17,6 +17,7 @@ import (
 	"github.com/cloudfluent/terragraph/internal/exec"
 	"github.com/cloudfluent/terragraph/internal/graph"
 	"github.com/cloudfluent/terragraph/internal/graphlock"
+	"github.com/cloudfluent/terragraph/internal/plugins"
 	"github.com/cloudfluent/terragraph/internal/runlock"
 )
 
@@ -146,6 +147,12 @@ func Load(blueprintPath string, binary exec.Binary, stdout, stderr io.Writer) (*
 	return e, err
 }
 
+// LoadContext carries cancellation and plugin diagnostics into static evaluation before an Engine exists.
+func LoadContext(ctx context.Context, blueprintPath string, binary exec.Binary, stdout, stderr io.Writer) (*Engine, error) {
+	e, _, err := load(ctx, blueprintPath, binary, stdout, stderr, false)
+	return e, err
+}
+
 // LoadLocked is Load after taking the blueprint process lock, and holds it across graph.Build so a concurrent vendor cannot rewrite module sources underneath Inspect. The caller must invoke the returned func when the run ends.
 func LoadLocked(blueprintPath string, binary exec.Binary, stdout, stderr io.Writer) (*Engine, func(), error) {
 	return LoadLockedContext(context.Background(), blueprintPath, binary, stdout, stderr)
@@ -163,24 +170,34 @@ func LoadLockedContext(ctx context.Context, blueprintPath string, binary exec.Bi
 	}, nil
 }
 
-func load(ctx context.Context, blueprintPath string, binary exec.Binary, stdout, stderr io.Writer, takeLock bool, observation ...bool) (*Engine, *runlock.Lock, error) {
-	bp, dir, err := blueprint.LoadPath(blueprintPath)
+func load(ctx context.Context, blueprintPath string, binary exec.Binary, stdout, stderr io.Writer, takeLock bool, observation ...bool) (result *Engine, held *runlock.Lock, resultErr error) {
+	baseDir, err := blueprint.BaseDirectory(blueprintPath)
 	if err != nil {
 		return nil, nil, err
 	}
-
-	// Absolute, so paths derived from it (DataDir in particular) are unambiguous no matter what working directory a terraform/tofu subprocess runs with. A relative TF_DATA_DIR would otherwise be resolved relative to the subprocess's own cwd (the node's source dir), not this process's, producing a nested, wrong path.
-	baseDir, err := filepath.Abs(dir)
-	if err != nil {
-		return nil, nil, fmt.Errorf("resolving blueprint directory: %w", err)
-	}
-
 	var lock *runlock.Lock
 	if takeLock {
 		lock, err = runlock.AcquireContext(ctx, baseDir, stderr)
 		if err != nil {
 			return nil, nil, fmt.Errorf("locking blueprint: %w", err)
 		}
+	}
+	// Release failed loads only after plugin cleanup, which still belongs to the protected session.
+	defer func() {
+		if resultErr != nil {
+			_ = lock.Close()
+			result = nil
+			held = nil
+		}
+	}()
+	evaluation, err := plugins.Evaluate(ctx, blueprintPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, evaluation.Close()) }()
+	bp, _, err := blueprint.LoadPath(blueprintPath, evaluation.Context)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	build := graph.Build
@@ -189,9 +206,6 @@ func load(ctx context.Context, blueprintPath string, binary exec.Binary, stdout,
 	}
 	g, err := build(bp, baseDir, string(binary))
 	if err != nil {
-		if lock != nil {
-			_ = lock.Close()
-		}
 		return nil, nil, err
 	}
 

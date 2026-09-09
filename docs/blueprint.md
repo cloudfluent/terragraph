@@ -46,7 +46,7 @@ node "data-apne2-dev-vpc" {
 
 Values can be strings, numbers, booleans, nulls, lists, or nested objects. Numeric precision is preserved when values are passed to Terraform. If you control the module interface, related settings can share an `object`-typed variable instead of many separate variables.
 
-`vars` accepts literal data with no variables or functions in scope. Another node's output needs an `edge`; putting `node.other.output.x` inside `vars` is an error and would not record the dependency. A `vars` key must name a real input and must not also be supplied by a data edge.
+`vars` accepts literal data and, when explicitly installed, [plugin functions](plugins.md). No variables are added to scope. Another node's output needs an `edge`; putting `node.other.output.x` inside `vars` is an error and would not record the dependency. A `vars` key must name a real input and must not also be supplied by a data edge.
 
 Resolved `vars` and edge values share the same temporary tfvars file and type checks. Terraform/OpenTofu performs the final conversion and variable validation. See [how values are passed](execution-model.md#how-values-are-passed) for the optional `tfvars` setting and cleanup behavior, and [group instance inputs](groups.md#setting-literal-inputs-for-an-instance) for `use.vars`.
 

@@ -108,7 +108,7 @@ func buildRoot(bp *blueprint.Blueprint, baseDir string, observation bool, cliBin
 	if rt, ok := bp.DefaultRuntime(); ok {
 		fallback = rt.Binary
 	}
-	g, _, err := build(bp, baseDir, "", nil, nil, nil, nil, "", &resolveContext{observation: observation, rootDir: baseDir, rootVendorDir: filepath.Join(baseDir, bp.VendorDirectory()), fallbackBinary: fallback})
+	g, _, err := build(bp, baseDir, "", nil, nil, nil, nil, "", &resolveContext{evaluation: bp.Evaluation, observation: observation, rootDir: baseDir, rootVendorDir: filepath.Join(baseDir, bp.VendorDirectory()), fallbackBinary: fallback})
 	if g != nil {
 		g.Lock = bp.Lock
 		g.Snapshots = bp.Snapshots != nil && bp.Snapshots.Enabled
