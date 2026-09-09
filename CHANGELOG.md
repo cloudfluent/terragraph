@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.2.4](https://github.com/cloudfluent/terragraph/compare/v0.2.3...v0.2.4) (2026-09-08)
+
+
+### Features
+
+* add protected execution records and history commands ([#101](https://github.com/cloudfluent/terragraph/issues/101)) ([dac4f70](https://github.com/cloudfluent/terragraph/commit/dac4f70bfedbf7572a6661bc06425646880c3bcf))
+* add revision-checked execution artifact storage ([#100](https://github.com/cloudfluent/terragraph/issues/100)) ([4e20c9a](https://github.com/cloudfluent/terragraph/commit/4e20c9a8e1a6c54b46fef90e1d81c16eaab60b8d))
+* add scoped native node operations and recovery backups ([#104](https://github.com/cloudfluent/terragraph/issues/104)) ([be6c675](https://github.com/cloudfluent/terragraph/commit/be6c6759661d57bd7bf5551fc538c0d7ac810261))
+* load blueprint directories by default ([#97](https://github.com/cloudfluent/terragraph/issues/97)) ([4f378d6](https://github.com/cloudfluent/terragraph/commit/4f378d6d9412743be8aae9b4042739d1417194f2))
+* record graph mutations and recover without blind replay ([#102](https://github.com/cloudfluent/terragraph/issues/102)) ([c4c7f86](https://github.com/cloudfluent/terragraph/commit/c4c7f86dbb35b7ce51b54c2544274b2de702edee))
+* retain and apply reviewed graph plan frontiers ([#103](https://github.com/cloudfluent/terragraph/issues/103)) ([a4f3b60](https://github.com/cloudfluent/terragraph/commit/a4f3b602dd724dc973a120fd4ee5588b8a98d41b))
+
+
+### Code Refactoring
+
+* share prepared node plan application ([#98](https://github.com/cloudfluent/terragraph/issues/98)) ([02c5cb4](https://github.com/cloudfluent/terragraph/commit/02c5cb49529025092433c5fe61f52b80a7b9ce5f))
+
 ## [0.2.3](https://github.com/cloudfluent/terragraph/compare/v0.2.2...v0.2.3) (2026-09-08)
 
 
