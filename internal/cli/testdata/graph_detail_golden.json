@@ -1,0 +1,723 @@
+{
+  "schema_version": 1,
+  "valid": true,
+  "selection": {
+    "node": null
+  },
+  "levels": [
+    [
+      "vpc"
+    ],
+    [
+      "checkout.cluster",
+      "payments.cluster"
+    ],
+    [
+      "checkout.core.nodegroup",
+      "payments.core.nodegroup"
+    ]
+  ],
+  "nodes": [
+    {
+      "name": "checkout.cluster",
+      "declaration": {
+        "file": "<root>/groups/service/group.hcl",
+        "line": 2,
+        "column": 3
+      },
+      "source": {
+        "declared": "../../modules/cluster",
+        "resolved": "modules/cluster"
+      },
+      "group_path": [
+        {
+          "instance": "checkout",
+          "group": "service",
+          "use": {
+            "file": "<root>/blueprint.hcl",
+            "line": 13,
+            "column": 1
+          },
+          "group_decl": {
+            "file": "<root>/groups/service/group.hcl",
+            "line": 1,
+            "column": 1
+          }
+        }
+      ],
+      "inputs": [
+        {
+          "name": "cluster_name",
+          "description": "",
+          "declared_type": "string",
+          "required": true,
+          "sensitive": false,
+          "has_default": false,
+          "location": {
+            "file": "<root>/modules/cluster/variables.tf",
+            "line": 5,
+            "column": 1
+          },
+          "source": {
+            "kind": "use_vars",
+            "subject": "use.checkout.vars.cluster_name",
+            "location": {
+              "file": "<root>/blueprint.hcl",
+              "line": 17,
+              "column": 5
+            },
+            "mapping_path": [
+              {
+                "via": "use.checkout.input.cluster_name",
+                "location": {
+                  "file": "<root>/groups/service/group.hcl",
+                  "line": 20,
+                  "column": 5
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "vpc_id",
+          "description": "",
+          "declared_type": "string",
+          "required": true,
+          "sensitive": false,
+          "has_default": false,
+          "location": {
+            "file": "<root>/modules/cluster/variables.tf",
+            "line": 1,
+            "column": 1
+          },
+          "source": {
+            "kind": "edge",
+            "subject": "node.vpc.output.vpc_id",
+            "location": {
+              "file": "<root>/blueprint.hcl",
+              "line": 30,
+              "column": 1
+            },
+            "mapping_path": [
+              {
+                "via": "use.checkout.input.vpc_id",
+                "location": {
+                  "file": "<root>/groups/service/group.hcl",
+                  "line": 18,
+                  "column": 7
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "cluster_id",
+          "description": "",
+          "declared_type": null,
+          "sensitive": false,
+          "location": {
+            "file": "<root>/modules/cluster/outputs.tf",
+            "line": 1,
+            "column": 1
+          }
+        }
+      ],
+      "runtime": {
+        "binary": "terraform",
+        "name": null,
+        "version": null,
+        "origin": "builtin",
+        "location": null,
+        "definition_location": null,
+        "use": null
+      },
+      "approve": {
+        "effective": "safe",
+        "origin": "builtin",
+        "location": null,
+        "use": null
+      },
+      "relations": {
+        "depends_on": [
+          "vpc"
+        ],
+        "dependents": [
+          "checkout.core.nodegroup"
+        ],
+        "ancestors": [
+          "vpc"
+        ],
+        "descendants": [
+          "checkout.core.nodegroup"
+        ]
+      }
+    },
+    {
+      "name": "checkout.core.nodegroup",
+      "declaration": {
+        "file": "<root>/groups/inner/group.hcl",
+        "line": 2,
+        "column": 3
+      },
+      "source": {
+        "declared": "../../modules/nodegroup",
+        "resolved": "modules/nodegroup"
+      },
+      "group_path": [
+        {
+          "instance": "checkout",
+          "group": "service",
+          "use": {
+            "file": "<root>/blueprint.hcl",
+            "line": 13,
+            "column": 1
+          },
+          "group_decl": {
+            "file": "<root>/groups/service/group.hcl",
+            "line": 1,
+            "column": 1
+          }
+        },
+        {
+          "instance": "checkout.core",
+          "group": "inner",
+          "use": {
+            "file": "<root>/groups/service/group.hcl",
+            "line": 6,
+            "column": 3
+          },
+          "group_decl": {
+            "file": "<root>/groups/inner/group.hcl",
+            "line": 1,
+            "column": 1
+          }
+        }
+      ],
+      "inputs": [
+        {
+          "name": "cluster_id",
+          "description": "",
+          "declared_type": "string",
+          "required": true,
+          "sensitive": false,
+          "has_default": false,
+          "location": {
+            "file": "<root>/modules/nodegroup/variables.tf",
+            "line": 1,
+            "column": 1
+          },
+          "source": {
+            "kind": "edge",
+            "subject": "node.checkout.cluster.output.cluster_id",
+            "location": {
+              "file": "<root>/groups/service/group.hcl",
+              "line": 11,
+              "column": 3
+            },
+            "mapping_path": [
+              {
+                "via": "use.core.input.cluster_id",
+                "location": {
+                  "file": "<root>/groups/inner/group.hcl",
+                  "line": 8,
+                  "column": 7
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "outputs": [],
+      "runtime": {
+        "binary": "terraform",
+        "name": null,
+        "version": null,
+        "origin": "builtin",
+        "location": null,
+        "definition_location": null,
+        "use": null
+      },
+      "approve": {
+        "effective": "safe",
+        "origin": "builtin",
+        "location": null,
+        "use": null
+      },
+      "relations": {
+        "depends_on": [
+          "checkout.cluster"
+        ],
+        "dependents": [],
+        "ancestors": [
+          "checkout.cluster",
+          "vpc"
+        ],
+        "descendants": []
+      }
+    },
+    {
+      "name": "payments.cluster",
+      "declaration": {
+        "file": "<root>/groups/service/group.hcl",
+        "line": 2,
+        "column": 3
+      },
+      "source": {
+        "declared": "../../modules/cluster",
+        "resolved": "modules/cluster"
+      },
+      "group_path": [
+        {
+          "instance": "payments",
+          "group": "service",
+          "use": {
+            "file": "<root>/blueprint.hcl",
+            "line": 21,
+            "column": 1
+          },
+          "group_decl": {
+            "file": "<root>/groups/service/group.hcl",
+            "line": 1,
+            "column": 1
+          }
+        }
+      ],
+      "inputs": [
+        {
+          "name": "cluster_name",
+          "description": "",
+          "declared_type": "string",
+          "required": true,
+          "sensitive": false,
+          "has_default": false,
+          "location": {
+            "file": "<root>/modules/cluster/variables.tf",
+            "line": 5,
+            "column": 1
+          },
+          "source": {
+            "kind": "use_vars",
+            "subject": "use.payments.vars.cluster_name",
+            "location": {
+              "file": "<root>/blueprint.hcl",
+              "line": 26,
+              "column": 5
+            },
+            "mapping_path": [
+              {
+                "via": "use.payments.input.cluster_name",
+                "location": {
+                  "file": "<root>/groups/service/group.hcl",
+                  "line": 20,
+                  "column": 5
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "vpc_id",
+          "description": "",
+          "declared_type": "string",
+          "required": true,
+          "sensitive": false,
+          "has_default": false,
+          "location": {
+            "file": "<root>/modules/cluster/variables.tf",
+            "line": 1,
+            "column": 1
+          },
+          "source": {
+            "kind": "edge",
+            "subject": "node.vpc.output.vpc_id",
+            "location": {
+              "file": "<root>/blueprint.hcl",
+              "line": 35,
+              "column": 1
+            },
+            "mapping_path": [
+              {
+                "via": "use.payments.input.vpc_id",
+                "location": {
+                  "file": "<root>/groups/service/group.hcl",
+                  "line": 18,
+                  "column": 7
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "cluster_id",
+          "description": "",
+          "declared_type": null,
+          "sensitive": false,
+          "location": {
+            "file": "<root>/modules/cluster/outputs.tf",
+            "line": 1,
+            "column": 1
+          }
+        }
+      ],
+      "runtime": {
+        "binary": "terraform",
+        "name": "pinned",
+        "version": "\u003e= 1.0",
+        "origin": "use",
+        "location": {
+          "file": "<root>/blueprint.hcl",
+          "line": 24,
+          "column": 3
+        },
+        "definition_location": {
+          "file": "<root>/blueprint.hcl",
+          "line": 1,
+          "column": 1
+        },
+        "use": {
+          "name": "payments",
+          "location": {
+            "file": "<root>/blueprint.hcl",
+            "line": 21,
+            "column": 1
+          }
+        }
+      },
+      "approve": {
+        "effective": "safe",
+        "origin": "builtin",
+        "location": null,
+        "use": null
+      },
+      "relations": {
+        "depends_on": [
+          "vpc"
+        ],
+        "dependents": [
+          "payments.core.nodegroup"
+        ],
+        "ancestors": [
+          "vpc"
+        ],
+        "descendants": [
+          "payments.core.nodegroup"
+        ]
+      }
+    },
+    {
+      "name": "payments.core.nodegroup",
+      "declaration": {
+        "file": "<root>/groups/inner/group.hcl",
+        "line": 2,
+        "column": 3
+      },
+      "source": {
+        "declared": "../../modules/nodegroup",
+        "resolved": "modules/nodegroup"
+      },
+      "group_path": [
+        {
+          "instance": "payments",
+          "group": "service",
+          "use": {
+            "file": "<root>/blueprint.hcl",
+            "line": 21,
+            "column": 1
+          },
+          "group_decl": {
+            "file": "<root>/groups/service/group.hcl",
+            "line": 1,
+            "column": 1
+          }
+        },
+        {
+          "instance": "payments.core",
+          "group": "inner",
+          "use": {
+            "file": "<root>/groups/service/group.hcl",
+            "line": 6,
+            "column": 3
+          },
+          "group_decl": {
+            "file": "<root>/groups/inner/group.hcl",
+            "line": 1,
+            "column": 1
+          }
+        }
+      ],
+      "inputs": [
+        {
+          "name": "cluster_id",
+          "description": "",
+          "declared_type": "string",
+          "required": true,
+          "sensitive": false,
+          "has_default": false,
+          "location": {
+            "file": "<root>/modules/nodegroup/variables.tf",
+            "line": 1,
+            "column": 1
+          },
+          "source": {
+            "kind": "edge",
+            "subject": "node.payments.cluster.output.cluster_id",
+            "location": {
+              "file": "<root>/groups/service/group.hcl",
+              "line": 11,
+              "column": 3
+            },
+            "mapping_path": [
+              {
+                "via": "use.core.input.cluster_id",
+                "location": {
+                  "file": "<root>/groups/inner/group.hcl",
+                  "line": 8,
+                  "column": 7
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "outputs": [],
+      "runtime": {
+        "binary": "terraform",
+        "name": "pinned",
+        "version": "\u003e= 1.0",
+        "origin": "use",
+        "location": {
+          "file": "<root>/blueprint.hcl",
+          "line": 24,
+          "column": 3
+        },
+        "definition_location": {
+          "file": "<root>/blueprint.hcl",
+          "line": 1,
+          "column": 1
+        },
+        "use": {
+          "name": "payments",
+          "location": {
+            "file": "<root>/blueprint.hcl",
+            "line": 21,
+            "column": 1
+          }
+        }
+      },
+      "approve": {
+        "effective": "safe",
+        "origin": "builtin",
+        "location": null,
+        "use": null
+      },
+      "relations": {
+        "depends_on": [
+          "payments.cluster"
+        ],
+        "dependents": [],
+        "ancestors": [
+          "payments.cluster",
+          "vpc"
+        ],
+        "descendants": []
+      }
+    },
+    {
+      "name": "vpc",
+      "declaration": {
+        "file": "<root>/blueprint.hcl",
+        "line": 6,
+        "column": 1
+      },
+      "source": {
+        "declared": "./modules/vpc",
+        "resolved": "modules/vpc"
+      },
+      "group_path": [],
+      "inputs": [
+        {
+          "name": "cidr",
+          "description": "",
+          "declared_type": "string",
+          "required": true,
+          "sensitive": false,
+          "has_default": false,
+          "location": {
+            "file": "<root>/modules/vpc/variables.tf",
+            "line": 1,
+            "column": 1
+          },
+          "source": {
+            "kind": "node_vars",
+            "subject": "node.vpc.vars.cidr",
+            "location": {
+              "file": "<root>/blueprint.hcl",
+              "line": 9,
+              "column": 5
+            },
+            "mapping_path": []
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "vpc_id",
+          "description": "",
+          "declared_type": null,
+          "sensitive": false,
+          "location": {
+            "file": "<root>/modules/vpc/outputs.tf",
+            "line": 1,
+            "column": 1
+          }
+        }
+      ],
+      "runtime": {
+        "binary": "terraform",
+        "name": null,
+        "version": null,
+        "origin": "builtin",
+        "location": null,
+        "definition_location": null,
+        "use": null
+      },
+      "approve": {
+        "effective": "safe",
+        "origin": "builtin",
+        "location": null,
+        "use": null
+      },
+      "relations": {
+        "depends_on": [],
+        "dependents": [
+          "checkout.cluster",
+          "payments.cluster"
+        ],
+        "ancestors": [],
+        "descendants": [
+          "checkout.cluster",
+          "checkout.core.nodegroup",
+          "payments.cluster",
+          "payments.core.nodegroup"
+        ]
+      }
+    }
+  ],
+  "edges": [
+    {
+      "kind": "data",
+      "from": {
+        "node": "checkout.cluster",
+        "port": "cluster_id"
+      },
+      "to": {
+        "node": "checkout.core.nodegroup",
+        "port": "cluster_id"
+      },
+      "declaration": {
+        "file": "<root>/groups/service/group.hcl",
+        "line": 11,
+        "column": 3
+      },
+      "mapping_path": [
+        {
+          "via": "use.core.input.cluster_id",
+          "location": {
+            "file": "<root>/groups/inner/group.hcl",
+            "line": 8,
+            "column": 7
+          }
+        }
+      ]
+    },
+    {
+      "kind": "data",
+      "from": {
+        "node": "payments.cluster",
+        "port": "cluster_id"
+      },
+      "to": {
+        "node": "payments.core.nodegroup",
+        "port": "cluster_id"
+      },
+      "declaration": {
+        "file": "<root>/groups/service/group.hcl",
+        "line": 11,
+        "column": 3
+      },
+      "mapping_path": [
+        {
+          "via": "use.core.input.cluster_id",
+          "location": {
+            "file": "<root>/groups/inner/group.hcl",
+            "line": 8,
+            "column": 7
+          }
+        }
+      ]
+    },
+    {
+      "kind": "data",
+      "from": {
+        "node": "vpc",
+        "port": "vpc_id"
+      },
+      "to": {
+        "node": "checkout.cluster",
+        "port": "vpc_id"
+      },
+      "declaration": {
+        "file": "<root>/blueprint.hcl",
+        "line": 30,
+        "column": 1
+      },
+      "mapping_path": [
+        {
+          "via": "use.checkout.input.vpc_id",
+          "location": {
+            "file": "<root>/groups/service/group.hcl",
+            "line": 18,
+            "column": 7
+          }
+        }
+      ]
+    },
+    {
+      "kind": "data",
+      "from": {
+        "node": "vpc",
+        "port": "vpc_id"
+      },
+      "to": {
+        "node": "payments.cluster",
+        "port": "vpc_id"
+      },
+      "declaration": {
+        "file": "<root>/blueprint.hcl",
+        "line": 35,
+        "column": 1
+      },
+      "mapping_path": [
+        {
+          "via": "use.payments.input.vpc_id",
+          "location": {
+            "file": "<root>/groups/service/group.hcl",
+            "line": 18,
+            "column": 7
+          }
+        }
+      ]
+    }
+  ],
+  "diagnostics": [],
+  "limitations": [
+    "static configuration only; external variable values and live state were not inspected",
+    "graph reachability identifies review candidates, not predicted resource changes",
+    "reported approval policy is configuration, not execution authorization"
+  ]
+}
+
