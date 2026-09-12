@@ -44,6 +44,22 @@ node "db" {
 }
 ```
 
-The selected value returns as a sensitive string (numbers and booleans render as their JSON text; a secret with no selector returns its full text). AWS errors map to safe fault codes — `not_found`, `access_denied`, `throttled` (retryable), `aws_request_failed` (fatal) — without echoing AWS error detail, and the value is never logged. Binary secrets (`SecretBinary`) are unsupported in v1; store the payload as `SecretString` JSON. The `authenticate` action is not implemented yet — it returns an explicit error until the STS credential lease lands in the next change.
+The selected value returns as a sensitive string (numbers and booleans render as their JSON text; a secret with no selector returns its full text). AWS errors map to safe fault codes — `not_found`, `access_denied`, `throttled` (retryable), `aws_request_failed` (fatal) — without echoing AWS error detail, and the value is never logged. Binary secrets (`SecretBinary`) are unsupported in v1; store the payload as `SecretString` JSON.
 
-Both features are declared `read_only`: `GetSecretValue` and STS `AssumeRole` are idempotent reads, so the host may retry them without durable execution records. The plugin never logs secret values or credentials; responses carry only the typed sensitive value or the leased environment map. `--descriptor`, blueprint-time configuration validation, and the `read` resolver work today; the `authenticate` credential lease lands in the next change.
+Lease AWS credentials for a node's own subprocesses with `authenticate`. Its reference accepts `role_arn` (optional; omit to use the chain credentials directly), `profile` (optional shared-config profile), and `session_name` (optional; defaults to `terragraph-secretsmanager` so repeated acquires keep a comparable identity). It returns exactly `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_SESSION_TOKEN` — an absent session token is omitted — so the binding's `environment` allowlist must list those names, and a binding without the allowlist fails validation:
+
+```hcl
+node "db" {
+  source = "./modules/db"
+
+  credential "aws" {
+    from        = plugin.secretsmanager.authenticate
+    ref         = { role_arn = "arn:aws:iam::123456789012:role/terragraph" }
+    environment = ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"]
+  }
+}
+```
+
+The returned `identity` is a non-secret principal ARN (the caller ARN, or the assumed-role ARN when `role_arn` crosses an STS AssumeRole hop); saved-plan verification compares it without recording token bytes. An assumed-role lease carries the STS expiration; the host stops the run at expiry rather than rotating credentials under an already-running subprocess.
+
+Both features are declared `read_only`: `GetSecretValue` and STS `AssumeRole` are idempotent reads, so the host may retry them without durable execution records. The plugin never logs secret values or credentials; responses carry only the typed sensitive value or the leased environment map. A buildable blueprint using both features lives in [`examples/plugins/secrets`](../../examples/plugins/secrets/README.md), and an env-gated end-to-end test (`TG_E2E_AWS=1`, real AWS or localstack via `TG_E2E_ENDPOINT`) ships in this package.
