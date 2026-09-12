@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cloudfluent/terragraph/internal/blueprint"
 	"github.com/cloudfluent/terragraph/internal/exec"
 	"github.com/cloudfluent/terragraph/internal/graph"
 )
@@ -118,6 +119,9 @@ output "id" { value = var.left }`,
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Directory and single-file inputs spell the same DAG in different files and line numbers, so declaration provenance (blueprint.Loc) legitimately differs; strip it before the topology DeepEqual rather than weakening the comparison.
+	stripProvenance(e.Graph)
+	stripProvenance(single.Graph)
 	if !reflect.DeepEqual(e.Graph, single.Graph) {
 		t.Fatal("directory and single-file graphs differ")
 	}
@@ -164,5 +168,21 @@ output "id" { value = var.left }`,
 	})
 	if err != nil || vars["left"] != "west" || vars["right"] != "east" {
 		t.Fatalf("got = %v, %v, want independent group outputs", vars, err)
+	}
+}
+
+// stripProvenance zeroes declaration locations in place; TestLoad_DirectoryBlueprintPreservesNestedGroupDAG compares topology, and two parses of the same DAG from differently-shaped inputs carry different (correct) locations by construction.
+func stripProvenance(g *graph.Graph) {
+	for _, n := range g.Nodes {
+		n.Loc = blueprint.Loc{}
+		n.VarsLocs = nil
+		n.RuntimeLoc = blueprint.Loc{}
+		n.ApproveLoc = blueprint.Loc{}
+		if n.Runtime != nil {
+			n.Runtime.Loc = blueprint.Loc{}
+		}
+	}
+	for i := range g.Edges {
+		g.Edges[i].Loc = blueprint.Loc{}
 	}
 }

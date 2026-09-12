@@ -58,7 +58,7 @@ func parsePluginBlock(block *hcl.Block) (PluginConfig, error) {
 	}
 	if attr := body.Attributes["config"]; attr != nil {
 		var err error
-		p.Config, err = parseVarsAttr(attr)
+		p.Config, _, err = parseVarsAttr(attr)
 		if err != nil {
 			return p, fmt.Errorf("plugin.%s.config: %w", p.Name, err)
 		}

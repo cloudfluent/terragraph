@@ -34,7 +34,7 @@ func parsePluginBindings(blocks []*hcl.Block) (map[string]PluginBinding, map[str
 		if !ok || !ok2 {
 			return nil, nil, fmt.Errorf("%s.%s.from: use plugin.alias.feature", block.Type, block.Labels[0])
 		}
-		ref, err := parseVarsAttr(b.Attributes["ref"])
+		ref, _, err := parseVarsAttr(b.Attributes["ref"])
 		if err != nil {
 			return nil, nil, err
 		}

@@ -65,6 +65,14 @@ func cloneNode(n blueprint.Node) blueprint.Node {
 		}
 		n.Vars = clone
 	}
+	if n.VarsLocs != nil {
+		// Same isolation contract as Vars: graph expansion writes propagated use-var provenance into leaf VarsLocs, so a cached group definition must never hand two instances one shared map.
+		clone := make(map[string]blueprint.Loc, len(n.VarsLocs))
+		for k, v := range n.VarsLocs {
+			clone[k] = v
+		}
+		n.VarsLocs = clone
+	}
 	if n.Env != nil {
 		clone := make(map[string]string, len(n.Env))
 		for k, v := range n.Env {

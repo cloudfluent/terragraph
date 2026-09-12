@@ -52,6 +52,13 @@ func (p PortRef) String() string {
 	return fmt.Sprintf("%s.%s.%s.%s", p.prefix(), p.Node, p.Kind, p.Name)
 }
 
+// Loc pins where a declaration was written; the zero value (File == "") means "no file declaration" (CLI option or built-in default).
+type Loc struct {
+	File   string
+	Line   int
+	Column int
+}
+
 // Node is one independent Terraform/OpenTofu root module participating in the graph. Source is a path relative to the blueprint file.
 //
 // BackendConfig is optional and lets the same Source be reused by multiple nodes (e.g. the same module for both "dev" and "prod") without state collisions: its entries are passed to `terraform init -backend-config=k=v`, Terraform's own partial backend configuration mechanism. The module must declare a backend block; a non-empty BackendConfig with no backend block (or only a cloud block) is a validation Error. If the module declares backend "local" and this map has no path, graph.Build fills path with an absolute file under <blueprint>/.terragraph/state/<node>.tfstate. An explicit path wins. Two leaves that share a module directory and resolve to identical maps (including both empty) are a validation Error.
@@ -72,6 +79,14 @@ type Node struct {
 	Env map[string]string
 	// Approve declares how much of this node's plan may be applied without being asked about, or "" if unset. Set it on the specific node where a destructive plan is routine (a module whose resources are recreated by design), rather than reaching for the CLI flag, which grants the same thing to every node in the graph at once. Like Runtime, an unset value may still inherit from an enclosing Use.Approve or the blueprint's own default; see graph.Node.Approve.
 	Approve Approve
+	// Loc pins this node block's declaration; inspection reports it verbatim instead of guessing from the final (possibly namespace-qualified) name.
+	Loc Loc
+	// VarsLocs carries each vars key's declaration site; nil when vars is absent or spelled as a whole-map expression, since those keys have no per-key declaration to point at.
+	VarsLocs map[string]Loc
+	// RuntimeLoc pins the `runtime = runtime.<name>` attribute's site; zero when the attribute is absent, which is exactly the case that inherits from an enclosing use or the scope default later.
+	RuntimeLoc Loc
+	// ApproveLoc pins the approve attribute's site; zero when absent, mirroring Approve's ""-means-inherit convention.
+	ApproveLoc Loc
 }
 
 // IsRemote reports whether a Node's Source should be vendored rather than resolved as a local path relative to the blueprint. Mirrors Terraform's own module.source rule: anything not starting with "./" or "../" is remote.
@@ -85,6 +100,8 @@ func IsRemote(src string) bool {
 type Edge struct {
 	From PortRef
 	To   PortRef
+	// Loc pins the declaration this edge came from: the edge block itself, or — for an edge parseEdgeInputs expanded from nested input blocks — that input block, which is that connection's actual declaration.
+	Loc Loc
 }
 
 // IsDataEdge reports whether this edge carries a value (explicit) as opposed to only constraining execution order (implicit).
@@ -109,24 +126,42 @@ type Use struct {
 	BackendConfig map[string]string
 	// BackendAddress merges prefix and file-name fields beneath leaf choices; an empty object stops inherited generation.
 	BackendAddress map[string]string
+	// Loc pins this use block's declaration; two uses of one group must stay distinguishable by where each instantiation was written.
+	Loc Loc
+	// VarsLocs carries each vars key's declaration site; nil when vars is absent or spelled as a whole-map expression, since those keys have no per-key declaration to point at.
+	VarsLocs map[string]Loc
+	// RuntimeLoc pins the runtime attribute's site; zero when the attribute is absent (every expanded node then inherits its own resolution path).
+	RuntimeLoc Loc
+	// ApproveLoc pins the approve attribute's site; zero when absent, mirroring Approve's ""-means-inherit convention.
+	ApproveLoc Loc
 }
 
 // ExportInput is one input port a group exposes to the outside. To may list more than one internal target: a single exposed value sometimes needs to fan out to several internal nodes that each independently need it, and, unlike execution ordering (which is inferable from the internal graph's shape), there is no way to infer that fan-out from structure alone, so the group author must declare it explicitly.
 type ExportInput struct {
 	Name string
 	To   []PortRef
+	// Loc pins this input block's declaration inside the group's export.
+	Loc Loc
+	// ToLoc pins the `to` attribute's site: the one to visit when a fan-out mapping names a wrong internal target.
+	ToLoc Loc
 }
 
 // ExportOutput is one output port a group exposes to the outside. Always a 1:1 passthrough of a single internal output: re-exposing an existing value under an external name never needs fan-in.
 type ExportOutput struct {
 	Name string
 	From PortRef
+	// Loc pins this output block's declaration inside the group's export.
+	Loc Loc
+	// FromLoc pins the `from` attribute's site: the one to visit when a passthrough names a wrong internal output.
+	FromLoc Loc
 }
 
 // Export is a group's public interface: the only ports reachable from outside a group instance. Mirrors what a Terraform root module's variables.tf/outputs.tf do for a node, except declared directly in HCL instead of parsed from .tf files. See module.Schema, which an Export gets synthesized into once validated against the group's real internal schemas.
 type Export struct {
 	Inputs  []ExportInput
 	Outputs []ExportOutput
+	// Loc pins the export block's declaration; zero means the group body declared no export at all.
+	Loc Loc
 }
 
 // Group is a reusable sub-blueprint template: a named, self-contained bundle of nodes, edges, and nested group instantiations, with an explicit, encapsulated interface (Export). Instantiated via Use.
@@ -138,6 +173,8 @@ type Group struct {
 	Export Export
 	// Contracts is nil when the group body declares no producer/consumer blocks. Scopes resolve against the group definition file's own directory (the same base the group's internal node sources resolve against), and graph.Build merges them into Graph.Contracts alongside the root blueprint's, so a group can carry the contracts for its own internal modules.
 	Contracts *Contracts
+	// Loc pins this group block's declaration in its defining file; the group's source directory and this range together fully locate the template.
+	Loc Loc
 }
 
 // Default paths used when a blueprint declares no vendor block, or omits one of its fields.
@@ -171,6 +208,8 @@ type Runtime struct {
 	Version string
 	// Default marks this runtime as the blueprint-wide fallback for a node that resolves to no runtime at all (no explicit Node.Runtime, no cascaded Use.Runtime). At most one Runtime in a given parse scope may set this; parsing rejects a second. Only a Default set at the blueprint's own top level is ever consulted this way (see engine.Engine.runtimeFor); one set inside a group's own source directory is validated the same way but never applied automatically, so instantiating that group elsewhere can never silently change its nodes' toolchain out from under the caller.
 	Default bool
+	// Loc pins the runtime block's declaration, so a node's `runtime = runtime.<name>` reference can be traced to the block that defines it in this scope.
+	Loc Loc
 }
 
 // TFVarsConfig customizes where the engine writes per-node ephemeral variable files. Project-wide only, like VendorConfig: a single blueprint uses one location for every node, so a node's resolved inputs are always found the same way regardless of which node you're looking at.
