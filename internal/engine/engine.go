@@ -279,19 +279,9 @@ func (e *Engine) envFor(name string) map[string]string {
 	return e.Graph.Nodes[name].Env
 }
 
-// runtimeFor resolves which binary a node actually runs against, applying each fallback layer in order until one supplies an answer: (1) the node's own resolved blueprint.Runtime, already following the blueprint.Node.Runtime -> enclosing blueprint.Use.Runtime cascade (see graph.Node.Runtime); (2) the top-level blueprint's own Default-marked runtime, if it declared one (deliberately never a group's own default: see blueprint.Runtime.Default); (3) e.Binary, the CLI's --tofu flag or its own built-in terraform default. A CLI flag can only ever fill a gap nothing else spoke to, never override an explicit choice made in the blueprint.
-//
-// A runtime block's `version` is deliberately not consulted. It once fed the incremental-apply cache key; with that cache gone (nothing is trusted without asking Terraform), it records what a node is expected to run against and has no effect on execution. See docs/blueprint.md.
+// runtimeFor is execution's view of the shared runtime ladder (see resolveRuntime, where the fallback order and its rationale live): execution needs only the binary, and the residual layer's cli/builtin distinction cannot change that value — both are e.Binary — so the explicit-flag context inspection requires is inert here.
 func (e *Engine) runtimeFor(name string) exec.Binary {
-	if rt := e.Graph.Nodes[name].Runtime; rt != nil {
-		return exec.Binary(rt.Binary)
-	}
-	if e.Blueprint != nil {
-		if rt, ok := e.Blueprint.DefaultRuntime(); ok {
-			return exec.Binary(rt.Binary)
-		}
-	}
-	return e.Binary
+	return e.resolveRuntime(name, false).Binary
 }
 
 // runtimeConflicts warns about two or more nodes that share a module directory (see Node.BackendConfig, the mechanism for reusing one Source across instances) but resolve to different binaries. They also share that directory's single .terraform.lock.hcl, and Terraform/OpenTofu each rewrite it to their own registry host on every init (registry.terraform.io vs registry.opentofu.org), so whichever node happened to init last wins the file underneath the other and every run rewrites what the previous one wrote. Nothing else in the model can trigger this: every node's own .terraform/ metadata is already isolated per node (see dataDir), so this is specific to the shared-Source pattern.

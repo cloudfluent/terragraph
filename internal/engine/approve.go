@@ -9,17 +9,9 @@ import (
 	"github.com/cloudfluent/terragraph/internal/exec"
 )
 
-// approveFor resolves how much of a node's plan may be applied, following the same layering `runtime` and `env` already use (see runtimeFor): the node's own declaration wins, then whatever an enclosing `use` cascaded to it, then the run-wide default from --approve, then ApproveSafe.
-//
-// The CLI can therefore only fill a gap nothing else spoke to. --approve=all does not override a node that declared `approve = "safe"`; that is the safe direction, and it is the same rule the blueprint already relies on for runtime.
+// approveFor is execution's view of the shared approve ladder (see resolveApprove, where the layering rationale lives): the run-wide --approve default is exactly the CLI layer, so a non-empty runDefault is "explicit" and everything else falls to the built-in safe.
 func (e *Engine) approveFor(name string, runDefault blueprint.Approve) blueprint.Approve {
-	if a := e.Graph.Nodes[name].Approve; a != "" {
-		return a
-	}
-	if runDefault != "" {
-		return runDefault
-	}
-	return blueprint.ApproveSafe
+	return e.resolveApprove(name, runDefault != "", runDefault).Policy
 }
 
 // summarizeChanges renders a plan the way Terraform counts one, so a forty-node run can be read at a glance instead of as forty walls of subcommand output. A replacement counts once on each side, as Terraform's own summary line does.
