@@ -100,6 +100,27 @@ Keys are **export input names**, not internal node paths. As with [`node.vars`](
 
 The value reaches every leaf named by the export, including through nested groups. An unknown export name is an error. A leaf input already set by a data edge, internal `node.vars`, or another `use.vars` is also an error; instance vars do not override existing values. They fill the exported inputs rather than applying to every node automatically.
 
+## Declaration tracing
+
+`terragraph graph --detail` reports where each supply was declared and the path it traveled, so changing an instance's input means editing a reported location instead of reconstructing the expansion. For the `checkout.cluster` leaf of the example above, the `cluster_name` input prints:
+
+```text
+cluster_name: string, required
+  supplied by: use.checkout.vars.cluster_name
+  via: use.checkout.input.cluster_name
+  declared at: blueprint.hcl:9:5
+```
+
+- `supplied by` is the declaring subject: the `use.vars` key, named as written at its own declaration site.
+- `via` is the mapping path, one line per export hop, in order from the original declaration to the final leaf. `use.checkout.input.cluster_name` is the exported input in `groups/eks-service/group.hcl` that carried the value onto `node.cluster.input.cluster_name`; nested groups add one hop per level, and a fan-out export stays explainable at each leaf it reaches.
+- `declared at` is the exact file:line:column of the `vars` key — the line to edit.
+
+Edges report the same vocabulary: the `vpc_id` connection prints `edge: node.vpc.output.vpc_id` with `via: use.checkout.input.vpc_id`, the export hop it traversed. `--output json` carries the same information as structured fields (`subject`, `mapping_path` with per-hop locations, `location`).
+
+Because the example instantiates `eks-service` twice, each instance reports its own declaration: `payments.cluster` prints `supplied by: use.payments.vars.cluster_name` with the `payments` use block's own location. One group file backs both instances, but the reports never mix them up — the original declaration, not the final expanded name, carries the location.
+
+Each inspected leaf also reports its group instance path, outermost first: the instance name, the group name, the `use` block's location, and the `group` block's location. Nested groups stack one step per level. See [detailed graph inspection](execution-model.md#detailed-graph-inspection) for everything else the report carries.
+
 ## Isolating state for an instance
 
 For local state, the group's modules can declare `backend "local" {}`. When no explicit `backend_config.path` is set, terragraph supplies a unique default-workspace path per qualified leaf, such as `.terragraph/state/checkout.cluster.tfstate` and `.terragraph/state/payments.cluster.tfstate`, under the root blueprint directory. See [module reuse](blueprint.md#reusing-the-same-module-across-instances) for explicit paths, workspaces, and migration considerations.

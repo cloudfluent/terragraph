@@ -17,7 +17,7 @@ Graph-based orchestration for independent Terraform/OpenTofu root modules
 * [terragraph apply](terragraph_apply.md)	 - Run terraform/tofu apply across the graph in dependency order, wiring outputs to inputs
 * [terragraph destroy](terragraph_destroy.md)	 - Run terraform/tofu destroy across the graph in reverse dependency order
 * [terragraph force-unlock](terragraph_force-unlock.md)	 - Release a leftover graph lock object left by an interrupted run
-* [terragraph graph](terragraph_graph.md)	 - Print the resolved execution levels or a Graphviz DOT rendering
+* [terragraph graph](terragraph_graph.md)	 - Print the resolved execution levels, a Graphviz DOT rendering, or detailed node inspection
 * [terragraph language-server](terragraph_language-server.md)	 - Run the Blueprint language server over standard input/output
 * [terragraph output](terragraph_output.md)	 - Observe current node output with isolated runtime context
 * [terragraph plan](terragraph_plan.md)	 - Review node plans, actions, approval policy, and evidence limitations
