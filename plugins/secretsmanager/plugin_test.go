@@ -7,10 +7,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	sdk "github.com/cloudfluent/terragraph/plugin"
 )
@@ -426,13 +429,305 @@ func TestHandler_ReadValueNeverLeaks(t *testing.T) {
 	}
 }
 
-func TestHandler_AuthenticateNotImplemented(t *testing.T) {
-	handler := Handler()
-	_, err := handler(context.Background(), sdk.Request{Action: "authenticate"})
-	if err == nil {
-		t.Fatalf("authenticate error = nil, want not-implemented error instead of fake success")
+// stsRequest captures one signed STS call so tests assert wire-level facts: which action ran, what session name it carried, and which access key signed it.
+type stsRequest struct {
+	action string
+	query  url.Values
+	auth   string
+}
+
+// stsRecorder captures requests under a mutex because the server handler runs on another goroutine and the suite runs with -race.
+type stsRecorder struct {
+	mu       sync.Mutex
+	requests []stsRequest
+}
+
+func (r *stsRecorder) add(req stsRequest) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.requests = append(r.requests, req)
+}
+
+func (r *stsRecorder) snapshot(t *testing.T) []stsRequest {
+	t.Helper()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]stsRequest(nil), r.requests...)
+}
+
+// fakeSTS answers query-protocol STS calls with the test's canned XML keyed by action; authenticate crosses exactly this server via configure's endpoint.
+func fakeSTS(t *testing.T, respond func(action string) (int, string)) (string, *stsRecorder) {
+	t.Helper()
+	recorder := &stsRecorder{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		query, err := url.ParseQuery(string(raw))
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		recorder.add(stsRequest{action: query.Get("Action"), query: query, auth: r.Header.Get("Authorization")})
+		status, payload := respond(query.Get("Action"))
+		w.Header().Set("Content-Type", "text/xml")
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(payload))
+	}))
+	t.Cleanup(server.Close)
+	return server.URL, recorder
+}
+
+// authenticateInput mirrors the host wire shape: the lifecycle sends action acquire with the HCL reference map for credential providers.
+func authenticateInput(handler sdk.Handler, reference map[string]any) (sdk.Response, error) {
+	return handler(context.Background(), sdk.Request{Action: "acquire", Feature: "authenticate", Reference: reference})
+}
+
+// credentialNames asserts the exact environment vocabulary because the host rejects any returned name outside the binding's declared allowlist.
+func credentialNames(t *testing.T, env map[string]string, want ...string) {
+	t.Helper()
+	if len(env) != len(want) {
+		t.Fatalf("credential env names = %v, want exactly %v", env, want)
 	}
-	if !strings.Contains(err.Error(), "not implemented") {
-		t.Fatalf("got = %v, want error saying authenticate is not implemented", err)
+	for _, name := range want {
+		if _, ok := env[name]; !ok {
+			t.Fatalf("credential env names = %v, want exactly %v", env, want)
+		}
+	}
+}
+
+const (
+	callerArn          = "arn:aws:iam::123456789012:user/rokhun"
+	assumedRoleArn     = "arn:aws:sts::123456789012:assumed-role/deploy/terragraph-secretsmanager"
+	roleArn            = "arn:aws:iam::123456789012:role/deploy"
+	accessKeyCanary    = "ASIA-canary-access-5e1c"
+	secretKeyCanary    = "canary-secret-key-4a7e"
+	sessionTokenCanary = "canary-session-token-8d2f"
+)
+
+// callerIdentityXML pins one principal ARN so stability assertions compare a real canned string, not a re-derived one.
+const callerIdentityXML = `<GetCallerIdentityResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/"><GetCallerIdentityResult><Arn>` + callerArn + `</Arn><UserId>AIDACK1234567890EXAMPLE</UserId><Account>123456789012</Account></GetCallerIdentityResult></GetCallerIdentityResponse>`
+
+// assumeRoleXML renders the STS AssumeRole result with canary credentials because the leak test needs known strings in the secret positions.
+func assumeRoleXML(t *testing.T, expiration time.Time) string {
+	t.Helper()
+	return fmt.Sprintf(`<AssumeRoleResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/"><AssumeRoleResult><AssumedRoleUser><Arn>%s</Arn><AssumedRoleId>AROACK1234567890EXAMPLE:terragraph-secretsmanager</AssumedRoleId></AssumedRoleUser><Credentials><AccessKeyId>%s</AccessKeyId><SecretAccessKey>%s</SecretAccessKey><SessionToken>%s</SessionToken><Expiration>%s</Expiration></Credentials></AssumeRoleResult></AssumeRoleResponse>`, assumedRoleArn, accessKeyCanary, secretKeyCanary, sessionTokenCanary, expiration.Format(time.RFC3339))
+}
+
+// throttledXML is the query-protocol error shape; the Code element is what smithy lifts into ErrorCode.
+const throttledXML = `<ErrorResponse><Error><Type>Sender</Type><Code>ThrottlingException</Code><Message>Rate exceeded</Message></Error></ErrorResponse>`
+
+func TestHandler_AuthenticateStaticCredentials(t *testing.T) {
+	stubAWSEnv(t)
+	url, _ := fakeSTS(t, func(action string) (int, string) { return http.StatusOK, callerIdentityXML })
+	handler := configuredHandler(t, url)
+	response, err := authenticateInput(handler, map[string]any{})
+	if err != nil {
+		t.Fatalf("authenticate error = %v, want nil", err)
+	}
+	if response.Identity != callerArn {
+		t.Fatalf("identity = %q, want the GetCallerIdentity ARN %q", response.Identity, callerArn)
+	}
+	credentialNames(t, response.Credentials, "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN")
+	if response.Credentials["AWS_ACCESS_KEY_ID"] != "testing" || response.Credentials["AWS_SECRET_ACCESS_KEY"] != "testing" || response.Credentials["AWS_SESSION_TOKEN"] != "testing" {
+		t.Fatalf("credentials = %v, want the stubbed static chain values", response.Credentials)
+	}
+	if response.Lease != nil {
+		t.Fatalf("lease = %+v, want none: static chain credentials do not expire inside one run", response.Lease)
+	}
+}
+
+func TestHandler_AuthenticateAcceptsAuthenticateAlias(t *testing.T) {
+	stubAWSEnv(t)
+	url, _ := fakeSTS(t, func(action string) (int, string) { return http.StatusOK, callerIdentityXML })
+	handler := configuredHandler(t, url)
+	response, err := handler(context.Background(), sdk.Request{Action: "authenticate", Feature: "authenticate", Reference: map[string]any{}})
+	if err != nil {
+		t.Fatalf("authenticate alias error = %v, want nil", err)
+	}
+	if response.Identity != callerArn {
+		t.Fatalf("identity = %q, want %q", response.Identity, callerArn)
+	}
+}
+
+func TestHandler_AuthenticateOmitsAbsentSessionToken(t *testing.T) {
+	stubAWSEnv(t)
+	t.Setenv("AWS_SESSION_TOKEN", "")
+	url, _ := fakeSTS(t, func(action string) (int, string) { return http.StatusOK, callerIdentityXML })
+	handler := configuredHandler(t, url)
+	response, err := authenticateInput(handler, map[string]any{})
+	if err != nil {
+		t.Fatalf("authenticate error = %v, want nil", err)
+	}
+	credentialNames(t, response.Credentials, "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY")
+}
+
+func TestHandler_AuthenticateAssumeRole(t *testing.T) {
+	stubAWSEnv(t)
+	// STS exchanges the expiration as xsd:dateTime, whole seconds only, so the canned value must not carry nanoseconds the wire cannot round-trip.
+	expiration := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
+	url, recorder := fakeSTS(t, func(action string) (int, string) {
+		if action == "AssumeRole" {
+			return http.StatusOK, assumeRoleXML(t, expiration)
+		}
+		return http.StatusOK, callerIdentityXML
+	})
+	handler := configuredHandler(t, url)
+	response, err := authenticateInput(handler, map[string]any{"role_arn": roleArn})
+	if err != nil {
+		t.Fatalf("authenticate error = %v, want nil", err)
+	}
+	if response.Identity != assumedRoleArn {
+		t.Fatalf("identity = %q, want the assumed-role ARN %q", response.Identity, assumedRoleArn)
+	}
+	credentialNames(t, response.Credentials, "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN")
+	if response.Credentials["AWS_ACCESS_KEY_ID"] != accessKeyCanary || response.Credentials["AWS_SECRET_ACCESS_KEY"] != secretKeyCanary || response.Credentials["AWS_SESSION_TOKEN"] != sessionTokenCanary {
+		t.Fatalf("credentials = %v, want the canned AssumeRole values", response.Credentials)
+	}
+	if response.Lease == nil || response.Lease.ID != assumedRoleArn || !response.Lease.ExpiresAt.Equal(expiration) {
+		t.Fatalf("lease = %+v, want ID %q expiring at %s", response.Lease, assumedRoleArn, expiration)
+	}
+	if !response.Lease.RenewAt.IsZero() {
+		t.Fatalf("lease RenewAt = %v, want zero: v1 cannot rotate credentials under a running subprocess", response.Lease.RenewAt)
+	}
+	for _, request := range recorder.snapshot(t) {
+		if request.action == "GetCallerIdentity" {
+			t.Fatalf("assume path issued %s; identity must come from the AssumeRole result itself", request.action)
+		}
+	}
+}
+
+func TestHandler_AuthenticateSessionNameReachesWire(t *testing.T) {
+	stubAWSEnv(t)
+	url, recorder := fakeSTS(t, func(action string) (int, string) {
+		return http.StatusOK, assumeRoleXML(t, time.Now().Add(time.Hour))
+	})
+	handler := configuredHandler(t, url)
+	_, err := authenticateInput(handler, map[string]any{"role_arn": roleArn, "session_name": "deploy-session"})
+	if err != nil {
+		t.Fatalf("authenticate error = %v, want nil", err)
+	}
+	requests := recorder.snapshot(t)
+	if len(requests) == 0 {
+		t.Fatalf("fake STS received no requests")
+	}
+	if got := requests[len(requests)-1].query.Get("RoleSessionName"); got != "deploy-session" {
+		t.Fatalf("RoleSessionName = %q, want the requested session name deploy-session", got)
+	}
+}
+
+func TestHandler_AuthenticateUsesSharedProfile(t *testing.T) {
+	stubAWSEnv(t)
+	t.Setenv("AWS_ACCESS_KEY_ID", "")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
+	t.Setenv("AWS_SESSION_TOKEN", "")
+	credentialsFile := filepath.Join(t.TempDir(), "credentials")
+	profile := "[staging]\naws_access_key_id = AKIDPROFILESTAGING\naws_secret_access_key = profile-secret\n"
+	if err := os.WriteFile(credentialsFile, []byte(profile), 0o600); err != nil {
+		t.Fatalf("writing shared credentials file: %v", err)
+	}
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", credentialsFile)
+	t.Setenv("AWS_CONFIG_FILE", credentialsFile)
+	url, recorder := fakeSTS(t, func(action string) (int, string) { return http.StatusOK, callerIdentityXML })
+	handler := configuredHandler(t, url)
+	response, err := authenticateInput(handler, map[string]any{"profile": "staging"})
+	if err != nil {
+		t.Fatalf("authenticate error = %v, want nil", err)
+	}
+	if response.Identity != callerArn {
+		t.Fatalf("identity = %q, want %q", response.Identity, callerArn)
+	}
+	requests := recorder.snapshot(t)
+	if len(requests) == 0 {
+		t.Fatalf("fake STS received no requests")
+	}
+	if !strings.Contains(requests[len(requests)-1].auth, "Credential=AKIDPROFILESTAGING/") {
+		t.Fatalf("request signed with %q, want the shared profile access key AKIDPROFILESTAGING", requests[len(requests)-1].auth)
+	}
+}
+
+func TestHandler_AuthenticateIdentityStable(t *testing.T) {
+	stubAWSEnv(t)
+	url, _ := fakeSTS(t, func(action string) (int, string) { return http.StatusOK, callerIdentityXML })
+	handler := configuredHandler(t, url)
+	first, err := authenticateInput(handler, map[string]any{})
+	if err != nil {
+		t.Fatalf("first authenticate error = %v, want nil", err)
+	}
+	second, err := authenticateInput(handler, map[string]any{})
+	if err != nil {
+		t.Fatalf("second authenticate error = %v, want nil", err)
+	}
+	if first.Identity == "" || first.Identity != second.Identity {
+		t.Fatalf("identity drifted between acquires: %q vs %q, want one stable non-empty string", first.Identity, second.Identity)
+	}
+}
+
+func TestHandler_AuthenticateRequiresConfiguredRegion(t *testing.T) {
+	stubAWSEnv(t)
+	handler := Handler()
+	_, err := authenticateInput(handler, map[string]any{})
+	if err == nil {
+		t.Fatalf("authenticate error = nil, want unconfigured region rejection")
+	}
+	if !strings.Contains(err.Error(), "region") || !strings.Contains(err.Error(), "configure") {
+		t.Fatalf("got = %v, want error naming the region configure remedy", err)
+	}
+}
+
+func TestHandler_AuthenticateRejectsUnknownRefKey(t *testing.T) {
+	stubAWSEnv(t)
+	handler := configuredHandler(t, "")
+	_, err := authenticateInput(handler, map[string]any{"role": roleArn})
+	if err == nil {
+		t.Fatalf("authenticate error = nil, want unknown key rejection")
+	}
+	if !strings.Contains(err.Error(), "role") || !strings.Contains(err.Error(), acceptedAuthKeys) {
+		t.Fatalf("got = %v, want error naming the unknown key and %s", err, acceptedAuthKeys)
+	}
+}
+
+func TestHandler_AuthenticateThrottledMapsRetryable(t *testing.T) {
+	stubAWSEnv(t)
+	url, _ := fakeSTS(t, func(action string) (int, string) { return http.StatusBadRequest, throttledXML })
+	handler := configuredHandler(t, url)
+	response, err := authenticateInput(handler, map[string]any{})
+	if err != nil {
+		t.Fatalf("authenticate error = %v, want nil: faults travel in the response", err)
+	}
+	if response.Fault == nil || response.Fault.Code != "throttled" || !response.Fault.Retryable || response.Fault.Fatal {
+		t.Fatalf("fault = %+v, want code throttled, retryable, non-fatal", response.Fault)
+	}
+}
+
+func TestHandler_AuthenticateReleaseIsAccepted(t *testing.T) {
+	handler := Handler()
+	_, err := handler(context.Background(), sdk.Request{Action: "release", Feature: "authenticate", Lease: &sdk.Lease{ID: assumedRoleArn, ExpiresAt: time.Now().Add(time.Hour)}})
+	if err != nil {
+		t.Fatalf("release error = %v, want nil: the host releases every lease at runtime close", err)
+	}
+}
+
+// TestHandler_AuthenticateSecretsNeverLeak asserts the secret key and session token exist only inside the typed credentials map: nowhere else in the serialized response.
+func TestHandler_AuthenticateSecretsNeverLeak(t *testing.T) {
+	stubAWSEnv(t)
+	url, _ := fakeSTS(t, func(action string) (int, string) {
+		return http.StatusOK, assumeRoleXML(t, time.Now().Add(time.Hour))
+	})
+	handler := configuredHandler(t, url)
+	response, err := authenticateInput(handler, map[string]any{"role_arn": roleArn})
+	if err != nil {
+		t.Fatalf("authenticate error = %v, want nil", err)
+	}
+	serialized, err := json.Marshal(response)
+	if err != nil {
+		t.Fatalf("marshaling response: %v", err)
+	}
+	total := strings.Count(string(serialized), secretKeyCanary) + strings.Count(string(serialized), sessionTokenCanary)
+	inside := strings.Count(response.Credentials["AWS_SECRET_ACCESS_KEY"], secretKeyCanary) + strings.Count(response.Credentials["AWS_SESSION_TOKEN"], sessionTokenCanary)
+	if total != inside || inside != 2 {
+		t.Fatalf("canaries appear %d times in response (%d inside credentials), want exactly once each inside the typed map: %s", total, inside, serialized)
 	}
 }

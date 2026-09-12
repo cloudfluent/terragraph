@@ -31,8 +31,12 @@ func Handler() sdk.Handler {
 		case "read", "resolve":
 			// resolve is the action the host lifecycle actually sends for input resolvers; read stays as the direct-call alias.
 			return h.resolve(ctx, request.Reference)
-		case "authenticate":
-			return sdk.Response{}, fmt.Errorf("secretsmanager authenticate is not implemented yet; the STS credential lease lands in the next change")
+		case "authenticate", "acquire":
+			// acquire is the action the host lifecycle actually sends for credential providers; authenticate stays as the direct-call alias.
+			return h.authenticate(ctx, request.Reference)
+		case "release":
+			// The host releases every non-nil lease at runtime close; assumed-role sessions need no server-side teardown.
+			return sdk.Response{}, nil
 		default:
 			return sdk.Response{}, fmt.Errorf("unsupported secretsmanager action %q; use configure, read, or authenticate", request.Action)
 		}
