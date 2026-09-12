@@ -214,6 +214,7 @@ func TestInspect_OpenTofuDeclarationLocationsUseSelectedFile(t *testing.T) {
 		t.Fatal("OpenTofu v has_default = false, want the .tofu declaration's default")
 	}
 	if got, want := tofu.OutputDetails["id"].Loc, (Loc{File: "main.tofu", Line: 6, Column: 1}); got != want {
+		t.Fatalf("OpenTofu id output Loc = %+v, want %+v", got, want)
 	}
 
 	terraform, err := Inspect(dir, TerraformFiles)

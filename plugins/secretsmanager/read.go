@@ -150,16 +150,18 @@ func selectProperty(secret string, ref secretRef) (string, error) {
 		return secret, nil
 	}
 	doc := json.RawMessage(secret)
-	node := doc
+	var node json.RawMessage
 	if ref.field != "" {
 		selected, err := topLevelKey(doc, ref.field)
 		if err != nil {
 			return "", err
 		}
 		node = selected
-	} else if selected, err := resolvePointer(doc, ref.jsonPointer); err != nil {
-		return "", err
 	} else {
+		selected, err := resolvePointer(doc, ref.jsonPointer)
+		if err != nil {
+			return "", err
+		}
 		node = selected
 	}
 	return render(node), nil
