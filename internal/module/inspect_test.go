@@ -153,3 +153,121 @@ output "id" { value = "x" }
 		})
 	}
 }
+
+func TestInspect_DeclarationLocationsAndDefaultPresence(t *testing.T) {
+	dir := t.TempDir()
+	writeInspectionFile(t, dir, "variables.tf", "variable \"region\" {\n  type = string\n}\nvariable \"instance_count\" {\n  type    = number\n  default = 2\n}\nvariable \"untyped\" {\n}\n")
+	writeInspectionFile(t, dir, "outputs.tf", "output \"id\" {\n  value = 1\n}\noutput \"sensitive_id\" {\n  value     = 1\n  sensitive = true\n}\n")
+
+	schema, err := Inspect(dir)
+	if err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+
+	region := schema.Variables["region"]
+	if got, want := region.Loc, (Loc{File: "variables.tf", Line: 1, Column: 1}); got != want {
+		t.Fatalf("region Loc = %+v, want %+v", got, want)
+	}
+	if region.HasDefault || !region.Required {
+		t.Fatalf("region has_default = %t, required = %t; want no default and required", region.HasDefault, region.Required)
+	}
+
+	count := schema.Variables["instance_count"]
+	if got, want := count.Loc, (Loc{File: "variables.tf", Line: 4, Column: 1}); got != want {
+		t.Fatalf("instance_count Loc = %+v, want %+v", got, want)
+	}
+	if !count.HasDefault || count.Required {
+		t.Fatalf("instance_count has_default = %t, required = %t; want default present and not required", count.HasDefault, count.Required)
+	}
+
+	// An untyped variable stays a successful inspection with an empty type, never a module-read failure.
+	untyped := schema.Variables["untyped"]
+	if got, want := untyped.Loc, (Loc{File: "variables.tf", Line: 8, Column: 1}); got != want {
+		t.Fatalf("untyped Loc = %+v, want %+v", got, want)
+	}
+	if untyped.Type != "" || untyped.HasDefault {
+		t.Fatalf("untyped variable = %+v; want empty type without a default", untyped)
+	}
+
+	if got, want := schema.OutputDetails["id"].Loc, (Loc{File: "outputs.tf", Line: 1, Column: 1}); got != want {
+		t.Fatalf("id Loc = %+v, want %+v", got, want)
+	}
+	if got, want := schema.OutputDetails["sensitive_id"].Loc, (Loc{File: "outputs.tf", Line: 4, Column: 1}); got != want {
+		t.Fatalf("sensitive_id Loc = %+v, want %+v", got, want)
+	}
+}
+
+func TestInspect_OpenTofuDeclarationLocationsUseSelectedFile(t *testing.T) {
+	dir := t.TempDir()
+	writeInspectionFile(t, dir, "main.tf", "variable \"v\" {\n  type = string\n}\noutput \"id\" {\n  value = 1\n}\n")
+	writeInspectionFile(t, dir, "main.tofu", "\nvariable \"v\" {\n  type    = string\n  default = \"tofu\"\n}\noutput \"id\" {\n  value = 1\n}\n")
+
+	tofu, err := Inspect(dir, OpenTofuFiles)
+	if err != nil {
+		t.Fatalf("Inspect(OpenTofuFiles): %v", err)
+	}
+	v := tofu.Variables["v"]
+	if got, want := v.Loc, (Loc{File: "main.tofu", Line: 2, Column: 1}); got != want {
+		t.Fatalf("OpenTofu v Loc = %+v, want %+v", got, want)
+	}
+	if !v.HasDefault {
+		t.Fatal("OpenTofu v has_default = false, want the .tofu declaration's default")
+	}
+	if got, want := tofu.OutputDetails["id"].Loc, (Loc{File: "main.tofu", Line: 6, Column: 1}); got != want {
+	}
+
+	terraform, err := Inspect(dir, TerraformFiles)
+	if err != nil {
+		t.Fatalf("Inspect(TerraformFiles): %v", err)
+	}
+	v = terraform.Variables["v"]
+	if got, want := v.Loc, (Loc{File: "main.tf", Line: 1, Column: 1}); got != want {
+		t.Fatalf("Terraform v Loc = %+v, want %+v", got, want)
+	}
+	if v.HasDefault || !v.Required {
+		t.Fatalf("Terraform v has_default = %t, required = %t; want the .tf declaration without a default", v.HasDefault, v.Required)
+	}
+}
+
+func TestInspect_OverrideKeepsBaseDeclarationLocation(t *testing.T) {
+	dir := t.TempDir()
+	writeInspectionFile(t, dir, "main.tf", "variable \"region\" {\n  type = string\n}\noutput \"id\" {\n  value = 1\n}\n")
+	writeInspectionFile(t, dir, "override.tf", "variable \"region\" {\n  default = \"eu-central-1\"\n}\nvariable \"extra\" {\n  type = string\n}\n")
+
+	schema, err := Inspect(dir, TerraformFiles)
+	if err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+
+	region := schema.Variables["region"]
+	if got, want := region.Loc, (Loc{File: "main.tf", Line: 1, Column: 1}); got != want {
+		t.Fatalf("region Loc = %+v, want the base declaration in main.tf: %+v", got, want)
+	}
+	if !region.HasDefault || region.Required {
+		t.Fatalf("region has_default = %t, required = %t; want sparse override default merged in", region.HasDefault, region.Required)
+	}
+
+	extra := schema.Variables["extra"]
+	if got, want := extra.Loc, (Loc{File: "override.tf", Line: 4, Column: 1}); got != want {
+		t.Fatalf("override-only extra Loc = %+v, want %+v", got, want)
+	}
+
+	if got, want := schema.OutputDetails["id"].Loc, (Loc{File: "main.tf", Line: 4, Column: 1}); got != want {
+		t.Fatalf("id Loc = %+v, want %+v", got, want)
+	}
+}
+
+func TestInspect_UnknownRuntimeIgnoresLocationDifferences(t *testing.T) {
+	dir := t.TempDir()
+	writeInspectionFile(t, dir, "main.tf", "variable \"v\" {\n  type = string\n}\noutput \"id\" {\n  value = 1\n}\n")
+	writeInspectionFile(t, dir, "main.tofu", "\n\nvariable \"v\" {\n  type = string\n}\noutput \"id\" {\n  value = 1\n}\n")
+	if _, err := Inspect(dir, UnknownFiles); err != nil {
+		t.Fatalf("equivalent declarations at different locations must stay equivalent: %v", err)
+	}
+}
+
+func TestInspect_MissingModuleStillFails(t *testing.T) {
+	if _, err := Inspect(filepath.Join(t.TempDir(), "missing")); err == nil {
+		t.Fatal("Inspect on a missing module directory must fail")
+	}
+}

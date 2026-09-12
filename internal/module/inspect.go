@@ -4,6 +4,7 @@ package module
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 
@@ -16,6 +17,13 @@ import (
 	ctyjson "github.com/zclconf/go-cty/cty/json"
 )
 
+// Loc pins where a port block was declared in the module's selected configuration files; File is the bare filename (e.g. "variables.tofu") that callers join with the module directory they already know, so inspect-time machine paths never leak into downstream output.
+type Loc struct {
+	File   string
+	Line   int
+	Column int
+}
+
 // Variable is one declared input variable of a root module.
 type Variable struct {
 	Name string
@@ -26,10 +34,14 @@ type Variable struct {
 	Deprecated  string
 	// Required is true when the variable has no default value.
 	Required bool
+	// HasDefault reports that a default attribute is declared; it stays explicit beside Required so inspection can state presence without ever reading the value.
+	HasDefault bool
 	// Nullable preserves the runtime default (true) for declarations and legacy in-memory schemas.
 	Nullable *bool
 	// Default retains the chosen literal after override selection; NilVal means no usable evidence.
-	Default   cty.Value
+	Default cty.Value
+	// Loc is the variable block's declaration site; the zero value means no location was established from the selected files.
+	Loc       Loc
 	Ephemeral bool
 	Const     bool
 }
@@ -40,6 +52,8 @@ type Output struct {
 	Description string
 	Sensitive   bool
 	Deprecated  string
+	// Loc is the output block's declaration site; the zero value means no location was established from the selected files.
+	Loc Loc
 }
 
 // Schema is the subset of a root module's shape that terragraph cares about: its declared input variables (with type/required metadata), the names of its output values, and the backend type if any. OutputDetails retains optional output type declarations for runtimes that support them.
@@ -77,7 +91,7 @@ func Inspect(dir string, modes ...FileMode) (*Schema, error) {
 			return nil, err
 		}
 		tofu.RequiresTofuFiles = false
-		if !reflect.DeepEqual(terraform, tofu) {
+		if !reflect.DeepEqual(withoutLocations(terraform), withoutLocations(tofu)) {
 			return nil, fmt.Errorf("inspecting module at %s: runtime binary is ambiguous and Terraform/OpenTofu declarations differ; use the canonical binary \"terraform\" or \"tofu\" on PATH, or make both declarations agree", dir)
 		}
 		return terraform, nil
@@ -113,6 +127,7 @@ func Inspect(dir string, modes ...FileMode) (*Schema, error) {
 			Sensitive:   v.Sensitive,
 			Deprecated:  v.Deprecated,
 			Required:    v.Required,
+			HasDefault:  !v.Required,
 		}
 	}
 	for name, output := range mod.Outputs {
@@ -130,13 +145,14 @@ var terraformBackendSchema = &hcl.BodySchema{
 	},
 }
 
-// inspectDeclarations shares the runtime-selected file list so defaults, sensitivity and backend checks cannot disagree with the inspected ports.
+// inspectDeclarations shares the runtime-selected file list so defaults, sensitivity, backend checks and declaration locations cannot disagree with the inspected ports.
 func inspectDeclarations(schema *Schema, files []moduleFile) {
 	schema.BackendConfigKnown = true
 	schema.comparison = make(map[string]map[string]string)
 	parser := hclparse.NewParser()
 	cloud := false
 	ports := map[string]hcl.Attributes{}
+	locs := map[string]Loc{}
 	for _, selected := range files {
 		src, err := os.ReadFile(selected.physical)
 		if err != nil {
@@ -159,6 +175,8 @@ func inspectDeclarations(schema *Schema, files []moduleFile) {
 				key := block.Type + "." + block.Labels[0]
 				if !selected.override || ports[key] == nil {
 					ports[key] = hcl.Attributes{}
+					// The base declaration owns the location: a sparse override layers attributes onto it without moving where the port was declared.
+					locs[key] = Loc{File: filepath.Base(selected.physical), Line: block.DefRange.Start.Line, Column: block.DefRange.Start.Column}
 				}
 				for name, attr := range content.Attributes {
 					ports[key][name] = attr
@@ -213,7 +231,7 @@ func inspectDeclarations(schema *Schema, files []moduleFile) {
 			}
 		}
 	}
-	applyPortMetadata(schema, ports, parser.Sources())
+	applyPortMetadata(schema, ports, locs, parser.Sources())
 	if schema.Backend == "" && cloud {
 		schema.Backend = "cloud"
 	}
@@ -222,7 +240,7 @@ func inspectDeclarations(schema *Schema, files []moduleFile) {
 var portMetadataSchema = &hcl.BodySchema{Attributes: []hcl.AttributeSchema{{Name: "type"}, {Name: "description"}, {Name: "sensitive"}, {Name: "deprecated"}, {Name: "default"}, {Name: "nullable"}, {Name: "ephemeral"}, {Name: "const"}}}
 
 // applyPortMetadata retains omitted attributes in sparse override files, which tfconfig otherwise replaces with zero values, including sensitive=false.
-func applyPortMetadata(schema *Schema, ports map[string]hcl.Attributes, sources map[string][]byte) {
+func applyPortMetadata(schema *Schema, ports map[string]hcl.Attributes, locs map[string]Loc, sources map[string][]byte) {
 	for key, attrs := range ports {
 		text := func(name string) string {
 			attr := attrs[name]
@@ -242,7 +260,7 @@ func applyPortMetadata(schema *Schema, ports map[string]hcl.Attributes, sources 
 		}
 		kind, name, _ := strings.Cut(key, ".")
 		if kind == "variable" {
-			v := Variable{Name: name, Type: text("type"), Description: text("description"), Sensitive: sensitive, Deprecated: text("deprecated"), Required: attrs["default"] == nil}
+			v := Variable{Name: name, Type: text("type"), Description: text("description"), Sensitive: sensitive, Deprecated: text("deprecated"), Required: attrs["default"] == nil, HasDefault: attrs["default"] != nil, Loc: locs[key]}
 			nullable := true
 			if attr := attrs["nullable"]; attr != nil {
 				_ = gohcl.DecodeExpression(attr.Expr, nil, &nullable)
@@ -265,9 +283,27 @@ func applyPortMetadata(schema *Schema, ports map[string]hcl.Attributes, sources 
 				schema.comparison[key] = map[string]string{"default": expressionIdentity(attr.Expr, sources[attr.Expr.Range().Filename])}
 			}
 		} else {
-			schema.OutputDetails[name] = Output{Name: name, Type: text("type"), Description: text("description"), Sensitive: sensitive, Deprecated: text("deprecated")}
+			schema.OutputDetails[name] = Output{Name: name, Type: text("type"), Description: text("description"), Sensitive: sensitive, Deprecated: text("deprecated"), Loc: locs[key]}
 		}
 	}
+}
+
+// withoutLocations strips provenance copies so runtime equivalence compares declarations only: a .tf file and its .tofu counterpart are by definition different files at different lines.
+func withoutLocations(s *Schema) *Schema {
+	vars := make(map[string]Variable, len(s.Variables))
+	for name, v := range s.Variables {
+		v.Loc = Loc{}
+		vars[name] = v
+	}
+	outputs := make(map[string]Output, len(s.OutputDetails))
+	for name, o := range s.OutputDetails {
+		o.Loc = Loc{}
+		outputs[name] = o
+	}
+	stripped := *s
+	stripped.Variables = vars
+	stripped.OutputDetails = outputs
+	return &stripped
 }
 
 // bodyIdentity includes unknown expressions and complex attributes, which the backend address projection deliberately omits.
