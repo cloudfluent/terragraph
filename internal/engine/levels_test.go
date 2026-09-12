@@ -27,7 +27,9 @@ func newTestEngine(names []string, edges []blueprint.Edge) *Engine {
 			Schema: &module.Schema{Variables: map[string]module.Variable{}, Outputs: map[string]bool{}},
 		}
 	}
-	g.Edges = edges
+	for _, e := range edges {
+		g.Edges = append(g.Edges, graph.Edge{Edge: e})
+	}
 	for _, e := range edges {
 		g.Out[e.From.Node] = append(g.Out[e.From.Node], e.To.Node)
 		g.In[e.To.Node] = append(g.In[e.To.Node], e.From.Node)

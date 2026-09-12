@@ -181,8 +181,14 @@ func stripProvenance(g *graph.Graph) {
 		if n.Runtime != nil {
 			n.Runtime.Loc = blueprint.Loc{}
 		}
+		// Expansion provenance (original declarations, mapping hops, setting attribution) is location-bearing by construction; topology equality does not depend on it.
+		n.Prov = graph.NodeProvenance{}
+		n.VarSources = nil
+		n.RuntimeSource = graph.SettingSource{}
+		n.ApproveSource = graph.SettingSource{}
 	}
 	for i := range g.Edges {
 		g.Edges[i].Loc = blueprint.Loc{}
+		g.Edges[i].MappingPath = nil
 	}
 }

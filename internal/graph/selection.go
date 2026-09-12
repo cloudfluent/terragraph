@@ -94,7 +94,8 @@ func Select(g *Graph, requested []string, downstream bool) (*Selection, error) {
 	}
 	for _, edge := range g.Edges {
 		if selected[edge.From.Node] != selected[edge.To.Node] {
-			s.BoundaryEdges = append(s.BoundaryEdges, edge)
+			// Boundary edges are an execution-scope contract: provenance stays on g.Edges for inspection and never changes this stored shape.
+			s.BoundaryEdges = append(s.BoundaryEdges, edge.Edge)
 		}
 	}
 	sort.Slice(s.BoundaryEdges, func(i, j int) bool {
