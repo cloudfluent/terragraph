@@ -23,27 +23,45 @@ func Descriptor() sdk.Descriptor {
 
 // Handler validates configuration eagerly so a bad plugin block fails at validate time, not mid-apply when the AWS call would first see it.
 func Handler() sdk.Handler {
+	h := &handler{}
 	return func(ctx context.Context, request sdk.Request) (sdk.Response, error) {
 		switch request.Action {
 		case "configure":
-			for key, value := range request.Config {
-				if key != "region" && key != "endpoint" {
-					return sdk.Response{}, fmt.Errorf("unknown secretsmanager configuration key %q; allowed keys are region and endpoint", key)
-				}
-				if _, ok := value.(string); !ok {
-					return sdk.Response{}, fmt.Errorf("secretsmanager configuration key %s must be a string", key)
-				}
-			}
-			if region, ok := request.Config["region"]; !ok || region == "" {
-				return sdk.Response{}, fmt.Errorf("secretsmanager configuration key \"region\" is required; set it to the AWS region the secrets live in")
-			}
-			return sdk.Response{}, nil
-		case "read":
-			return sdk.Response{}, fmt.Errorf("secretsmanager read is not implemented yet; the GetSecretValue resolver lands in the next change")
+			return h.configure(request.Config)
+		case "read", "resolve":
+			// resolve is the action the host lifecycle actually sends for input resolvers; read stays as the direct-call alias.
+			return h.resolve(ctx, request.Reference)
 		case "authenticate":
 			return sdk.Response{}, fmt.Errorf("secretsmanager authenticate is not implemented yet; the STS credential lease lands in the next change")
 		default:
 			return sdk.Response{}, fmt.Errorf("unsupported secretsmanager action %q; use configure, read, or authenticate", request.Action)
 		}
 	}
+}
+
+// handler carries the accepted configure state between calls because the host sends Config only on configure, never on resolve.
+type handler struct {
+	region   string
+	endpoint string
+}
+
+// configure stores region and endpoint for every later resolve on the same plugin process.
+func (h *handler) configure(config map[string]any) (sdk.Response, error) {
+	for key, value := range config {
+		if key != "region" && key != "endpoint" {
+			return sdk.Response{}, fmt.Errorf("unknown secretsmanager configuration key %q; allowed keys are region and endpoint", key)
+		}
+		if _, ok := value.(string); !ok {
+			return sdk.Response{}, fmt.Errorf("secretsmanager configuration key %s must be a string", key)
+		}
+	}
+	if region, ok := config["region"]; !ok || region == "" {
+		return sdk.Response{}, fmt.Errorf("secretsmanager configuration key \"region\" is required; set it to the AWS region the secrets live in")
+	} else {
+		h.region, _ = region.(string)
+	}
+	if endpoint, ok := config["endpoint"]; ok {
+		h.endpoint, _ = endpoint.(string)
+	}
+	return sdk.Response{}, nil
 }
