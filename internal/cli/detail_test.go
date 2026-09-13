@@ -153,6 +153,8 @@ func TestGraphDetail_JSONEnvelopeMatchesGoldenFixture(t *testing.T) {
 	if rerr != nil {
 		t.Fatalf("reading golden: %v", rerr)
 	}
+	// actions/checkout on Windows materializes the golden with CRLF (autocrlf), while the CLI emits LF everywhere; normalize so the fixture compares bytes, not the runner's checkout policy.
+	golden = []byte(strings.ReplaceAll(string(golden), "\r\n", "\n"))
 	var pretty bytes.Buffer
 	if err := json.Indent(&pretty, []byte(first), "", "  "); err != nil {
 		t.Fatalf("indenting: %v", err)
