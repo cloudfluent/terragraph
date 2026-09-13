@@ -654,7 +654,8 @@ func portLocToDTO(dir, file string, line, col int) *sourceLocationDTO {
 // external modules; the native absolute path appears only when Rel cannot express the pair.
 func relPath(baseDir, dir string) string {
 	if rel, err := filepath.Rel(baseDir, dir); err == nil {
-		return rel
+		// Slash form is the portable display spelling: a Windows machine emits the same JSON bytes as the committed golden, not modules\cluster.
+		return filepath.ToSlash(rel)
 	}
 	return dir
 }

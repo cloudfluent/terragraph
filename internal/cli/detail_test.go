@@ -157,7 +157,9 @@ func TestGraphDetail_JSONEnvelopeMatchesGoldenFixture(t *testing.T) {
 	if err := json.Indent(&pretty, []byte(first), "", "  "); err != nil {
 		t.Fatalf("indenting: %v", err)
 	}
-	if got, want := strings.TrimRight(strings.ReplaceAll(pretty.String(), root, "<root>"), "\n"), strings.TrimRight(string(golden), "\n"); got != want {
+	// JSON text doubles every literal backslash while single ones are unicode escapes (\u003e for ">"), so normalize the escaped root form first and only then turn doubled separators into slashes — that keeps the golden byte-comparable on every platform (#94 §3.1 permits native absolute paths in location fields).
+	got := strings.ReplaceAll(strings.ReplaceAll(pretty.String(), strings.ReplaceAll(root, `\`, `\\`), "<root>"), `\\`, `/`)
+	if got, want := strings.TrimRight(got, "\n"), strings.TrimRight(string(golden), "\n"); got != want {
 		t.Fatalf("golden mismatch:\n--- got ---\n%s\n--- want ---\n%s", got, want)
 	}
 }
