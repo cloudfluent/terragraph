@@ -73,10 +73,14 @@ func (h *handler) resolve(ctx context.Context, reference map[string]any) (sdk.Re
 	if h.region == "" {
 		return sdk.Response{}, fmt.Errorf("plugin.secretsmanager.read: region is not configured; set region in the plugin secretsmanager block before reading secrets")
 	}
-	value, err := h.fetch(ctx, ref)
+	output, err := h.fetch(ctx, ref)
 	if err != nil {
-		// Only transport outcomes become faults: selection and payload errors below are deterministic user-facing problems with remedies, and a fatal fault would tear down the whole plugin session.
+		// Only transport outcomes become faults: payload problems below are deterministic user-facing remedies, and a fatal fault would tear down the whole plugin session for one bad secret.
 		return awsFault(err), nil
+	}
+	value, err := payloadText(output, ref.secretID)
+	if err != nil {
+		return sdk.Response{}, err
 	}
 	selected, err := selectProperty(value, ref)
 	if err != nil {
@@ -89,8 +93,8 @@ func (h *handler) resolve(ctx context.Context, reference map[string]any) (sdk.Re
 	return sdk.Response{Value: &encoded}, nil
 }
 
-// fetch builds a client per call from the standard external chain (env, shared config, IAM role — never persisted by this plugin) so configure cannot pin stale credentials; binary and empty payloads fail with remedies because v1 resolves only text secrets.
-func (h *handler) fetch(ctx context.Context, ref secretRef) (string, error) {
+// fetch builds a client per call from the standard external chain (env, shared config, IAM role — never persisted by this plugin) so configure cannot pin stale credentials; only transport errors leave this function, so awsFault never sees a deterministic payload problem.
+func (h *handler) fetch(ctx context.Context, ref secretRef) (*secretsmanager.GetSecretValueOutput, error) {
 	options := []func(*awsconfig.LoadOptions) error{awsconfig.WithRegion(h.region)}
 	if h.endpoint != "" {
 		// BaseEndpoint is the localstack escape hatch; without it the resolver would sign against the real AWS partition during tests.
@@ -98,7 +102,7 @@ func (h *handler) fetch(ctx context.Context, ref secretRef) (string, error) {
 	}
 	cfg, err := awsconfig.LoadDefaultConfig(ctx, options...)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	client := secretsmanager.NewFromConfig(cfg)
 	input := &secretsmanager.GetSecretValueInput{SecretId: aws.String(ref.secretID)}
@@ -108,17 +112,18 @@ func (h *handler) fetch(ctx context.Context, ref secretRef) (string, error) {
 	} else {
 		input.VersionStage = aws.String(ref.versionStage)
 	}
-	output, err := client.GetSecretValue(ctx, input)
-	if err != nil {
-		return "", err
-	}
+	return client.GetSecretValue(ctx, input)
+}
+
+// payloadText fails with remedies rather than faults because v1 resolves only text secrets; these are properties of the stored secret, not of the AWS call.
+func payloadText(output *secretsmanager.GetSecretValueOutput, secretID string) (string, error) {
 	switch {
 	case output.SecretString != nil:
 		return *output.SecretString, nil
 	case output.SecretBinary != nil:
-		return "", fmt.Errorf("plugin.secretsmanager.read: secret %s stores a binary payload; store it as SecretString JSON instead, binary secrets are unsupported in v1", ref.secretID)
+		return "", fmt.Errorf("plugin.secretsmanager.read: secret %s stores a binary payload; store it as SecretString JSON instead, binary secrets are unsupported in v1", secretID)
 	default:
-		return "", fmt.Errorf("plugin.secretsmanager.read: secret %s returned neither a string nor a binary payload; inspect it in the AWS console", ref.secretID)
+		return "", fmt.Errorf("plugin.secretsmanager.read: secret %s returned neither a string nor a binary payload; inspect it in the AWS console", secretID)
 	}
 }
 

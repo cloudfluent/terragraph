@@ -25,7 +25,7 @@ type VarSource struct {
 	From        string
 	Subject     string
 	Decl        blueprint.Loc
-	MappingPath []MappingStep
+	MappingPath []MappingStep `json:"-"`
 }
 
 // SettingSource attributes an effective runtime/approve setting to the scope that actually set it: the node block ("node"), the enclosing use whose value survived the cascade ("use"), or nothing anywhere in the blueprint (""). For From "use", Decl pins the attribute inside the use block while UseName/UseDecl locate the block itself. A Decl pointing at a declaration with no effect would mislead, so nested uses attribute to the nearest setter — the one whose value the node carries.
@@ -46,7 +46,7 @@ type NodeProvenance struct {
 type Edge struct {
 	blueprint.Edge
 	// MappingPath lists each export hop in root-to-leaf order; on an edge that traversed exports on both sides, From-side hops precede To-side hops, matching the endpoint order. Each fanned-out copy carries its own path, so fan-out stays visible per destination.
-	MappingPath []MappingStep
+	MappingPath []MappingStep `json:"-"`
 }
 
 // Relationships lists a node's neighbors over the full graph, data and ordering edges alike: direct (DependsOn/Dependents from In/Out) and transitive (Ancestors/Descendants). Lists are deduped, sorted, and never contain the node itself; traversal is visited-set based, so a node on a cycle terminates its own walk and is merely absent from its own reach — the reach itself says "statically declared review candidates", never predicted changes.
@@ -131,8 +131,8 @@ func (g *Graph) InputSourcesFor(name string) map[string]InputSource {
 		if vs, ok := node.VarSources[varName]; ok {
 			supplies = append(supplies, InputSource{Kind: vs.From, Subject: vs.Subject, Decl: vs.Decl, MappingPath: append([]MappingStep(nil), vs.MappingPath...)})
 		}
-		if _, bound := node.Inputs[varName]; bound {
-			supplies = append(supplies, InputSource{Kind: "plugin_input", Subject: "node." + name + ".input." + varName})
+		if binding, bound := node.Inputs[varName]; bound {
+			supplies = append(supplies, InputSource{Kind: "plugin_input", Subject: "node." + name + ".input." + varName, Decl: binding.Loc})
 		}
 		switch {
 		case len(supplies) > 1:

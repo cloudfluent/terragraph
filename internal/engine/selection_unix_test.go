@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cloudfluent/terragraph/internal/blueprint"
 	"github.com/cloudfluent/terragraph/internal/exec"
 	"github.com/cloudfluent/terragraph/internal/graph"
 )
@@ -243,7 +244,7 @@ func TestSavedExecution_SelectionStaysFixedAcrossFrontiers(t *testing.T) {
 		assertSelectedRuns(t, runs.Nodes, []string{want})
 		if want != "d" {
 			next, err := e.SavePlans(Options{}, record.ID)
-			if err != nil || !reflect.DeepEqual(next.Selection, record.Selection) || len(next.Nodes) != 3 {
+			if err != nil || !reflect.DeepEqual(selectionIdentity(next.Selection), selectionIdentity(record.Selection)) || len(next.Nodes) != 3 {
 				t.Fatalf("got = %+v, %v", next, err)
 			}
 		}
@@ -444,9 +445,22 @@ func TestSavedExecution_RemovedNodeStillReportsStoredSelection(t *testing.T) {
 	}
 	var scope *graph.Selection
 	_, err = changed.ApplySavedPlans(record.ID, Options{AutoApprove: true, OnSelection: func(s *graph.Selection, _ [][]string) { scope = s }})
-	if err == nil || !strings.Contains(err.Error(), "removed from graph") || !reflect.DeepEqual(scope, record.Selection) {
+	if err == nil || !strings.Contains(err.Error(), "removed from graph") || !reflect.DeepEqual(selectionIdentity(scope), selectionIdentity(record.Selection)) {
 		t.Fatalf("got = %+v, %v", scope, err)
 	}
+}
+
+// selectionIdentity zeroes boundary-edge provenance so DeepEqual compares selection identity (nodes, edges, order) rather than where each edge was spelled: a stored selection round-trips JSON without Loc while an in-memory one carries it (json:"-" keeps Loc out of digests and stores alike).
+func selectionIdentity(s *graph.Selection) *graph.Selection {
+	if s == nil {
+		return nil
+	}
+	out := *s
+	out.BoundaryEdges = append([]blueprint.Edge(nil), s.BoundaryEdges...)
+	for i := range out.BoundaryEdges {
+		out.BoundaryEdges[i].Loc = blueprint.Loc{}
+	}
+	return &out
 }
 
 func TestReviewPlan_SelectionPreservesIndependentFailureHandling(t *testing.T) {

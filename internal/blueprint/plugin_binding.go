@@ -9,12 +9,13 @@ import (
 	"github.com/zclconf/go-cty/cty"
 )
 
-// PluginBinding names an explicit input supplier so graph validation can reject competing sources before any provider is called.
+// PluginBinding names an explicit input supplier so graph validation can reject competing sources before any provider is called. Loc pins the binding block so inspection can name the declaration to edit; json:"-" keeps it out of savedGraphBinding's digest for the same reason every other Loc stays out.
 type PluginBinding struct {
 	Alias       string
 	Feature     string
 	Reference   map[string]any
 	Environment []string
+	Loc         Loc `json:"-"`
 }
 
 func parsePluginBindings(blocks []*hcl.Block) (map[string]PluginBinding, map[string]PluginBinding, error) {
@@ -64,6 +65,7 @@ func parsePluginBindings(blocks []*hcl.Block) (map[string]PluginBinding, map[str
 		if _, ok := target[block.Labels[0]]; ok {
 			return nil, nil, fmt.Errorf("%s.%s: duplicate binding", block.Type, block.Labels[0])
 		}
+		binding.Loc = locFromRange(block.DefRange)
 		target[block.Labels[0]] = binding
 	}
 	return inputs, credentials, nil

@@ -18,7 +18,11 @@ func main() {
 	choice := flag.String("plugin", "debug", "first-party plugin to package: debug or secretsmanager")
 	output := flag.String("out", "", "new package directory; defaults to dist/plugins/PLUGIN")
 	flag.Parse()
-	descriptor, source := selectPlugin(*choice)
+	descriptor, source, err := selectPlugin(*choice)
+	if err != nil {
+		_, _ = fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	if *output == "" {
 		*output = filepath.Join("dist", "plugins", descriptor.Name)
 	}
@@ -28,13 +32,15 @@ func main() {
 	}
 }
 
-// selectPlugin resolves the flag to one build target so adding a first-party plugin stays a one-line change here.
-func selectPlugin(choice string) (sdk.Descriptor, string) {
+// selectPlugin resolves the flag to one build target so adding a first-party plugin stays a one-line change here; an unknown name is an error, not a silent debug package in the directory the caller named for another plugin.
+func selectPlugin(choice string) (sdk.Descriptor, string, error) {
 	switch choice {
+	case "debug":
+		return debug.Descriptor(), "./plugins/debug/cmd", nil
 	case "secretsmanager":
-		return secretsmanager.Descriptor(), "./plugins/secretsmanager/cmd"
+		return secretsmanager.Descriptor(), "./plugins/secretsmanager/cmd", nil
 	default:
-		return debug.Descriptor(), "./plugins/debug/cmd"
+		return sdk.Descriptor{}, "", fmt.Errorf("unknown plugin %q; choose debug or secretsmanager", choice)
 	}
 }
 

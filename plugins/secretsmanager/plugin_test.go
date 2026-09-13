@@ -197,6 +197,21 @@ func TestHandler_ReadReturnsSensitiveStringValue(t *testing.T) {
 	}
 }
 
+// TestHandler_ReadBinaryPayloadIsRemedyNotFault pins the split between transport faults and payload remedies: a binary secret fails this one resolve with a remedy instead of a fatal fault that would tear down the whole plugin session.
+func TestHandler_ReadBinaryPayloadIsRemedyNotFault(t *testing.T) {
+	stubAWSEnv(t)
+	payload, _ := json.Marshal(map[string]any{"SecretBinary": "AAEC"})
+	url, _ := fakeSecretsManager(t, http.StatusOK, string(payload))
+	handler := configuredHandler(t, url)
+	response, err := resolveInput(handler, map[string]any{"secret_id": "prod/blob"})
+	if err == nil || !strings.Contains(err.Error(), "binary payload") {
+		t.Fatalf("read error = %v, want the binary-payload remedy", err)
+	}
+	if response.Fault != nil {
+		t.Fatalf("read fault = %+v, want nil: a payload problem must not kill the session", response.Fault)
+	}
+}
+
 func TestHandler_ReadSelectsJSONPointer(t *testing.T) {
 	stubAWSEnv(t)
 	url, _ := fakeSecretsManager(t, http.StatusOK, secretPayload(t, secretDoc))

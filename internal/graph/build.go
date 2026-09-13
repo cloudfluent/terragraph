@@ -25,13 +25,13 @@ type Node struct {
 	// Approve is this node's resolved approve level (see blueprint.Node.Approve), already following the blueprint.Node.Approve -> enclosing blueprint.Use.Approve cascade (see build). "" means neither this node nor anything it is nested under named one; engine.Engine.approveFor applies the remaining blueprint-default/CLI fallback layers, which are not graph concerns.
 	Approve blueprint.Approve
 	// Prov records where this expanded node came from: the original node block's declaration and the instantiation chain that produced this copy (nil Path for a plain top-level node). Computed during expansion, never reconstructed from names afterward.
-	Prov NodeProvenance
+	Prov NodeProvenance `json:"-"`
 	// VarSources explains each key actually present in Vars after expansion: the node block's own vars and every use.vars key a group export propagated here, with the declaration each one came from.
-	VarSources map[string]VarSource
+	VarSources map[string]VarSource `json:"-"`
 	// RuntimeSource attributes the resolved Runtime above to the scope that set it (node attribute, nearest enclosing use, or nothing); the value's own cascade is Runtime's concern, this is only its provenance.
-	RuntimeSource SettingSource
+	RuntimeSource SettingSource `json:"-"`
 	// ApproveSource is Approve's attribution counterpart: node attribute, nearest enclosing use, or nothing. The remaining blueprint-default/CLI layers belong to the engine and never appear here.
-	ApproveSource SettingSource
+	ApproveSource SettingSource `json:"-"`
 }
 
 type Graph struct {

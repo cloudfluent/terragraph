@@ -829,9 +829,12 @@ func TestGraph_InputSourcesFor_ClassifiesEveryKind(t *testing.T) {
 		t.Fatalf("required input: got %q, want external_required", got)
 	}
 
-	if got := src("plugin_supplied", "s").Kind; got != "plugin_input" {
-		t.Fatalf("plugin-bound input: got %q, want plugin_input", got)
+	pluginInput := src("plugin_supplied", "s")
+	if pluginInput.Kind != "plugin_input" {
+		t.Fatalf("plugin-bound input: got %q, want plugin_input", pluginInput.Kind)
 	}
+	// The binding block's own location, so "which declaration do I edit" has an answer for plugin-supplied inputs too.
+	assertLoc(t, "plugin input binding declaration", pluginInput.Decl, blueprint.Loc{File: bpFile, Line: 27, Column: 3})
 
 	twoEdges := src("conflicted", "v")
 	if twoEdges.Kind != "conflict" || len(twoEdges.Candidates) != 2 {
