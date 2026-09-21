@@ -9,6 +9,11 @@ on:
 permissions:
   contents: read
 
+# Superseded commits must not keep occupying runners needed by the latest PR or main revision.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
     name: fmt, lint, docs, build, test
@@ -50,34 +55,58 @@ jobs:
       - run: go test ./... -race
 
   contract-runtimes:
-    name: contracts (${{ matrix.os }}, ${{ matrix.runtime.binary }} ${{ matrix.runtime.version }})
+    name: contracts (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        runtime:
-          - { binary: terraform, version: "1.5.7" }
-          - { binary: terraform, version: "1.16.0" }
-          - { binary: tofu, version: "1.11.0" }
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
+        id: setup_go
         with:
           go-version: "1.27.1"
           cache: true
-      - uses: hashicorp/setup-terraform@v4
-        if: matrix.runtime.binary == 'terraform'
+
+      # One runner per OS shares setup and compilation while every runtime still executes uncached native fixtures.
+      - name: Install Terraform 1.5.7
+        id: terraform_minimum
+        uses: hashicorp/setup-terraform@v4
         with:
-          terraform_version: ${{ matrix.runtime.version }}
+          terraform_version: "1.5.7"
           terraform_wrapper: false
-      - uses: opentofu/setup-opentofu@v2
-        if: matrix.runtime.binary == 'tofu'
-        with:
-          tofu_version: ${{ matrix.runtime.version }}
-          tofu_wrapper: false
-      # Native local-backend fixtures verify mutation ordering and JSON semantics without credentials or external providers.
-      - run: go test -race ./internal/engine -run '^TestContracts_Real' -v
+      - name: Contracts (Terraform 1.5.7)
+        run: go test -race -count=1 ./internal/engine -run '^TestContracts_Real' -v
         shell: bash
         env:
-          TERRAGRAPH_TEST_RUNTIME: ${{ matrix.runtime.binary }}
+          TERRAGRAPH_TEST_RUNTIME: terraform
+
+      # A failed runtime must not hide results for the others, but cancellation must stop all remaining work.
+      - name: Install Terraform 1.16.0
+        id: terraform_current
+        if: ${{ !cancelled() && steps.setup_go.outcome == 'success' }}
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "1.16.0"
+          terraform_wrapper: false
+      - name: Contracts (Terraform 1.16.0)
+        if: ${{ !cancelled() && steps.terraform_current.outcome == 'success' }}
+        run: go test -race -count=1 ./internal/engine -run '^TestContracts_Real' -v
+        shell: bash
+        env:
+          TERRAGRAPH_TEST_RUNTIME: terraform
+
+      - name: Install OpenTofu 1.11.0
+        id: opentofu
+        if: ${{ !cancelled() && steps.setup_go.outcome == 'success' }}
+        uses: opentofu/setup-opentofu@v2
+        with:
+          tofu_version: "1.11.0"
+          tofu_wrapper: false
+      - name: Contracts (OpenTofu 1.11.0)
+        if: ${{ !cancelled() && steps.opentofu.outcome == 'success' }}
+        run: go test -race -count=1 ./internal/engine -run '^TestContracts_Real' -v
+        shell: bash
+        env:
+          TERRAGRAPH_TEST_RUNTIME: tofu
