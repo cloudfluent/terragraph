@@ -12,7 +12,7 @@ terragraph graph
 terragraph graph --format dot > graph.dot
 ```
 
-The default graph output lists execution levels. DOT output can be rendered with Graphviz; solid edges carry data and dashed edges express ordering only. See [JSON run reports](#json-run-reports) for automation-friendly output.
+The default graph output lists execution levels. DOT output can be rendered with Graphviz; solid edges carry data and dashed edges express ordering only. See [JSON run reports](#json-run-reports) for automation-friendly output. For per-node wiring provenance, effective settings, and review scope, use [detailed graph inspection](#detailed-graph-inspection).
 
 ## Selecting nodes
 
@@ -70,6 +70,100 @@ For `a -> b -> c`, selecting `b` with downstream expansion produces:
 Selected DOT output includes selected leaves and adjacent boundary context. External leaves are gray and labeled `not selected`; edges between two external leaves are omitted. Solid/dashed lines still distinguish data/ordering, and the legend and boundary labels distinguish scope. `--output json --format dot` remains invalid.
 
 Without explicit selection, existing output stays unchanged. Single-node membership also stays unchanged, but it now has a text summary and optional JSON selection. Repeated `--node` flags now select a union, replacing the previous implementation's last-value-wins behavior. `output`, `status`, `vendor`, and `run` retain their existing single-node interfaces. This feature does not add group selection, wildcards, upstream expansion, exclusions, or automatic change detection.
+
+## Detailed graph inspection
+
+`graph --detail` prints resolved wiring and configuration per node instead of execution levels: where each node, edge, and input supply was declared, how group expansion produced each leaf, which runtime and approve policy are effective and where each came from, and which downstream nodes a change warrants reviewing. It answers "which declaration in which file should I edit to change this input?" without reconstructing group expansion by hand.
+
+```sh
+terragraph graph --detail
+terragraph graph --detail --node checkout.cluster
+terragraph graph --detail --node checkout.cluster --output json
+terragraph graph --detail --node checkout.cluster --approve all
+```
+
+`--node` and `--approve` belong to `--detail`. Without it, `--node` and `--downstream` keep their [execution selection](#selecting-nodes) meaning and an explicit `--approve` is an argument error. With `--detail`, `--node` names exactly one expanded leaf: a group instance name or prefix returns a diagnostic listing matching leaves, and repeated `--node` values, `--downstream`, positional arguments, and `--format dot` are all rejected with a remedy. `--approve none|safe|all` explains the policy a run with that default would resolve for each node; it executes and authorizes nothing.
+
+`--node` narrows the printed scope, not the analysis: `nodes` contains only the selected leaf, `edges` only its directly incident connections, while `levels` and the relationship lists are always computed from the full graph. Problems anywhere in the blueprint remain visible.
+
+### Declaration provenance
+
+Each node reports its original node-block declaration location, which survives group renaming; the declared module source, sanitized for display (credential-bearing userinfo and query parameters are stripped and the result is flagged, so a sanitized source is never a replayable reference); and the resolved module directory, relative to the blueprint directory where expressible. Nodes produced by `use` also report a group instance path ordered outermost to innermost, where each step names the instance, the group, the location of the `use` block that instantiated it, and the location of the `group` block it named — usually two different files, which is exactly what editing needs.
+
+Inputs and outputs report the module's declared port metadata: type (null when the module declares none — an untyped variable or an ordinary Terraform root output; never a claim about observed values), `required`, `sensitive`, and whether a default exists. Values are never printed. Each edge reports `data` or `ordering`, normalized endpoints (ports are null on ordering edges), its declaration location, and the export mapping path it traversed; distinct port connections between the same two nodes stay separate rows.
+
+### Input sources
+
+Every input the node's module declares is classified by how it is supplied:
+
+| kind | supplied by |
+| --- | --- |
+| `edge` | a data edge, subject named `node.<leaf>.output.<port>` |
+| `node_vars` | a key of the original node block's own `vars` |
+| `use_vars` | a `use.vars` key propagated through export mappings |
+| `plugin_input` | an explicit plugin input binding |
+| `external_or_default` | no blueprint supply; the module declares a default |
+| `external_required` | neither a blueprint supply nor a module default |
+| `conflict` | multiple blueprint supplies; each candidate is listed |
+
+`edge`, `node_vars`, `use_vars`, and `plugin_input` carry the declaring subject and its location, and a supply that traverses exports keeps its mapping path in order from the original declaration to the final leaf, so a fanned-out export is explainable at each destination leaf ([declaration tracing](groups.md#declaration-tracing)). An explicit `null` in `vars` counts as a supply.
+
+The two external kinds are presence facts, not runtime claims: `external_or_default` does not establish that the default will be used, and `external_required` does not prove the input missing. `TF_VAR_*`, `terraform.tfvars`, `*.auto.tfvars`, and their precedence were not inspected. `conflict` accompanies a validation error.
+
+### Runtime and approve origins
+
+The effective runtime reports its binary, optional name and version constraint, and its origin: `node` (the node's own `runtime` attribute), `use` (the nearest enclosing `use` whose choice survived), `root` (the root blueprint's default-marked runtime; a group directory's own default never counts), `cli` (`--tofu`), or `builtin` (the built-in terraform default). The selection site and the runtime block definition are reported separately. A declaration always beats the CLI layer: `--tofu` only fills a gap nothing declared. **The version is a declared constraint, not verification of the installed binary.**
+
+The effective approve policy reports `none`/`safe`/`all` with its origin `node`, `use`, `cli` (`--approve`), or `builtin`, using apply's existing precedence: a node or `use` declaration beats the CLI flag, so `--approve all` never widens a node that declared `safe`. An explicit `--approve safe` and the omitted built-in safe resolve to the same policy through different origins, and the report keeps them distinct. **The reported policy is configuration, not execution authorization:** it does not bind a later `apply`, which resolves its own policy from its own options.
+
+### Relationships and review scope
+
+Each node lists `depends_on` and `dependents` (direct neighbors) and `ancestors` and `descendants` (transitive reach), over data and ordering edges alike, computed from the full graph, deduplicated, sorted, and never containing the node itself. **These lists are statically declared reachability:** `descendants` names review candidates — nodes worth a plan review after changing this one — not predicted changes and not nodes that must be applied. Whether a downstream actually changes requires plan evidence.
+
+### JSON envelope and exit codes
+
+`--output json` returns one envelope; text and JSON are rendered from the same resolved result:
+
+```json
+{
+  "schema_version": 1,
+  "valid": true,
+  "selection": { "node": null },
+  "levels": [["vpc"], ["checkout.cluster"]],
+  "nodes": [],
+  "edges": [],
+  "diagnostics": [],
+  "limitations": []
+}
+```
+
+- `schema_version` versions this `--detail` envelope only; plain `graph --output json` keeps its existing levels contract. Consumers must ignore unknown additive fields.
+- `selection.node` is null for whole-graph inspection; a requested name that turns out invalid is still reported there, alongside its diagnostic.
+- `levels` always describes the full graph, and is null when ordering cannot be established (a cycle, or a blueprint that failed to load or build) — never an empty plan standing in for "unknown". Empty arrays elsewhere are definite answers.
+- Locations are null when no file declaration exists (CLI options, built-in defaults), never zero values.
+- Nodes and ports sort by name; edges sort by from node/port, to node/port, kind, then declaration location; diagnostics sort by code, subject, message. Ordering is stable for the same input.
+- Each diagnostic carries `code`, `severity`, `phase` (`load`, `arguments`, `select`, or `validate`), `subject`, `message`, `remedy`, and a nullable `source`.
+
+| Situation | Result | Exit |
+| --- | --- | --- |
+| Success, warnings allowed | `valid=true`, diagnostics included | 0 |
+| Validation errors after the graph built | `valid=false`; constructed nodes, edges, and relationships retained | nonzero |
+| Cycle | `valid=false`, `levels=null`; reachability retained, a node on a cycle excluded from its own | nonzero |
+| Blueprint parse or build failure | `valid=false`, `levels=null`, empty `nodes`/`edges`; cause and remedy reported, nothing auto-repaired | nonzero |
+| Unknown leaf or group-prefix `--node` | `valid=false`; selection diagnostic with matching leaf candidates | nonzero |
+| Invalid flag combination | envelope with an `arguments` diagnostic and remedy (JSON) or the Cobra error (text) | nonzero |
+
+Native flag-parser or stdout-write failures keep the existing Cobra/IO contract; a complete JSON document is not guaranteed there.
+
+### Read boundary
+
+Inspection is static: it reads the blueprint, group, and local module files and runs no Terraform/OpenTofu process, touches no backend, state, or outputs, and works with no runtime binary on `PATH`. It creates nothing under `.terragraph/` and acquires no locks. Remote module sources use existing vendored copies; a missing or broken copy reports the existing preparation remedy instead of fetching. No input, default, env, or backend value appears in any successful or failed result, module source URLs are sanitized of credentials, and there is no flag to disclose redacted values.
+
+Every result ends with these three limitation strings, verbatim:
+
+1. `static configuration only; external variable values and live state were not inspected` — the classification describes declarations; runtime variable sources and live state were never read.
+2. `graph reachability identifies review candidates, not predicted resource changes` — descendants are nodes to review, not a change prediction; resource impact needs plan evidence.
+3. `reported approval policy is configuration, not execution authorization` — the approve report explains what a run would resolve; it approves nothing and binds no later command.
 
 ## Validation
 
@@ -239,7 +333,7 @@ terragraph destroy --output json --auto-approve
 | Command | JSON result |
 | --- | --- |
 | `validate` | Object with `valid` and `problems`; each problem has `code`, `category`, `phase`, `subject`, `severity`, `message`, and an optional `remedy`. Warnings can coexist with `valid: true`. |
-| `graph` | Object with `schema_version: 1`, `diagnostics`, and `levels`, an array of arrays of node names. Cannot combine JSON with `--format dot`. |
+| `graph` | Object with `schema_version: 1`, `diagnostics`, and `levels`, an array of arrays of node names. Cannot combine JSON with `--format dot`. With `--detail`, the [detailed inspection envelope](#detailed-graph-inspection) is returned instead. |
 | `vendor` | Array of results with `node`, `status` (`vendored`, `skipped`, or `error`), node `diagnostics`, and an optional `error`. Global failures use the shapes in [agent usage](agent-usage.md). |
 | `plan`, `apply`, `destroy` | Object with `schema_version: 1`, `nodes`, `diagnostics`, and `execution_id` when an execution session was acquired; node entries retain `node`, `level`, `status`, and optional `error`, and add `diagnostics`. |
 

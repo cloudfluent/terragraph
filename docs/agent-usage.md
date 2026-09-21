@@ -19,6 +19,7 @@ Read stdout as one JSON value and inspect the exit status. Stderr carries human 
 | --- | --- |
 | `validate` | `schema_version`, `valid`, `problems`; no execution ID |
 | `graph` | `schema_version`, `levels`, `diagnostics`; no execution ID |
+| `graph --detail` | `schema_version`, `valid`, `selection`, `levels` (null when the graph cannot be ordered), `nodes`, `edges`, `diagnostics`, `limitations`; no execution ID |
 | `status`, `output` | Existing `schema_version`, `nodes`, `diagnostics`; no execution ID |
 | Ordinary `plan`, `apply`, `destroy` | `schema_version`, `nodes`, `diagnostics`, optional `execution_id` |
 | `apply --plan <id>` | Same run shape; `execution_id` is the selected execution |

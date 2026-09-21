@@ -105,7 +105,7 @@ func (e *Engine) resolveInputsWithBasis(name string, applied map[string]exec.Out
 		if err := e.contractPolicy(e.outputContractChecks(edge.From.Node, outputs, source != "snapshot"), true); err != nil {
 			return nil, err
 		}
-		if err := e.checkType(edge, val); err != nil {
+		if err := e.checkType(edge.Edge, val); err != nil {
 			return nil, err
 		}
 

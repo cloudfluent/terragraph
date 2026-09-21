@@ -202,18 +202,41 @@ func newValidateCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf
 
 func newGraphCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf func() *slog.Logger) *cobra.Command {
 	var selection selectionFlags
-	var format string
-	var output string
+	var format, output, approve string
+	var detail bool
 	cmd := &cobra.Command{
 		Use:   "graph",
 		Args:  validateRunArgs,
-		Short: "Print the resolved execution levels or a Graphviz DOT rendering",
+		Short: "Print the resolved execution levels, a Graphviz DOT rendering, or detailed node inspection",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if output != "text" && output != "json" {
 				return fmt.Errorf("unknown output %q (want \"text\" or \"json\")", output)
 			}
+			if detail {
+				// Detail dispatches before the legacy json+dot check so its own dot rejection
+				// (which knows the list/JSON remedies) wins under --output json too; without
+				// --detail the pre-existing checks below run in their original order.
+				return runGraphDetail(cmd, graphDetailOptions{
+					blueprintPath:     blueprintPath,
+					binaryOf:          binaryOf,
+					loggerOf:          loggerOf,
+					nodes:             selection.nodes,
+					nodeSelected:      cmd.Flags().Changed("node"),
+					downstreamChanged: cmd.Flags().Changed("downstream"),
+					approveValue:      approve,
+					approveChanged:    cmd.Flags().Changed("approve"),
+					tofuChanged:       cmd.Flags().Changed("tofu"),
+					format:            format,
+					output:            output,
+				})
+			}
 			if output == "json" && format == "dot" {
 				return fmt.Errorf("--output json is not supported with --format dot")
+			}
+			// --approve is new with the --detail surface and means nothing to the level list, so
+			// passing it without --detail is an argument error rather than a silently ignored flag.
+			if cmd.Flags().Changed("approve") && !detail {
+				return fmt.Errorf("--approve is only valid with --detail; add --detail to explain the effective approve policy")
 			}
 
 			e, err := loadEngine(cmd, blueprintPath, binaryOf, loggerOf)
@@ -255,8 +278,10 @@ func newGraphCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fu
 		},
 	}
 	selection.add(cmd)
-	cmd.Flags().StringVar(&format, "format", "list", "output format: list or dot")
+	cmd.Flags().BoolVar(&detail, "detail", false, "print detailed node inspection with wiring provenance, effective settings, and review scope instead of execution levels")
+	cmd.Flags().StringVar(&format, "format", "list", "output format: list or dot (dot cannot be combined with --detail)")
 	cmd.Flags().StringVar(&output, "output", "text", "output stream encoding: text or json (json is only supported with --format list)")
+	cmd.Flags().StringVar(&approve, "approve", "safe", "approve policy to explain with --detail: none, safe, or all (resolves like apply's default filling; never executes or authorizes anything)")
 	return cmd
 }
 

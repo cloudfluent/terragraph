@@ -12,6 +12,27 @@ go run ../../cmd/terragraph apply --auto-approve
 ls modules/nodegroup/*.txt   # one file per instance, named after that instance's cluster_id
 ```
 
+## Inspecting the wiring with `graph --detail`
+
+Nothing to build or apply: `graph --detail` reads the declarations and reports where every leaf's inputs come from and what to review after changing them.
+
+```
+cd examples/group
+go run ../../cmd/terragraph graph --detail
+go run ../../cmd/terragraph graph --detail --node checkout.cluster --output json
+```
+
+For `checkout.cluster`, the text report answers "which line do I edit to change this cluster's name?" with locations:
+
+- **group instance**: `group: checkout (eks-service)` — the leaf belongs to the `checkout` instance; the JSON adds the `use` block's location in `blueprint.hcl` and the `group` block's location in `groups/eks-service/group.hcl`.
+- **input sources**: `cluster_name` prints `supplied by: use.checkout.vars.cluster_name`, `via: use.checkout.input.cluster_name` (the export hop in the group file), and `declared at: blueprint.hcl:9:5` — that last location is the line to edit. `vpc_id` prints `edge: node.vpc.output.vpc_id` with the same hop, because it arrives through the group's exported input.
+- **descendants to review**: `descendants to review: checkout.nodegroup` names the declared consumer to review with a plan after a change (a review candidate, not a predicted change).
+- **effective settings**: `runtime: terraform (built-in default)` and `approve: safe (built-in default; not execution authorization)`, each with its origin.
+
+Run it on `payments.cluster` too — that is the twice-instantiated case: it reports `supplied by: use.payments.vars.cluster_name` at the `payments` use block's own location, so each instance points at its own declaration line even though both share `groups/eks-service/group.hcl`.
+
+The command runs no Terraform/OpenTofu process and writes nothing, so it is safe on a fresh checkout. See [declaration tracing](../../docs/groups.md#declaration-tracing) and [detailed graph inspection](../../docs/execution-model.md#detailed-graph-inspection).
+
 ## Keeping backend configuration DRY
 
 For an S3-backed adaptation, declare shared backend settings once per group instance and let terragraph derive a distinct key for each leaf. This keeps bucket and region values out of the reusable group's nodes and removes the need to write a key for every new leaf.

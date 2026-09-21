@@ -105,13 +105,13 @@ node "database" {
   source = "./modules/database"
 
   input "password" {
-    from = plugin.secrets.read
-    ref  = { path = "applications/database", field = "password" }
+    from = plugin.secretsmanager.read
+    ref  = { secret_id = "applications/database", json_pointer = "/password" }
   }
 
-  credential "provider" {
-    from        = plugin.secrets.authenticate
-    ref         = { account = "production" }
+  credential "aws" {
+    from        = plugin.secretsmanager.authenticate
+    ref         = { role_arn = "arn:aws:iam::123456789012:role/terragraph" }
     environment = ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"]
   }
 }
@@ -145,6 +145,14 @@ Without an execution record, credential recovery evidence stays in the protected
 The [debug observer](../plugins/debug/README.md) is maintained in this repository and built with `go run ./tools/pluginpackage --out PACKAGE_DIRECTORY`. It uses the public SDK and the same install and lock flow as third-party packages. It records lifecycle metadata through the shared logger without reading secrets or plan contents.
 
 Remote registries and automatic downloads remain outside the local package installer. No cloud-service-specific client library is part of the lifecycle host.
+
+### AWS Secrets Manager
+
+The [secretsmanager plugin](../plugins/secretsmanager/README.md) is maintained in this repository and built with `go run ./tools/pluginpackage --plugin secretsmanager --out PACKAGE_DIRECTORY`. It talks to the AWS API with the SDK's standard external credential chain — environment variables, shared config, or an IAM role — and never persists secret values or credentials. Configuration takes `region` (required) and `endpoint` (optional; localstack for tests).
+
+Its `read` input resolver accepts `secret_id` (required), `version_id` or `version_stage` (an explicit `version_id` pins one immutable version and wins over the stage, which defaults to `AWSCURRENT`), and `json_pointer` or `field` (mutually exclusive selectors into the secret's JSON; with neither, the full secret text resolves). Values return as sensitive strings, and AWS errors map to safe fault codes without echoing AWS error detail.
+
+Its `authenticate` credential provider accepts `role_arn`, `profile`, and `session_name` in `ref` and returns `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_SESSION_TOKEN` — exactly the names the binding's `environment` allowlist must declare, which is why a credential binding without the allowlist fails validation. The returned `identity` is a non-secret principal ARN. The [secrets example](../examples/plugins/secrets/README.md) shows the full wiring, including version pinning and scoped node credentials.
 
 ## Common SDK Logger
 

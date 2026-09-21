@@ -329,10 +329,12 @@ edge {
 		{
 			From: PortRef{Node: "vpc", Kind: PortOutput, Name: "vpc_id"},
 			To:   PortRef{Node: "eks", Kind: PortInput, Name: "vpc_id"},
+			Loc:  Loc{File: path, Line: 9, Column: 3},
 		},
 		{
 			From: PortRef{Node: "vpc", Kind: PortOutput, Name: "private_subnet_ids"},
 			To:   PortRef{Node: "eks", Kind: PortInput, Name: "subnet_ids"},
+			Loc:  Loc{File: path, Line: 13, Column: 3},
 		},
 	}
 	for i, w := range want {

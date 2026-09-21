@@ -1,6 +1,6 @@
 ## terragraph graph
 
-Print the resolved execution levels or a Graphviz DOT rendering
+Print the resolved execution levels, a Graphviz DOT rendering, or detailed node inspection
 
 ```
 terragraph graph [flags]
@@ -9,8 +9,10 @@ terragraph graph [flags]
 ### Options
 
 ```
+      --approve string     approve policy to explain with --detail: none, safe, or all (resolves like apply's default filling; never executes or authorizes anything) (default "safe")
+      --detail             print detailed node inspection with wiring provenance, effective settings, and review scope instead of execution levels
       --downstream         include all successors of --node across data and ordering edges
-      --format string      output format: list or dot (default "list")
+      --format string      output format: list or dot (dot cannot be combined with --detail) (default "list")
   -h, --help               help for graph
       --node stringArray   select an exact leaf name (repeat for multiple nodes; commas are literal)
       --output string      output stream encoding: text or json (json is only supported with --format list) (default "text")

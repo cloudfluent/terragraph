@@ -685,7 +685,7 @@ func parseRuntimeBlock(block *hcl.Block) (Runtime, error) {
 		return Runtime{}, fmt.Errorf("%s: binary must not be empty", binaryAttr.Range)
 	}
 
-	rt := Runtime{Name: block.Labels[0], Binary: binaryVal.AsString()}
+	rt := Runtime{Name: block.Labels[0], Binary: binaryVal.AsString(), Loc: locFromRange(block.DefRange)}
 
 	if attr, ok := content.Attributes["version"]; ok {
 		val, diags := attr.Expr.Value(nil)
@@ -766,17 +766,24 @@ func parseNodeBlock(block *hcl.Block, evaluation ...*hcl.EvalContext) (Node, err
 	}
 
 	var vars map[string]any
+	var varsLocs map[string]Loc
 	if attr, ok := content.Attributes["vars"]; ok {
 		var err error
-		vars, err = parseVarsAttr(attr, evaluation...)
+		vars, varsLocs, err = parseVarsAttr(attr, evaluation...)
 		if err != nil {
 			return Node{}, err
 		}
 	}
 
-	runtime, err := parseRuntimeRef(content.Attributes["runtime"])
+	runtimeAttr := content.Attributes["runtime"]
+	runtime, err := parseRuntimeRef(runtimeAttr)
 	if err != nil {
 		return Node{}, err
+	}
+	// Provenance only: parseRuntimeRef already handled the absent case; pinning the attribute's site separately keeps value parsing and metadata parsing independent.
+	var runtimeLoc Loc
+	if runtimeAttr != nil {
+		runtimeLoc = locFromRange(runtimeAttr.Range)
 	}
 
 	var env map[string]string
@@ -788,9 +795,14 @@ func parseNodeBlock(block *hcl.Block, evaluation ...*hcl.EvalContext) (Node, err
 		}
 	}
 
-	approve, err := parseApproveAttr(content.Attributes["approve"])
+	approveAttr := content.Attributes["approve"]
+	approve, err := parseApproveAttr(approveAttr)
 	if err != nil {
 		return Node{}, err
+	}
+	var approveLoc Loc
+	if approveAttr != nil {
+		approveLoc = locFromRange(approveAttr.Range)
 	}
 
 	backendAddress, err := ParseBackendAddress(content.Attributes["backend_address"])
@@ -810,9 +822,13 @@ func parseNodeBlock(block *hcl.Block, evaluation ...*hcl.EvalContext) (Node, err
 		BackendConfig:  backendConfig,
 		BackendAddress: backendAddress,
 		Vars:           vars,
+		VarsLocs:       varsLocs,
 		Runtime:        runtime,
+		RuntimeLoc:     runtimeLoc,
 		Env:            env,
 		Approve:        approve,
+		ApproveLoc:     approveLoc,
+		Loc:            locFromRange(block.DefRange),
 	}, nil
 }
 
@@ -835,17 +851,17 @@ func parseApproveAttr(attr *hcl.Attribute) (Approve, error) {
 	return a, nil
 }
 
-// parseVarsAttr evaluates the optional vars attribute: literal input values declared on a node or a use. On a node the keys are module variable names (see Node.Vars); on a use they are the group's export input names (see Use.Vars). The HCL shape is the same either way. The expression is evaluated with only explicitly supplied plugin functions in scope, so a reference to another node's or use instance's output (e.g. node.vpc.output.vpc_id) fails to parse here exactly as intended: that kind of value must come from a real edge, not vars, since only an edge records the dependency the engine needs to sequence execution and wait for the value to actually exist.
-func parseVarsAttr(attr *hcl.Attribute, evaluation ...*hcl.EvalContext) (map[string]any, error) {
+// parseVarsAttr evaluates the optional vars attribute: literal input values declared on a node or a use. On a node the keys are module variable names (see Node.Vars); on a use they are the group's export input names (see Use.Vars). The HCL shape is the same either way. The expression is evaluated with only explicitly supplied plugin functions in scope, so a reference to another node's or use instance's output (e.g. node.vpc.output.vpc_id) fails to parse here exactly as intended: that kind of value must come from a real edge, not vars, since only an edge records the dependency the engine needs to sequence execution and wait for the value to actually exist. The second return value is per-key provenance (see varsKeyLocs), never a parse contract.
+func parseVarsAttr(attr *hcl.Attribute, evaluation ...*hcl.EvalContext) (map[string]any, map[string]Loc, error) {
 	val, diags := attr.Expr.Value(evaluationContext(evaluation))
 	if diags.HasErrors() {
-		return nil, fmt.Errorf(
+		return nil, nil, fmt.Errorf(
 			"%s: vars must be an object of literal values or installed plugin function results, with no references to node/use outputs (use an edge for those): %s",
 			attr.Range, diags.Error(),
 		)
 	}
 	if val.IsNull() || !val.IsKnown() || (!val.Type().IsObjectType() && !val.Type().IsMapType()) {
-		return nil, fmt.Errorf("%s: vars must be an object/map of variable name to value", attr.Range)
+		return nil, nil, fmt.Errorf("%s: vars must be an object/map of variable name to value", attr.Range)
 	}
 
 	result := make(map[string]any)
@@ -855,17 +871,43 @@ func parseVarsAttr(attr *hcl.Attribute, evaluation ...*hcl.EvalContext) (map[str
 		// Preserve numeric tokens through JSON so large integers and precise decimals reach tfvars without float64 rounding, including inside nested collections.
 		data, err := ctyjson.Marshal(v, v.Type())
 		if err != nil {
-			return nil, fmt.Errorf("%s: vars.%s: %s", attr.Range, k.AsString(), err)
+			return nil, nil, fmt.Errorf("%s: vars.%s: %s", attr.Range, k.AsString(), err)
 		}
 		var goVal any
 		decoder := json.NewDecoder(bytes.NewReader(data))
 		decoder.UseNumber()
 		if err := decoder.Decode(&goVal); err != nil {
-			return nil, fmt.Errorf("%s: vars.%s: %s", attr.Range, k.AsString(), err)
+			return nil, nil, fmt.Errorf("%s: vars.%s: %s", attr.Range, k.AsString(), err)
 		}
 		result[k.AsString()] = goVal
 	}
-	return result, nil
+	return result, varsKeyLocs(attr), nil
+}
+
+// locFromRange pins an HCL range as declaration provenance: 1-based Line/Column from the range start, and File kept exactly as the parser saw it (the path handed to ParseFile, or ParseDir's dir-joined name), so directory-merged blueprints carry each declaration in its own file instead of the last one parsed.
+func locFromRange(rng hcl.Range) Loc {
+	return Loc{File: rng.Filename, Line: rng.Start.Line, Column: rng.Start.Column}
+}
+
+// varsKeyLocs pins each vars key's declaration site by reading the literal object-cons expression before evaluation; a whole-map expression (a variable or function result from the eval context) has no per-key declaration in the file, and a computed key has no statically known name, so both stay absent rather than fabricating a location — provenance never fails the parse.
+func varsKeyLocs(attr *hcl.Attribute) map[string]Loc {
+	obj, ok := attr.Expr.(*hclsyntax.ObjectConsExpr)
+	if !ok {
+		return nil
+	}
+	var locs map[string]Loc
+	for _, item := range obj.Items {
+		// Value(nil) yields the literal name for bare-identifier and quoted keys with no evaluation; anything needing the eval context errors here and is skipped.
+		kv, diags := item.KeyExpr.Value(nil)
+		if diags.HasErrors() || kv.IsNull() || !kv.IsKnown() || kv.Type() != cty.String {
+			continue
+		}
+		if locs == nil {
+			locs = make(map[string]Loc, len(obj.Items))
+		}
+		locs[kv.AsString()] = locFromRange(item.KeyExpr.Range())
+	}
+	return locs
 }
 
 // parseBackendConfig evaluates the optional backend_config attribute, an object/map of string keys to string values passed through as `terraform init -backend-config=key=value` flags.
@@ -957,7 +999,7 @@ func parseEdgeBlock(block *hcl.Block) ([]Edge, error) {
 		}
 	}
 
-	return []Edge{{From: from, To: to}}, nil
+	return []Edge{{From: from, To: to, Loc: locFromRange(block.DefRange)}}, nil
 }
 
 // parseEdgeInputs expands an edge's nested `input "<var>" { from = output.<attr> }` blocks into one data edge each, between the same pair of endpoints the enclosing edge names. The shape deliberately mirrors a group's export input: a block label naming the destination input, and one attribute saying where the value comes from. Its purpose is only to stop a pair of modules that already expose many flat variables from needing one near-identical `edge` block per variable; nothing about the resulting graph differs from having written them out.
@@ -992,6 +1034,8 @@ func parseEdgeInputs(block *hcl.Block, inputs hcl.Blocks, from, to PortRef) ([]E
 		edges = append(edges, Edge{
 			From: PortRef{Entity: from.Entity, Node: from.Node, Kind: PortOutput, Name: output},
 			To:   PortRef{Entity: to.Entity, Node: to.Node, Kind: PortInput, Name: name},
+			// The nested input block, not the enclosing edge block, is this connection's declaration: that is where this key's from and label were written.
+			Loc: locFromRange(b.DefRange),
 		})
 	}
 	return edges, nil
@@ -1129,7 +1173,7 @@ func parseGroupBlock(block *hcl.Block, baseDir string, evaluation ...*hcl.EvalCo
 		return Group{}, err
 	}
 
-	g := Group{Name: block.Labels[0]}
+	g := Group{Name: block.Labels[0], Loc: locFromRange(block.DefRange)}
 	seenNodes := map[string]bool{}
 	seenUses := map[string]bool{}
 	seenContractPorts := map[string]bool{}
@@ -1229,9 +1273,14 @@ func parseUseBlock(block *hcl.Block, evaluation ...*hcl.EvalContext) (Use, error
 		return Use{}, fmt.Errorf("%s: source must be a literal string", sourceAttr.Range)
 	}
 
-	runtime, err := parseRuntimeRef(content.Attributes["runtime"])
+	runtimeAttr := content.Attributes["runtime"]
+	runtime, err := parseRuntimeRef(runtimeAttr)
 	if err != nil {
 		return Use{}, err
+	}
+	var runtimeLoc Loc
+	if runtimeAttr != nil {
+		runtimeLoc = locFromRange(runtimeAttr.Range)
 	}
 
 	var env map[string]string
@@ -1244,17 +1293,23 @@ func parseUseBlock(block *hcl.Block, evaluation ...*hcl.EvalContext) (Use, error
 	}
 
 	var vars map[string]any
+	var varsLocs map[string]Loc
 	if attr, ok := content.Attributes["vars"]; ok {
 		var err error
-		vars, err = parseVarsAttr(attr, evaluation...)
+		vars, varsLocs, err = parseVarsAttr(attr, evaluation...)
 		if err != nil {
 			return Use{}, err
 		}
 	}
 
-	approve, err := parseApproveAttr(content.Attributes["approve"])
+	approveAttr := content.Attributes["approve"]
+	approve, err := parseApproveAttr(approveAttr)
 	if err != nil {
 		return Use{}, err
+	}
+	var approveLoc Loc
+	if approveAttr != nil {
+		approveLoc = locFromRange(approveAttr.Range)
 	}
 
 	var backendConfig map[string]string
@@ -1276,11 +1331,15 @@ func parseUseBlock(block *hcl.Block, evaluation ...*hcl.EvalContext) (Use, error
 		As:             asVal.AsString(),
 		Source:         sourceVal.AsString(),
 		Runtime:        runtime,
+		RuntimeLoc:     runtimeLoc,
 		Env:            env,
 		Vars:           vars,
+		VarsLocs:       varsLocs,
 		Approve:        approve,
+		ApproveLoc:     approveLoc,
 		BackendConfig:  backendConfig,
 		BackendAddress: backendAddress,
+		Loc:            locFromRange(block.DefRange),
 	}, nil
 }
 
@@ -1292,6 +1351,7 @@ func parseExportBlock(block *hcl.Block) (Export, error) {
 	}
 
 	var exp Export
+	exp.Loc = locFromRange(block.DefRange)
 	seenInputs := map[string]bool{}
 	seenOutputs := map[string]bool{}
 
@@ -1318,7 +1378,7 @@ func parseExportBlock(block *hcl.Block) (Export, error) {
 					return Export{}, fmt.Errorf("%s: export input %q must map to input port(s), got %s", toAttr.Range, name, ref)
 				}
 			}
-			exp.Inputs = append(exp.Inputs, ExportInput{Name: name, To: refs})
+			exp.Inputs = append(exp.Inputs, ExportInput{Name: name, To: refs, Loc: locFromRange(b.DefRange), ToLoc: locFromRange(toAttr.Range)})
 		case "output":
 			name := b.Labels[0]
 			if seenOutputs[name] {
@@ -1338,7 +1398,7 @@ func parseExportBlock(block *hcl.Block) (Export, error) {
 			if !ref.IsPort() || ref.Kind != PortOutput {
 				return Export{}, fmt.Errorf("%s: export output %q must map to an output port, got %s", fromAttr.Range, name, ref)
 			}
-			exp.Outputs = append(exp.Outputs, ExportOutput{Name: name, From: ref})
+			exp.Outputs = append(exp.Outputs, ExportOutput{Name: name, From: ref, Loc: locFromRange(b.DefRange), FromLoc: locFromRange(fromAttr.Range)})
 		}
 	}
 
