@@ -64,7 +64,7 @@ func printSelection(w io.Writer, s *selectionDTO, levels [][]string) {
 	_, _ = fmt.Fprintf(w, "selection: %s\nrequested: %s\nselected: %s\n", s.Mode, joinNames(s.Requested), joinNames(names))
 	for _, n := range s.Nodes {
 		why := n.Reason
-		if why == "downstream" {
+		if why == "downstream" || why == "upstream" {
 			why += " of " + joinNames(n.Via)
 		}
 		_, _ = fmt.Fprintf(w, "  %s: %s\n", n.Node, why)
@@ -88,19 +88,21 @@ func printSelection(w io.Writer, s *selectionDTO, levels [][]string) {
 type selectionFlags struct {
 	nodes      []string
 	downstream bool
+	upstream   bool
 }
 
 func (f *selectionFlags) add(cmd *cobra.Command) {
+	cmd.Flags().BoolVar(&f.upstream, "upstream", false, "include all predecessors of --node across data and ordering edges (exclusive with --downstream)")
 	cmd.Flags().StringArrayVar(&f.nodes, "node", nil, "select an exact leaf name (repeat for multiple nodes; commas are literal)")
 	cmd.Flags().BoolVar(&f.downstream, "downstream", false, "include all successors of --node across data and ordering edges")
 }
 
 func (f *selectionFlags) specified(cmd *cobra.Command) bool {
-	return cmd.Flags().Changed("node") || cmd.Flags().Changed("downstream")
+	return cmd.Flags().Changed("node") || cmd.Flags().Changed("downstream") || cmd.Flags().Changed("upstream")
 }
 
 func (f *selectionFlags) options(cmd *cobra.Command, format string, result **selectionDTO) engine.Options {
-	return engine.Options{Nodes: f.nodes, Downstream: f.downstream, SelectionSpecified: f.specified(cmd), OnSelection: func(s *graph.Selection, levels [][]string) {
+	return engine.Options{Nodes: f.nodes, Downstream: f.downstream, Upstream: f.upstream, SelectionSpecified: f.specified(cmd), OnSelection: func(s *graph.Selection, levels [][]string) {
 		*result = selectionToDTO(s)
 		if format == "text" {
 			printSelection(cmd.OutOrStdout(), *result, levels)

@@ -18,6 +18,7 @@ terragraph apply [flags]
       --parallelism int    max nodes to run concurrently within one execution level (default 1)
       --plan string        apply the stored frontier of a saved execution without replanning
       --retain-plan        retain optional plan artifacts while ordinary apply continues
+      --upstream           include all predecessors of --node across data and ordering edges (exclusive with --downstream)
 ```
 
 ### Options inherited from parent commands
