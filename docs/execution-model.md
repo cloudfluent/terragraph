@@ -29,13 +29,19 @@ A single `--node` without `--downstream` still selects only that leaf. Names are
 
 Membership is fixed before runtime calls. terragraph filters the original full-graph levels, removes empty levels, and numbers the remaining levels consecutively. It preserves alphabetical order within each level. It does not recompute a more parallel schedule after removing external dependencies. `destroy` uses the same membership with reversed levels. An unchanged upstream never skips a selected downstream node's fresh plan.
 
+Selected destroy also requires every declared transitive consumer to be selected. Use `--downstream` to include them, or explicitly acknowledge the incomplete scope with `--allow-orphan-destroy`; see [partial destroy protection](#partial-destroy-protection). Whole-graph destroy and plan/apply membership are unchanged.
+
 Selection limits execution, not validation or coordination: errors anywhere in the blueprint can block the run, and existing local/remote locks and unresolved-execution recovery barriers still apply. Per-node data directories, approval policies, failure handling, and the requirement for `--auto-approve` with concurrent apply/destroy are unchanged. A failure can follow successful changes to other selected nodes; selection provides no atomicity or automatic rollback.
 
 ### Dependencies outside the selection
 
 Unselected nodes never receive plan/apply/destroy calls. A selected consumer may read an unselected producer's existing output using the usual input-resolution path, including snapshot fallback only when already opted in and eligible. Runtime compatibility checks may also inspect selected nodes and their direct data producers. Missing outputs fail with the existing remedy; they do not expand selection. Saved planning and saved application retain their stricter requirement for live upstream outputs.
 
-Boundary edges preserve their original direction. Incoming data edges explain existing values a run may need; incoming ordering-only edges do not execute or verify completion of the external predecessor. Outgoing edges identify consumers that remain unselected and will not be updated by this invocation.
+Boundary edges preserve their original direction. Incoming data edges explain existing values a run may need; incoming ordering-only edges do not execute or verify completion of the external predecessor. Outgoing edges identify consumers that remain unselected and will not be updated by plan/apply. For destroy, these edges trigger the [partial destroy check](#partial-destroy-protection): consumers cannot be left outside the selected teardown without explicit acknowledgement.
+
+### Partial destroy protection
+
+A selected `destroy` refuses to remove a producer if any declared transitive consumer is outside the selection. Both data and ordering edges count. Inspect the boundary using `graph --node <leaf>` and include consumers with `destroy --node <leaf> --downstream`. To intentionally leave them behind, pass `--allow-orphan-destroy`; this acknowledges scope only and does not bypass node approval policy, interactive confirmation, runtime checks, or execution recovery. The default whole-graph destroy is unchanged. The check runs before runtime calls or a new execution record and reports `incomplete_destroy_scope` through the existing structured diagnostics. It does not inspect Terraform state or discover undeclared consumers.
 
 ### Selection output and compatibility
 

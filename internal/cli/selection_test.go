@@ -80,3 +80,13 @@ func TestSelection_SavedOverridesRejectedBeforeLoad(t *testing.T) {
 		}
 	}
 }
+
+func TestDestroy_PartialScopeReportsStructuredDiagnostic(t *testing.T) {
+	out, _, err := runCmd(t, "destroy", "--node", "vpc", "--auto-approve", "--output", "json")
+	if err == nil || !strings.Contains(err.Error(), "--downstream") {
+		t.Fatalf("got = %s, %v, want partial scope refusal", out, err)
+	}
+	if !strings.Contains(out, `"code":"incomplete_destroy_scope"`) || !strings.Contains(out, "checkout.nodegroup") {
+		t.Fatalf("got = %s, want structured diagnostic listing transitive consumers", out)
+	}
+}

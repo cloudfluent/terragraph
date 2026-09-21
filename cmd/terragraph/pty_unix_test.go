@@ -25,6 +25,9 @@ func TestMain_ControllingTerminalApproval(t *testing.T) {
 				f.tty = true
 				master, slave := openCancellationPTY(t)
 				args := []string{command, "--node", "a"}
+				if command == "destroy" {
+					args = append(args, "--allow-orphan-destroy")
+				}
 				if answer == "\x03" {
 					args = []string{command}
 				}
@@ -63,7 +66,7 @@ func TestMain_ControllingTerminalUnreadNormalDestroy(t *testing.T) {
 	f := newCancellationFixture(t, "destroy-no-read")
 	f.tty = true
 	_, slave := openCancellationPTY(t)
-	_, done := startCancellationCLIWithInput(t, f, slave, "destroy", "--node", "a")
+	_, done := startCancellationCLIWithInput(t, f, slave, "destroy", "--node", "a", "--allow-orphan-destroy")
 	waitCancellationExit(t, done, false)
 }
 
