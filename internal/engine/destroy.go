@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
+	"strings"
 
 	"github.com/cloudfluent/terragraph/internal/blueprint"
 	"github.com/cloudfluent/terragraph/internal/exec"
@@ -19,6 +21,9 @@ func (e *Engine) Destroy(opts Options) (result RunResult, resultErr error) {
 		return result, selectionErr
 	}
 	opts.announceSelection(true)
+	if err := e.checkDestroyScope(opts); err != nil {
+		return result, err
+	}
 
 	// Same reason Apply refuses it: concurrent nodes have their output buffered and flushed a node at a time, so terraform's confirmation prompt would be invisible until long after the answer was needed. Checked before taking the run lock, so an unrunnable combination fails immediately instead of after waiting for whatever else holds it.
 	if !opts.AutoApprove && opts.parallelism() > 1 {
@@ -188,4 +193,32 @@ func (e *Engine) destroyContractPlan(name string, r *exec.Runner, session *execu
 		return session.fail(name, "indeterminate", fmt.Errorf("destroy: %w", err))
 	}
 	return session.transition(name, "completed", "", "")
+}
+
+// checkDestroyScope refuses to remove producers while declared consumers remain outside the selected teardown.
+func (e *Engine) checkDestroyScope(opts Options) error {
+	if opts.selection == nil || opts.AllowOrphanDestroy {
+		return nil
+	}
+	queue := opts.selection.Names()
+	selected := map[string]bool{}
+	for _, name := range queue {
+		selected[name] = true
+	}
+	var outside []string
+	for i := 0; i < len(queue); i++ {
+		for _, consumer := range e.Graph.Out[queue[i]] {
+			if !selected[consumer] {
+				selected[consumer] = true
+				outside = append(outside, consumer)
+				queue = append(queue, consumer)
+			}
+		}
+	}
+	if len(outside) == 0 {
+		return nil
+	}
+	sort.Strings(outside)
+	remedy := "include consumers with --downstream or additional --node flags, or acknowledge with --allow-orphan-destroy"
+	return WithDiagnostic(fmt.Errorf("destroy: selected nodes have consumers outside the selection: %s; %s", strings.Join(outside, ", "), remedy), Diagnostic{Code: "incomplete_destroy_scope", Category: "arguments", Phase: "selection", Subject: "selection", Remedy: remedy})
 }

@@ -209,6 +209,25 @@ func TestDestroy_SelectionReversesOrderAndPreservesPolicy(t *testing.T) {
 	}
 }
 
+func TestDestroy_OrderingConsumerOutsideSelectionRefusedBeforeRuntime(t *testing.T) {
+	e := selectionEngine(t)
+	_, err := e.Destroy(Options{Nodes: []string{"p"}, AutoApprove: true})
+	if diagnostics := Diagnostics(err, Diagnostic{}); len(diagnostics) != 1 || diagnostics[0].Code != "incomplete_destroy_scope" || !strings.Contains(err.Error(), "outside the selection: q;") {
+		t.Fatalf("got = %v, want incomplete_destroy_scope naming ordering consumer q", err)
+	}
+	if calls := selectionCalls(t, e); calls != "" {
+		t.Fatalf("got = %s, want no runtime calls before scope refusal", calls)
+	}
+	runs, err := e.Destroy(Options{Nodes: []string{"p"}, AutoApprove: true, AllowOrphanDestroy: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertSelectedRuns(t, runs.Nodes, []string{"p"})
+	if calls := selectionCalls(t, e); !strings.Contains(calls, "p destroy\n") || strings.Contains(calls, "q destroy\n") {
+		t.Fatalf("got = %s, want only p destroyed", calls)
+	}
+}
+
 func TestApply_SelectionOutputFailureNeverExpandsScope(t *testing.T) {
 	e := selectionEngine(t)
 	t.Setenv("TG_REVIEW_OUTPUT_FAIL", "1")
