@@ -265,6 +265,9 @@ New snapshots use schema version 3 and preserve runtime output types. Version 2 
 
 Module inspection and compatibility checks follow the producer's [resolved runtime](blueprint.md#choosing-a-runtime-per-node-runtime), including upstream reads in a node-scoped run. Runtime-specific sensitivity declarations therefore apply to snapshot reads too; offline reads cannot refresh runtime output metadata.
 
+### Output read retries
+
+`plan`, `apply`, and `destroy` accept `--output-retries N` (0–10, default 0). Only failed `terraform/tofu output -json` subprocess exits are retried, at most N additional attempts per read, with cancellation-aware delays of 100 ms, 200 ms, and so on. Invalid JSON, startup/configuration errors, and cancellation are not retried. Init, plan, apply, destroy, and saved-plan application are never repeated automatically. Successful output metadata and exact numbers remain unchanged; opted-in snapshot fallback occurs only after live attempts are exhausted. Saved executions use the same read behavior when this invocation supplies the flag; retries never authorize recovery or mutation replay. Each attempt is a separate native read, so plugins observe one `node.read.before`/`node.read.after` pair per attempt and credential hooks run again for each one.
 
 ## Observing outputs
 
