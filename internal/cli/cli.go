@@ -224,7 +224,7 @@ func newGraphCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fu
 				return err
 			}
 
-			scope, err := graph.Select(e.Graph, selection.nodes, selection.downstream)
+			scope, err := graph.Select(e.Graph, selection.nodes, selection.downstream, selection.upstream)
 			if err != nil {
 				return err
 			}
@@ -310,7 +310,7 @@ func newPlanCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fun
 				return fmt.Errorf("--continue requires --save")
 			}
 			if continueID != "" && selection.specified(cmd) {
-				return fmt.Errorf("--continue already fixes node selection; omit --node and --downstream")
+				return fmt.Errorf("--continue already fixes node selection; omit --node, --downstream, and --upstream")
 			}
 			policy, policyErr := blueprint.ParseApprove(approve)
 			if policyErr != nil {
@@ -363,7 +363,7 @@ func newApplyCmd(blueprintPath *string, binaryOf func() exec.Binary, loggerOf fu
 		Args:  validateRunArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if planID != "" && selection.specified(cmd) {
-				return fmt.Errorf("--plan already fixes node selection; omit --node and --downstream")
+				return fmt.Errorf("--plan already fixes node selection; omit --node, --downstream, and --upstream")
 			}
 			if output != "text" && output != "json" {
 				return fmt.Errorf("unknown output %q (want \"text\" or \"json\")", output)

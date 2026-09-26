@@ -17,6 +17,7 @@ terragraph plan [flags]
       --output string      output format: text or json (default "text")
       --parallelism int    max nodes to run concurrently within one execution level (default 1)
       --save               save only the ready graph frontier for a later apply --plan
+      --upstream           include all predecessors of --node across data and ordering edges (exclusive with --downstream)
 ```
 
 ### Options inherited from parent commands

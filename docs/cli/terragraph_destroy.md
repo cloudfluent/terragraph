@@ -15,6 +15,7 @@ terragraph destroy [flags]
       --node stringArray   select an exact leaf name (repeat for multiple nodes; commas are literal)
       --output string      output format: text or json (default "text")
       --parallelism int    max nodes to run concurrently within one execution level (default 1)
+      --upstream           include all predecessors of --node across data and ordering edges (exclusive with --downstream)
 ```
 
 ### Options inherited from parent commands

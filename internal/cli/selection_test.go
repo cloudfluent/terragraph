@@ -70,13 +70,27 @@ func TestSelection_RejectsInvalidCLIInputs(t *testing.T) {
 
 func TestSelection_SavedOverridesRejectedBeforeLoad(t *testing.T) {
 	for _, args := range [][]string{{"apply", "--plan", "run-missing"}, {"plan", "--save", "--continue", "run-missing"}} {
-		for _, flags := range [][]string{{"--node", ""}, {"--node", "vpc"}, {"--downstream"}, {"--downstream=false"}} {
+		for _, flags := range [][]string{{"--node", ""}, {"--node", "vpc"}, {"--downstream"}, {"--downstream=false"}, {"--upstream"}, {"--upstream=false"}} {
 			call := append([]string{"--blueprint", "missing-directory"}, args...)
 			call = append(call, flags...)
 			_, _, err := runRootCmd(t, call...)
-			if err == nil || !strings.Contains(err.Error(), "omit --node and --downstream") {
+			if err == nil || !strings.Contains(err.Error(), "omit --node, --downstream, and --upstream") {
 				t.Fatalf("args = %q, got = %v", call, err)
 			}
 		}
+	}
+}
+
+func TestGraph_UpstreamUsesExistingScopeJSON(t *testing.T) {
+	out, _, err := runCmd(t, "graph", "--node", "checkout.cluster", "--upstream", "--output", "json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result graphResult
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(result.Levels, [][]string{{"vpc"}, {"checkout.cluster"}}) || result.Selection.Mode != "upstream" {
+		t.Fatalf("got = %s, want vpc then selected cluster", out)
 	}
 }

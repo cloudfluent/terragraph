@@ -27,7 +27,7 @@ Read stdout as one JSON value and inspect the exit status. Stderr carries human 
 | `plan prune` | `schema_version`, `removed`, `diagnostics`; no new execution |
 | `vendor` | Array with per-node diagnostics; global failures use the exception below |
 
-Explicit scope selection using repeated `--node` flags and optional `--downstream` retains the existing `selection` object alongside execution IDs and diagnostics. A resolved selection survives preparation failure even when no execution ID has been acquired. Saved executions keep their recorded scope and reject selection overrides.
+Explicit scope selection using repeated `--node` flags and optional `--downstream` or `--upstream` retains the existing `selection` object alongside execution IDs and diagnostics. A resolved selection survives preparation failure even when no execution ID has been acquired. Choose one expansion direction and supply at least one leaf. The selection mode is `exact`, `downstream`, or `upstream`; expanded leaves use that direction as their reason, with `via` pointing to selected immediate predecessors for downstream or successors for upstream. Saved executions keep their recorded scope: omit `--node`, `--downstream`, and `--upstream` from `apply --plan` and `plan --save --continue`, including explicitly false flags.
 
 Object schemas remain version 1. Ignore unknown additive fields. Nodes retain existing order, status strings, and optional human `error` fields. Node-specific diagnostics belong beside the node; independent global failures, including final journal writes, appear in top-level diagnostics. Inspect both. A warning alone does not turn success into failure.
 

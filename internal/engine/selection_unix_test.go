@@ -263,11 +263,11 @@ func TestSavedExecution_SelectionStaysFixedAcrossFrontiers(t *testing.T) {
 
 func TestSavedExecution_SelectionOverridesNeverCallRuntime(t *testing.T) {
 	e := selectionEngine(t)
-	for _, opts := range []Options{{Nodes: []string{"b"}}, {Nodes: []string{""}}, {Downstream: true}, {SelectionSpecified: true}} {
-		if _, err := e.SavePlans(opts, "run-missing"); err == nil || !strings.Contains(err.Error(), "omit --node and --downstream") {
+	for _, opts := range []Options{{Nodes: []string{"b"}}, {Nodes: []string{""}}, {Downstream: true}, {Upstream: true}, {SelectionSpecified: true}} {
+		if _, err := e.SavePlans(opts, "run-missing"); err == nil || !strings.Contains(err.Error(), "omit --node, --downstream, and --upstream") {
 			t.Fatalf("got = %v", err)
 		}
-		if _, err := e.ApplySavedPlans("run-missing", opts); err == nil || !strings.Contains(err.Error(), "omit --node and --downstream") {
+		if _, err := e.ApplySavedPlans("run-missing", opts); err == nil || !strings.Contains(err.Error(), "omit --node, --downstream, and --upstream") {
 			t.Fatalf("got = %v", err)
 		}
 	}
@@ -485,5 +485,35 @@ func TestApply_SelectionReducesIndependentRuntimeCalls(t *testing.T) {
 			t.Fatalf("got = %d nodes, %d plans, %d inits; want %d", len(runs.Nodes), plans, inits, want)
 		}
 		t.Logf("selected=%t nodes=%d plan=%d init=%d apply=%d", selected, len(runs.Nodes), plans, inits, strings.Count(calls, " apply\n"))
+	}
+}
+
+func TestSavedExecution_UpstreamSelectionAppliesProducersFirst(t *testing.T) {
+	e := selectionEngine(t)
+	record, err := e.SavePlans(Options{Nodes: []string{"c"}, Upstream: true}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(record.Nodes) != 4 || record.Selection == nil || record.Selection.Mode != "upstream" {
+		t.Fatalf("got = %+v, want upstream record of a, b, c, x", record)
+	}
+	for _, want := range [][]string{{"a", "x"}, {"b"}, {"c"}} {
+		runs, err := e.ApplySavedPlans(record.ID, Options{AutoApprove: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertSelectedRuns(t, runs.Nodes, want)
+		if want[0] != "c" {
+			next, err := e.SavePlans(Options{}, record.ID)
+			if err != nil || !reflect.DeepEqual(next.Selection, record.Selection) {
+				t.Fatalf("got = %+v, %v", next, err)
+			}
+		}
+	}
+	calls := selectionCalls(t, e)
+	for _, name := range []string{"d", "p", "q"} {
+		if strings.Contains(calls, name+" plan\n") || strings.Contains(calls, name+" apply\n") {
+			t.Fatalf("got = %s, consumer or unrelated node executed", calls)
+		}
 	}
 }
