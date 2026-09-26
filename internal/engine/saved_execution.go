@@ -14,6 +14,9 @@ import (
 
 // SavePlans freezes only the current frontier; later inputs must come from real upstream outputs after the reviewed frontier has been applied.
 func (e *Engine) SavePlans(opts Options, continueID string) (record ExecutionRecord, resultErr error) {
+	if err := opts.validateTimeout(false); err != nil {
+		return record, err
+	}
 	if continueID != "" && opts.hasSelectionFlags() {
 		return record, WithDiagnostic(fmt.Errorf("--continue already fixes node selection; omit --node and --downstream"), Diagnostic{Code: "invalid_arguments", Category: "arguments", Phase: "arguments"})
 	}
@@ -132,6 +135,8 @@ func (e *Engine) saveFrontierNode(s *executionSession, name string, opts Options
 	if err := e.plugins.Emit(e.context(), sdk.Event{Phase: "node.prepare", Node: name}); err != nil {
 		return err
 	}
+	e, cancel := e.nodeEngine(opts)
+	defer cancel()
 	vars, err := e.resolveLiveInputs(name)
 	if err != nil {
 		return err
@@ -196,6 +201,9 @@ func (e *Engine) saveFrontierNode(s *executionSession, name string, opts Options
 
 // ApplySavedPlans applies exactly the stored frontier and never plans or applies downstream nodes in the same invocation.
 func (e *Engine) ApplySavedPlans(id string, opts Options) (result RunResult, resultErr error) {
+	if err := opts.validateTimeout(true); err != nil {
+		return result, err
+	}
 	if opts.hasSelectionFlags() {
 		return result, WithDiagnostic(fmt.Errorf("--plan already fixes node selection; omit --node and --downstream"), Diagnostic{Code: "invalid_arguments", Category: "arguments", Phase: "arguments"})
 	}
@@ -289,6 +297,8 @@ func (e *Engine) applySavedNode(s *executionSession, node ExecutionNode, opts Op
 	if err := e.plugins.Emit(e.context(), sdk.Event{Phase: "node.prepare", Node: node.Name}); err != nil {
 		return StatusNotRun, err
 	}
+	e, cancel := e.nodeEngine(opts)
+	defer cancel()
 	bundle, err := e.readPlanBundle(s, node)
 	if err != nil {
 		return "", err

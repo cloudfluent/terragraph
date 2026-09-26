@@ -39,13 +39,13 @@ func runCommand(ctx context.Context, cmd *exec.Cmd) error {
 	cancelled := false
 	cancel := ctx.Done()
 	for {
-		if !cancelled && ctx.Err() != nil {
-			cancelled = true
-			cancel = nil
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGINT)
-			timer = time.NewTimer(5 * time.Second)
-			grace = timer.C
+		select {
+		case waitErr = <-done:
+			waited = true
+			done = nil
+		default:
 		}
+
 		if waited || terminalInput {
 			// A wrapper exiting does not prove its children stopped; zombies cannot write state, but every live group member must finish before locks can be released.
 			running, err := processGroupRunning(cmd.Process.Pid)
@@ -60,6 +60,13 @@ func runCommand(ctx context.Context, cmd *exec.Cmd) error {
 				}
 				return waitErr
 			}
+		}
+		if !cancelled && ctx.Err() != nil {
+			cancelled = true
+			cancel = nil
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGINT)
+			timer = time.NewTimer(5 * time.Second)
+			grace = timer.C
 		}
 		select {
 		case waitErr = <-done:

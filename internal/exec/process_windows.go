@@ -14,6 +14,11 @@ func runCommand(ctx context.Context, cmd *exec.Cmd) error {
 			return err
 		}
 	}
+	if ctx != nil {
+		if _, bounded := ctx.Deadline(); bounded {
+			return runWithDeadline(ctx, cmd)
+		}
+	}
 	if ctx != nil && ctx.Value(credentialLifetimeKey{}) == true {
 		terminate, err := StartManagedProcess(cmd)
 		if err != nil {

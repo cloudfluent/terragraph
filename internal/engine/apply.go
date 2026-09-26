@@ -15,6 +15,9 @@ import (
 //
 // When the plan does report changes, that plan is what gets applied (see Runner.PlanChanges/ApplyPlan), so a node refreshes once and the change made is the change that was planned.
 func (e *Engine) Apply(opts Options) (result RunResult, resultErr error) {
+	if err := opts.validateTimeout(true); err != nil {
+		return result, err
+	}
 	opts, selectionErr := e.resolveSelection(opts)
 	if selectionErr != nil {
 		return result, selectionErr
@@ -57,6 +60,8 @@ func (e *Engine) Apply(opts Options) (result RunResult, resultErr error) {
 	e.logger().Info("apply starting", "nodes", opts.Nodes, "parallelism", opts.parallelism(), "autoApprove", opts.AutoApprove)
 
 	result.Nodes, resultErr = e.runLevels(opts, false, func(name string, applied map[string]exec.Outputs, out io.Writer) (exec.Outputs, string, error) {
+		e, cancel := e.nodeEngine(opts)
+		defer cancel()
 		vars, err := e.resolveInputs(name, applied)
 		if err != nil {
 			return nil, "", err

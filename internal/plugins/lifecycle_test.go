@@ -636,3 +636,40 @@ func TestLifecycle_SavedApplyTerminalFailureRetainsPlanEvidence(t *testing.T) {
 		t.Fatalf("recovery evidence removed before teardown: %v", err)
 	}
 }
+
+func TestLifecycle_NodeTimeoutDeliversFinishedAndReleasesLease(t *testing.T) {
+	dir, binary := lifecycleFixture(t, `config = { lease = true }`, `node "a" {
+ source = "./module"
+ credential "provider" {
+ from = plugin.test.auth
+ ref = {}
+ environment = ["PLUGIN_TOKEN"]
+ }
+ }`)
+	t.Setenv("TG_LIFECYCLE_DELAY", "60s")
+	e, log := loadLifecycleEngine(t, dir, binary)
+	started := time.Now()
+	result, err := e.Apply(engine.Options{AutoApprove: true, NodeTimeout: 10 * time.Second})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("got = %v, want node deadline", err)
+	}
+	if elapsed := time.Since(started); elapsed > 40*time.Second {
+		t.Fatalf("got = %s, want bounded deadline cleanup", elapsed)
+	}
+	if len(result.Nodes) != 1 || result.Nodes[0].Status != engine.StatusFailed {
+		t.Fatalf("got = %+v, want failed node", result)
+	}
+	if !strings.Contains(log.String(), "fields.node=a fields.phase=node.finished fields.status=failed") {
+		t.Fatalf("missing failed node.finished in %s", log.String())
+	}
+	if !strings.Contains(log.String(), "lease released") {
+		t.Fatalf("lease survived deadline: %s", log.String())
+	}
+	record, err := e.GetExecution(result.ExecutionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Status != "needs_recovery" || record.Nodes[0].Phase != "indeterminate" {
+		t.Fatalf("got = %+v, want interrupted mutation retained for recovery", record)
+	}
+}

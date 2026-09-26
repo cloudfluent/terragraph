@@ -21,6 +21,8 @@ import (
 type Options struct {
 	// RetainPlan persists optional plan artifacts without pausing ordinary apply.
 	RetainPlan bool
+	// NodeTimeout bounds each node action without counting time waiting for a scheduler slot.
+	NodeTimeout time.Duration
 	// Nodes is nil for the whole graph; a non-nil empty list must never silently broaden execution.
 	Nodes []string
 	// Downstream follows both data and ordering dependencies so consumers cannot be omitted by edge kind.
