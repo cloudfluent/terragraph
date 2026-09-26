@@ -166,7 +166,7 @@ func (e *Engine) pluginRuntime(name string) exec.RuntimeHook {
 				status = "failed"
 			}
 			if err := m.Emit(cleanup, sdk.Event{Phase: after, Node: name, Status: status, Metadata: map[string]string{"native_operation": operation}}); err != nil {
-				m.AddCompletionError(err)
+				m.AddNodeCompletionError(name, err)
 			}
 			return nil
 		}, nil

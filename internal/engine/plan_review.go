@@ -35,7 +35,7 @@ func (review *PlanReview) failure(name, code, phase string, err error) {
 	if errors.Is(err, errUpstreamOutputMissing) {
 		code = "upstream_output_unavailable"
 	}
-	if errors.Is(err, errPlanBlocked) {
+	if errors.Is(err, errDependencyNotReached) {
 		code = "dependency_not_reached"
 	}
 	category := "runtime"

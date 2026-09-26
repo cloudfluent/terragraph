@@ -134,7 +134,7 @@ func (e *Engine) validateOutputContracts(name string, outputs exec.Outputs) erro
 		return err
 	}
 	if err := e.plugins.Emit(e.context(), sdk.Event{Phase: "node.outputs.ready", Node: name, Status: "validated"}); err != nil {
-		e.plugins.AddCompletionError(err)
+		e.plugins.AddNodeCompletionError(name, err)
 	}
 	return nil
 }
