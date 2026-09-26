@@ -14,7 +14,8 @@ terragraph destroy [flags]
   -h, --help               help for destroy
       --node stringArray   select an exact leaf name (repeat for multiple nodes; commas are literal)
       --output string      output format: text or json (default "text")
-      --parallelism int    max nodes to run concurrently within one execution level (default 1)
+      --parallelism int    max ready nodes to run concurrently (default 1)
+      --pool stringArray   shared limit as name=limit:node,node (repeatable; nodes may belong to several pools)
 ```
 
 ### Options inherited from parent commands

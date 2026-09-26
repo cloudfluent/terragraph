@@ -34,6 +34,9 @@ func fixtureDescriptor() sdk.Descriptor {
 	return sdk.Descriptor{Name: "fixture", Version: "1.2.0", Protocol: sdk.ProtocolVersion, Executable: executable, Features: features}
 }
 
+// fixturePluginExit ends a cleanly shut down fixture plugin nonzero: the host scrubs plugin environments so GORACE cannot reach it, and a zero exit makes the race runtime sleep a second on every session close.
+const fixturePluginExit = 3
+
 func TestMain(m *testing.M) {
 	if strings.Contains(filepath.Base(os.Args[0]), "terraform-lifecycle") {
 		runLifecycleTerraform()
@@ -41,7 +44,7 @@ func TestMain(m *testing.M) {
 	}
 	if os.Getenv("TERRAGRAPH_PLUGIN") == "terragraph-plugin-v1" && strings.Contains(filepath.Base(os.Args[0]), "lifecycle-plugin") {
 		serveLifecycleFixture()
-		return
+		os.Exit(fixturePluginExit)
 	}
 	if os.Getenv("TERRAGRAPH_PLUGIN") == "terragraph-plugin-v1" {
 		sdk.Serve(fixtureDescriptor(), func(ctx context.Context, r sdk.Request) (sdk.Response, error) {
@@ -93,7 +96,7 @@ func TestMain(m *testing.M) {
 			}
 			return sdk.Response{Value: &r.Arguments[0]}, nil
 		})
-		return
+		os.Exit(fixturePluginExit)
 	}
 	dir, err := os.MkdirTemp("", "terragraph-plugin-fixture-")
 	if err != nil {
@@ -122,6 +125,8 @@ func TestMain(m *testing.M) {
 	}
 	_ = in.Close()
 	_ = out.Close()
+	// Fixture runtimes and plugins are this race-instrumented binary, which otherwise sleeps a full second on every successful exit and multiplies across each node's commands.
+	_ = os.Setenv("GORACE", strings.TrimSpace(os.Getenv("GORACE")+" atexit_sleep_ms=0"))
 	code := m.Run()
 	_ = os.RemoveAll(dir)
 	os.Exit(code)
