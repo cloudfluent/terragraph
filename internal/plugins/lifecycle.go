@@ -50,6 +50,8 @@ type Lifecycle struct {
 	terminal                                      map[string]bool
 	completionMu                                  sync.Mutex
 	completionErr                                 error
+	completionNodes                               map[string]bool
+	completionUnattributed                        bool
 	localCalls                                    []sdk.CallRecord
 	localRecord                                   bool
 	closeMu                                       sync.Mutex
@@ -267,7 +269,7 @@ func (m *Lifecycle) invoke(ctx context.Context, f featureInstance, r sdk.Request
 		event.Status = "completed"
 		event.Plan = nil
 		if emitErr := m.Emit(ctx, event); emitErr != nil {
-			m.AddCompletionError(emitErr)
+			m.AddNodeCompletionError(event.Node, emitErr)
 		}
 	}
 	return response, nil
@@ -454,9 +456,35 @@ func Binding(dir string, configs []blueprint.PluginConfig) (string, error) {
 
 // AddCompletionError preserves postconditions without turning a completed mutation into an uncertain one.
 func (m *Lifecycle) AddCompletionError(err error) {
+	m.AddNodeCompletionError("", err)
+}
+
+// AddNodeCompletionError attributes a postcondition failure to its node so an overlapping scheduler stops work beyond that node's level without discarding earlier levels' notifications.
+func (m *Lifecycle) AddNodeCompletionError(node string, err error) {
 	m.completionMu.Lock()
 	defer m.completionMu.Unlock()
 	m.completionErr = errors.Join(m.completionErr, err)
+	if node == "" {
+		m.completionUnattributed = true
+		return
+	}
+	if m.completionNodes == nil {
+		m.completionNodes = map[string]bool{}
+	}
+	m.completionNodes[node] = true
+}
+
+// CompletionFailures reports which nodes own a postcondition failure and whether any failure belongs to no node.
+func (m *Lifecycle) CompletionFailures() (nodes []string, unattributed bool) {
+	if m == nil {
+		return nil, false
+	}
+	m.completionMu.Lock()
+	defer m.completionMu.Unlock()
+	for node := range m.completionNodes {
+		nodes = append(nodes, node)
+	}
+	return nodes, m.completionUnattributed
 }
 func (m *Lifecycle) NeedsPlanDocument() bool {
 	for _, f := range m.features {

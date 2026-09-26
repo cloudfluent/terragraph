@@ -255,7 +255,7 @@ func (s *executionSession) transition(name, phase, code, planID string) (resultE
 			ctx, cancel := context.WithTimeout(context.WithoutCancel(s.engine.context()), 5*time.Second)
 			defer cancel()
 			if err := s.engine.plugins.Emit(ctx, sdk.Event{Phase: "node.mutation.finished", Node: name, Status: phase}); err != nil {
-				s.engine.plugins.AddCompletionError(err)
+				s.engine.plugins.AddNodeCompletionError(name, err)
 			}
 		}
 	}()

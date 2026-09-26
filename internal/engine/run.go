@@ -2,19 +2,17 @@ package engine
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"slices"
-	"sort"
-	"sync"
+	"time"
 
-	"context"
 	"github.com/cloudfluent/terragraph/internal/blueprint"
 	"github.com/cloudfluent/terragraph/internal/exec"
 	"github.com/cloudfluent/terragraph/internal/graph"
 	sdk "github.com/cloudfluent/terragraph/plugin"
-	"time"
 )
 
 // Options controls the scope and execution behavior of a plan/apply/destroy run.
@@ -35,7 +33,7 @@ type Options struct {
 	AutoApprove bool
 	// Approve is the run-wide default approve level (see blueprint.Approve) for nodes that declare none of their own. Empty means blueprint.ApproveSafe.
 	Approve blueprint.Approve
-	// Parallelism caps how many nodes within one execution level run concurrently. <=1 means sequential (the default), matching v1 behavior and avoiding surprising provider API rate-limit issues.
+	// Parallelism caps how many ready nodes run concurrently across execution levels. <=1 means sequential (the default), matching v1 behavior and avoiding surprising provider API rate-limit issues.
 	Parallelism int
 }
 
@@ -68,7 +66,7 @@ const (
 	StatusUnchanged = "unchanged" // apply skipped the node: its plan reported no changes
 	StatusDestroyed = "destroyed" // destroy ran to completion
 	StatusFailed    = "failed"    // the node's own step returned an error
-	StatusNotRun    = "not run"   // an earlier level failed, so the run never reached this node
+	StatusNotRun    = "not run"   // execution stopped or a prerequisite failed before this node started
 )
 
 // RunResult retains the persisted execution identity even when a later node or journal update fails.
@@ -91,174 +89,216 @@ type NodeRun struct {
 // nodeAction runs one node's step of a plan/apply/destroy: given the outputs applied so far this run and a writer for this node's terraform output, it returns the outputs to feed downstream (nil if the node produced none worth propagating, e.g. Destroy), the success status to record for the node, and an error.
 type nodeAction func(name string, applied map[string]exec.Outputs, out io.Writer) (outputs exec.Outputs, status string, err error)
 
-// runLevels is the shared execution loop behind Plan/Apply/Destroy: it walks the graph (or a single node) level by level, running up to opts.Parallelism nodes within a level concurrently. Nodes in the same level are guaranteed to have no edge between them, so a read-only snapshot of outputs applied so far is safe to share across the level's goroutines, and results are merged back only once the whole level completes (no data races). If any node in a level errors, already-started siblings finish but the next level never starts; the returned runs record those unreached nodes as StatusNotRun so a report covers the whole selection rather than stopping where execution did. afterLevel, if non-nil, runs once each level completes successfully; an error from it aborts the run the same way. Only review planning opts into preserveIndependent, which blocks failed descendants while continuing unrelated branches.
+// runLevels dispatches selected nodes as their prerequisites succeed, retaining level labels and the existing failure boundary so queued siblings still run after an ordinary failure.
 func (e *Engine) runLevels(opts Options, reverse bool, action nodeAction, afterLevel func() error, preserveIndependent ...bool) (runs []NodeRun, err error) {
 	levels, err := e.executionLevels(opts, reverse)
 	if err != nil {
 		return nil, err
 	}
-
 	keepGoing := len(preserveIndependent) > 0 && preserveIndependent[0]
-	failed := map[string]bool{}
-	var firstError error
-	applied := map[string]exec.Outputs{}
-	var mu sync.Mutex
-	var outMu sync.Mutex
-	buffered := opts.parallelism() > 1
 	runs = make([]NodeRun, 0)
-	// Sort the final returned slice so failed runs include their not-run nodes in the same deterministic order as successful runs.
-	defer func() {
-		if e.plugins != nil {
-			ctx, cancel := context.WithTimeout(context.WithoutCancel(e.context()), 5*time.Second)
-			defer cancel()
-			for _, run := range runs {
-				if emitErr := e.plugins.Emit(ctx, sdk.Event{Phase: "node.finished", Node: run.Node, Status: run.Status}); emitErr != nil {
-					e.plugins.AddCompletionError(emitErr)
-				}
-			}
-		}
-		sort.Slice(runs, func(i, j int) bool {
-			if runs[i].Level != runs[j].Level {
-				return runs[i].Level < runs[j].Level
-			}
-			return runs[i].Node < runs[j].Node
-		})
-	}()
-
+	indices := map[string]int{}
 	for li, level := range levels {
-		if err := e.context().Err(); err != nil {
-			return markNotRun(runs, levels, li), err
+		for _, name := range level {
+			indices[name] = len(runs)
+			runs = append(runs, NodeRun{Node: name, Level: li + 1, Status: StatusNotRun})
 		}
-		blocked := map[string]bool{}
-		for name := range failed {
-			blocked[name] = true
+	}
+	// Nodes a failure, gate, or cancellation kept from starting still owe observers a terminal event; the lifecycle drops repeats for nodes that already reported one.
+	defer func() {
+		if e.plugins == nil {
+			return
 		}
-		mu.Lock()
-		snapshot := make(map[string]exec.Outputs, len(applied))
-		for k, v := range applied {
-			snapshot[k] = v
-		}
-		mu.Unlock()
-
-		sem := make(chan struct{}, opts.parallelism())
-		var wg sync.WaitGroup
-		errs := make([]error, len(level))
-
-		for i, name := range level {
-			wg.Add(1)
-			sem <- struct{}{}
-			go func(i int, name string) {
-				defer wg.Done()
-				defer func() { <-sem }()
-
-				var out = e.Stdout
-				var buf *bytes.Buffer
-				if buffered {
-					buf = &bytes.Buffer{}
-					out = buf
-				}
-
-				e.logger().Debug("running node", "node", name)
-				var outputs exec.Outputs
-				var status string
-				err := e.context().Err()
-				if err == nil && keepGoing {
-					for _, parent := range e.Graph.In[name] {
-						if blocked[parent] {
-							err = fmt.Errorf("%w: dependency %s has no successful plan evidence; resolve its diagnostic first", errPlanBlocked, parent)
-							break
-						}
-					}
-				}
-				if err == nil {
-					err = e.plugins.Emit(e.context(), sdk.Event{Phase: "node.prepare", Node: name})
-				}
-				if err == nil {
-					outputs, status, err = action(name, snapshot, out)
-				} else {
-					status = StatusNotRun
-				}
-
-				if e.plugins != nil {
-					terminal := status
-					if err != nil && terminal != StatusNotRun {
-						terminal = StatusFailed
-					}
-					ctx, cancel := context.WithTimeout(context.WithoutCancel(e.context()), 5*time.Second)
-					emitErr := e.plugins.Emit(ctx, sdk.Event{Phase: "node.finished", Node: name, Status: terminal})
-					cancel()
-					if emitErr != nil {
-						e.plugins.AddCompletionError(emitErr)
-					}
-				}
-
-				if buf != nil {
-					outMu.Lock()
-					_, _ = fmt.Fprintf(e.Stdout, "=== node %s ===\n", name)
-					_, _ = io.Copy(e.Stdout, buf)
-					outMu.Unlock()
-				}
-
-				mu.Lock()
-				if err != nil {
-					failed[name] = true
-					if status != StatusNotRun {
-						status = StatusFailed
-					}
-					runs = append(runs, NodeRun{Node: name, Level: li + 1, Status: status, Err: err, Diagnostics: Diagnostics(err, Diagnostic{Code: "runtime_failed", Category: "runtime", Phase: "execute", Subject: "node." + name})})
-				} else {
-					runs = append(runs, NodeRun{Node: name, Level: li + 1, Status: status})
-					if outputs != nil {
-						applied[name] = outputs
-					}
-				}
-				mu.Unlock()
-
-				if err != nil {
-					errs[i] = fmt.Errorf("node %q: %w", name, err)
-					return
-				}
-			}(i, name)
-		}
-		wg.Wait()
-		if completionErr := e.plugins.CompletionError(); completionErr != nil {
-			return markNotRun(runs, levels, li+1), completionErr
-		}
-		if emitErr := e.plugins.Emit(e.context(), sdk.Event{Phase: "level.finished", Nodes: level}); emitErr != nil {
-			return markNotRun(runs, levels, li+1), emitErr
-		}
-
-		for _, err := range errs {
-			if err != nil {
-				if !keepGoing {
-					return markNotRun(runs, levels, li+1), err
-				}
-				if firstError == nil {
-					firstError = err
-				}
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(e.context()), 5*time.Second)
+		defer cancel()
+		for _, run := range runs {
+			if emitErr := e.plugins.Emit(ctx, sdk.Event{Phase: "node.finished", Node: run.Node, Status: run.Status}); emitErr != nil {
+				e.plugins.AddNodeCompletionError(run.Node, emitErr)
 			}
 		}
-
-		if afterLevel != nil {
-			if err := afterLevel(); err != nil {
-				return markNotRun(runs, levels, li+1), err
+	}()
+	// Only the coordinator mutates reports and published outputs; each action receives its own immutable snapshot.
+	started, done := make([]bool, len(runs)), make([]bool, len(runs))
+	applied := map[string]exec.Outputs{}
+	type completion struct {
+		index   int
+		outputs exec.Outputs
+		status  string
+		err     error
+		buffer  *bytes.Buffer
+	}
+	completed := make(chan completion, opts.parallelism())
+	active, failureLevel, nextLevel, unattributedLevel := 0, len(levels)+1, 1, len(levels)+1
+	// A level.finished gate may deny work beyond that level, so its decision must precede any later dispatch; observers and plugin-free runs keep levels overlapping.
+	gated := afterLevel != nil || e.plugins.Has("level.finished")
+	var stopErr error
+	finish := func(i int, status string, nodeErr error) {
+		done[i] = true
+		runs[i].Status, runs[i].Err = status, nodeErr
+		if nodeErr != nil {
+			runs[i].Diagnostics = Diagnostics(nodeErr, Diagnostic{Code: "runtime_failed", Category: "runtime", Phase: "execute", Subject: "node." + runs[i].Node})
+			if !keepGoing && runs[i].Level < failureLevel {
+				failureLevel = runs[i].Level
 			}
 		}
 	}
-	return runs, firstError
+	// A postcondition failure stops work beyond its node's level and withholds that level's notification, while earlier completed levels still report; a failure with no node is pinned to the level whose completion revealed it.
+	completionLevel := func() int {
+		level := len(levels) + 1
+		nodes, unattributed := e.plugins.CompletionFailures()
+		if unattributed {
+			level = unattributedLevel
+		}
+		for _, node := range nodes {
+			if i, selected := indices[node]; selected && runs[i].Level < level {
+				level = runs[i].Level
+			}
+		}
+		return level
+	}
+	levelDone := func(level int) bool {
+		for _, name := range levels[level-1] {
+			if !done[indices[name]] {
+				return false
+			}
+		}
+		return true
+	}
+	for {
+		if cancelled := e.context().Err(); cancelled != nil && stopErr == nil {
+			stopErr = cancelled
+		}
+		// level.finished follows every node.finished of its level and keeps level order even when an overlapping later level completed first; a failed level still reports, levels beyond the boundary never do.
+		for stopErr == nil && nextLevel <= len(levels) && nextLevel <= failureLevel && nextLevel < completionLevel() && levelDone(nextLevel) {
+			if emitErr := e.plugins.Emit(e.context(), sdk.Event{Phase: "level.finished", Nodes: levels[nextLevel-1]}); emitErr != nil {
+				stopErr = emitErr
+				break
+			}
+			if afterLevel != nil && nextLevel < failureLevel {
+				if hookErr := afterLevel(); hookErr != nil {
+					stopErr = hookErr
+					break
+				}
+			}
+			nextLevel++
+		}
+		closed := false
+		for i := range runs {
+			if active == opts.parallelism() || stopErr != nil {
+				break
+			}
+			// The boundary is re-read per candidate because closing a blocked node or a running node's delivery can record a failure mid-scan.
+			if started[i] || done[i] || runs[i].Level > min(failureLevel, completionLevel()) || (gated && runs[i].Level > nextLevel) {
+				continue
+			}
+			parents := e.Graph.In[runs[i].Node]
+			if reverse {
+				parents = e.Graph.Out[runs[i].Node]
+			}
+			ready, blocked := true, ""
+			for _, parent := range parents {
+				pi, selected := indices[parent]
+				if !selected {
+					continue
+				}
+				if !done[pi] {
+					ready = false
+				}
+				if done[pi] && runs[pi].Err != nil && (blocked == "" || parent < blocked) {
+					blocked = parent
+				}
+			}
+			if blocked != "" {
+				if keepGoing {
+					// Delivered before the node counts as done so its level's notification can never precede it.
+					if e.plugins != nil {
+						ctx, cancel := context.WithTimeout(context.WithoutCancel(e.context()), 5*time.Second)
+						if emitErr := e.plugins.Emit(ctx, sdk.Event{Phase: "node.finished", Node: runs[i].Node, Status: StatusNotRun}); emitErr != nil {
+							e.plugins.AddNodeCompletionError(runs[i].Node, emitErr)
+						}
+						cancel()
+					}
+					finish(i, StatusNotRun, fmt.Errorf("%w: dependency %s has no successful plan evidence; resolve its diagnostic first", errPlanBlocked, blocked))
+					closed = true
+				}
+				continue
+			}
+			if !ready {
+				continue
+			}
+			snapshot := make(map[string]exec.Outputs, len(applied))
+			for name, outputs := range applied {
+				snapshot[name] = outputs
+			}
+			started[i], active = true, active+1
+			go func(i int, name string) {
+				result := completion{index: i}
+				out := e.Stdout
+				if opts.parallelism() > 1 {
+					result.buffer = &bytes.Buffer{}
+					out = result.buffer
+				}
+				e.logger().Debug("running node", "node", name)
+				result.err = e.context().Err()
+				if result.err == nil {
+					result.err = e.plugins.Emit(e.context(), sdk.Event{Phase: "node.prepare", Node: name})
+				}
+				if result.err != nil {
+					result.status = StatusNotRun
+				} else {
+					result.outputs, result.status, result.err = action(name, snapshot, out)
+					if result.err != nil && result.status != StatusNotRun {
+						result.status = StatusFailed
+					}
+				}
+				// Delivered before the coordinator sees the completion, so level.finished and the completion-error boundary both observe it.
+				if e.plugins != nil {
+					ctx, cancel := context.WithTimeout(context.WithoutCancel(e.context()), 5*time.Second)
+					emitErr := e.plugins.Emit(ctx, sdk.Event{Phase: "node.finished", Node: name, Status: result.status})
+					cancel()
+					if emitErr != nil {
+						e.plugins.AddNodeCompletionError(name, emitErr)
+					}
+				}
+				completed <- result
+			}(i, runs[i].Node)
+		}
+		// Closing a blocked node can complete a level, so its notification and any work it releases get another pass before waiting or returning.
+		if closed {
+			continue
+		}
+		if active == 0 {
+			break
+		}
+		result := <-completed
+		active--
+		if result.buffer != nil {
+			_, _ = fmt.Fprintf(e.Stdout, "=== node %s ===\n", runs[result.index].Node)
+			_, _ = io.Copy(e.Stdout, result.buffer)
+		}
+		finish(result.index, result.status, result.err)
+		if result.err == nil && result.outputs != nil {
+			applied[runs[result.index].Node] = result.outputs
+		}
+		if _, unattributed := e.plugins.CompletionFailures(); unattributed && runs[result.index].Level < unattributedLevel {
+			unattributedLevel = runs[result.index].Level
+		}
+	}
+	if stopErr != nil {
+		return runs, stopErr
+	}
+	if completionErr := e.plugins.CompletionError(); completionErr != nil {
+		return runs, completionErr
+	}
+	for _, run := range runs {
+		if run.Err != nil {
+			return runs, fmt.Errorf("node %q: %w", run.Node, run.Err)
+		}
+	}
+	return runs, nil
 }
 
 var errPlanBlocked = errors.New("plan not reached")
-
-// markNotRun appends a StatusNotRun entry for every node in the levels an aborted run never reached, keeping each entry's Level aligned with the numbering the completed levels already used.
-func markNotRun(runs []NodeRun, levels [][]string, from int) []NodeRun {
-	for i := from; i < len(levels); i++ {
-		for _, name := range levels[i] {
-			runs = append(runs, NodeRun{Node: name, Level: i + 1, Status: StatusNotRun})
-		}
-	}
-	return runs
-}
 
 // resolveSelection freezes membership before runtime checks and keeps every scheduler on the same filtered levels.
 func (e *Engine) resolveSelection(opts Options) (Options, error) {
